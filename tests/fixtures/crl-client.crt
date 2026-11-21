@@ -1,0 +1,83 @@
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number: 8193 (0x2001)
+        Signature Algorithm: sha256WithRSAEncryption
+        Issuer: CN=Starling CRL Test CA
+        Validity
+            Not Before: Nov 19 11:45:55 2026 GMT
+            Not After : Nov 16 11:45:55 2036 GMT
+        Subject: CN=starling-crl-good
+        Subject Public Key Info:
+            Public Key Algorithm: rsaEncryption
+                Public-Key: (2048 bit)
+                Modulus:
+                    00:9a:e4:5d:97:8a:d6:30:b2:e4:94:99:bd:70:62:
+                    4d:16:c5:d6:19:e0:98:08:5b:c1:bc:8f:77:f8:39:
+                    96:3d:20:d5:10:b1:90:ee:01:e3:8b:b2:a5:ee:f9:
+                    83:b0:fd:6c:b6:2c:c1:4d:d7:20:a6:66:1c:dd:af:
+                    73:8c:86:0e:21:8b:bc:0f:65:ce:cc:40:8f:ec:39:
+                    e7:53:e0:ee:98:85:8c:86:a3:61:bd:d5:bc:31:7d:
+                    d6:7d:c2:5e:2b:6d:aa:82:4c:78:a1:e1:d4:01:b9:
+                    a1:c0:bb:84:89:a0:3a:4f:27:bf:44:9b:ec:56:6e:
+                    ce:c6:d6:07:1b:db:5d:84:ca:46:c1:54:a2:20:06:
+                    11:61:c8:82:80:fc:b4:f2:c3:d0:5f:22:ac:04:8f:
+                    94:f8:68:28:1e:88:46:08:b3:a6:7e:d0:d9:0a:e9:
+                    8a:f0:e9:dd:e1:21:e3:c5:8a:33:3e:c3:58:d9:ab:
+                    5d:a0:16:49:57:e1:ad:ca:9e:b4:96:76:ad:77:23:
+                    5c:e0:4c:fc:98:bf:25:29:16:0d:14:4d:32:7b:c1:
+                    d9:88:3b:80:5f:dd:da:2e:c1:88:79:91:16:c2:ee:
+                    b2:62:02:5a:32:16:ff:ad:a2:34:a4:15:7f:f4:dc:
+                    f3:6a:63:78:4c:7a:7e:fe:5a:27:68:6d:81:56:b9:
+                    87:ab
+                Exponent: 65537 (0x10001)
+        X509v3 extensions:
+            X509v3 Basic Constraints: critical
+                CA:FALSE
+            X509v3 Key Usage: critical
+                Digital Signature
+            X509v3 Extended Key Usage: 
+                TLS Web Client Authentication
+            X509v3 Subject Alternative Name: 
+                DNS:starling-crl-client
+            X509v3 Subject Key Identifier: 
+                1B:A3:BB:49:79:37:75:3F:64:5D:CA:25:0A:98:DA:C3:37:EE:1F:EF
+            X509v3 Authority Key Identifier: 
+                CD:22:DC:EB:BD:5A:DD:E5:81:72:04:A6:5A:14:3E:52:3A:F8:6F:39
+    Signature Algorithm: sha256WithRSAEncryption
+    Signature Value:
+        97:75:8b:76:05:79:35:96:ab:92:1e:53:23:47:18:ea:d0:c6:
+        b1:4b:20:0e:9f:33:34:ae:df:82:b7:39:32:bc:d3:5b:8f:fe:
+        b4:42:31:d6:64:bf:78:0e:fd:f7:3d:91:95:16:da:17:13:5a:
+        c8:3c:f6:c1:ab:32:85:14:22:b5:06:c3:f3:f9:d7:c3:8b:21:
+        67:4f:8f:9c:3f:52:57:71:32:25:d4:74:f9:11:0b:15:ba:bd:
+        4d:36:54:eb:ab:bd:c5:57:f2:22:8e:57:bf:9d:27:42:0b:3c:
+        74:2b:a0:9e:15:7e:5e:c9:d2:3e:a2:2b:a8:d1:50:e6:f9:98:
+        e1:d8:5a:10:73:22:66:b9:42:85:95:af:98:00:5b:da:43:2a:
+        97:72:4b:0c:c3:c9:59:a0:ab:bf:d6:cc:55:70:7c:aa:72:c5:
+        5d:2d:9c:09:ce:dd:d3:5e:6c:04:93:26:dd:35:c5:57:cd:d7:
+        d8:f1:9f:d7:74:8f:fa:e8:76:01:71:db:e0:68:22:89:93:00:
+        cb:0e:6b:76:e6:b2:50:4c:4a:c4:8e:2f:26:cc:a7:18:21:01:
+        dc:38:40:4e:49:f4:28:dc:ca:0c:f5:af:20:c6:d5:9d:a0:bb:
+        63:ff:38:bc:86:6d:00:9c:2a:8a:0d:cb:40:27:bb:56:dc:40:
+        93:d1:25:6f
+-----BEGIN CERTIFICATE-----
+MIIDTjCCAjagAwIBAgICIAEwDQYJKoZIhvcNAQELBQAwHzEdMBsGA1UEAwwUU3Rh
+cmxpbmcgQ1JMIFRlc3QgQ0EwHhcNMjYxMTE5MTE0NTU1WhcNMzYxMTE2MTE0NTU1
+WjAcMRowGAYDVQQDDBFzdGFybGluZy1jcmwtZ29vZDCCASIwDQYJKoZIhvcNAQEB
+BQADggEPADCCAQoCggEBAJrkXZeK1jCy5JSZvXBiTRbF1hngmAhbwbyPd/g5lj0g
+1RCxkO4B44uype75g7D9bLYswU3XIKZmHN2vc4yGDiGLvA9lzsxAj+w551Pg7piF
+jIajYb3VvDF91n3CXittqoJMeKHh1AG5ocC7hImgOk8nv0Sb7FZuzsbWBxvbXYTK
+RsFUoiAGEWHIgoD8tPLD0F8irASPlPhoKB6IRgizpn7Q2QrpivDp3eEh48WKMz7D
+WNmrXaAWSVfhrcqetJZ2rXcjXOBM/Ji/JSkWDRRNMnvB2Yg7gF/d2i7BiHmRFsLu
+smICWjIW/62iNKQVf/Tc82pjeEx6fv5aJ2htgVa5h6sCAwEAAaOBljCBkzAMBgNV
+HRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAjAe
+BgNVHREEFzAVghNzdGFybGluZy1jcmwtY2xpZW50MB0GA1UdDgQWBBQbo7tJeTd1
+P2RdyiUKmNrDN+4f7zAfBgNVHSMEGDAWgBTNItzrvVrd5YFyBKZaFD5SOvhvOTAN
+BgkqhkiG9w0BAQsFAAOCAQEAl3WLdgV5NZarkh5TI0cY6tDGsUsgDp8zNK7fgrc5
+MrzTW4/+tEIx1mS/eA799z2RlRbaFxNayDz2wasyhRQitQbD8/nXw4shZ0+PnD9S
+V3EyJdR0+RELFbq9TTZU66u9xVfyIo5Xv50nQgs8dCugnhV+XsnSPqIrqNFQ5vmY
+4dhaEHMiZrlChZWvmABb2kMql3JLDMPJWaCrv9bMVXB8qnLFXS2cCc7d015sBJMm
+3TXFV83X2PGf13SP+uh2AXHb4GgiiZMAyw5rduayUExKxI4vJsynGCEB3DhATkn0
+KNzKDPWvIMbVnaC7Y/84vIZtAJwqig3LQCe7VtxAk9Elbw==
+-----END CERTIFICATE-----

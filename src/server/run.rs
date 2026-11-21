@@ -1,0 +1,350 @@
+use super::*;
+
+pub async fn run(config: RuntimeConfig, logger: Arc<Logger>) -> io::Result<()> {
+    cleanup_stale_temp_files(&config, &logger);
+    for warning in &config.warnings {
+        logger.log(LogLevel::Warn, warning.to_string());
+    }
+    let config_path = config.config_path.clone();
+    let prefix = config.prefix.clone();
+    let config = Arc::new(config);
+    let worker_shutdown_timeout = config
+        .core
+        .worker_shutdown_timeout
+        .filter(|timeout| !timeout.is_zero());
+    let groups = build_listener_groups(&config);
+    let tls_configs = build_tls_configs(&config, &groups)?;
+    let stream_tls_configs = build_stream_tls_configs(&config)?;
+    let http_error_loggers = build_http_error_loggers(&config)?;
+    let stream_loggers = build_stream_loggers(&config)?;
+    let proxy_cache = Arc::new(ProxyCacheRegistry::new(config.http.as_ref()));
+    let state = SharedState {
+        config: Arc::new(RwLock::new(config)),
+        tls_configs: Arc::new(RwLock::new(tls_configs)),
+        stream_tls_configs: Arc::new(RwLock::new(stream_tls_configs)),
+        logger,
+        http_error_loggers: Arc::new(RwLock::new(http_error_loggers)),
+        stream_loggers: Arc::new(RwLock::new(stream_loggers)),
+        limits: Arc::new(Mutex::new(LimitState::default())),
+        stats: Arc::new(ConnectionStats::default()),
+        upstream_keepalive: Arc::new(UpstreamKeepalivePool::default()),
+        proxy_cache,
+        client_tls_cache: Arc::new(ClientTlsConfigCache::default()),
+    };
+    let stream_routes = {
+        let config = state.config.read().await.clone();
+        build_stream_routes(&config)
+    };
+    let mut unix_socket_paths = UnixSocketCleanup::default();
+
+    let no_http_listeners = groups.is_empty();
+    let (shutdown_tx, shutdown_rx) = watch::channel(ShutdownMode::Running);
+    let (background_shutdown_tx, background_shutdown_rx) = watch::channel(false);
+    let mut tasks = JoinSet::new();
+    for group in groups {
+        let state = state.clone();
+        let shutdown = shutdown_rx.clone();
+        match group.address.clone() {
+            ListenAddress::Inet(address) => {
+                let listener =
+                    bind_tcp_listener(address, &group.socket_options).map_err(|err| {
+                        io::Error::new(err.kind(), format!("bind() to {address} failed: {err}"))
+                    })?;
+                tasks.spawn(async move {
+                    accept_loop(listener, group, state, shutdown).await;
+                });
+            }
+            ListenAddress::Unix(path) => {
+                #[cfg(unix)]
+                {
+                    let listener =
+                        bind_unix_listener(&path, &group.socket_options).map_err(|err| {
+                            io::Error::new(
+                                err.kind(),
+                                format!("bind() to unix:{} failed: {err}", path.display()),
+                            )
+                        })?;
+                    unix_socket_paths.paths.push(path);
+                    tasks.spawn(async move {
+                        accept_unix_loop(listener, group, state, shutdown).await;
+                    });
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = path;
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "UNIX domain listen sockets are unsupported on this platform",
+                    ));
+                }
+            }
+        }
+    }
+
+    if no_http_listeners {
+        state
+            .logger
+            .log(LogLevel::Notice, "no HTTP listening sockets configured");
+    }
+    {
+        let cache = state.proxy_cache.clone();
+        let logger = state.logger.clone();
+        let shutdown = background_shutdown_rx.clone();
+        tasks.spawn(async move {
+            cache.manage_loop(logger, shutdown).await;
+        });
+    }
+    {
+        let cache = state.proxy_cache.clone();
+        let logger = state.logger.clone();
+        let shutdown = background_shutdown_rx.clone();
+        tasks.spawn(async move {
+            cache.loader_loop(logger, shutdown).await;
+        });
+    }
+
+    for route in stream_routes {
+        if route.udp {
+            let ListenAddress::Inet(address) = route.address else {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    format!("UDP bind() to {} is unsupported", route.address),
+                ));
+            };
+            let listener = bind_udp_socket(address, &route.socket_options).map_err(|err| {
+                io::Error::new(err.kind(), format!("bind() to udp:{address} failed: {err}"))
+            })?;
+            let state = state.clone();
+            let shutdown = shutdown_rx.clone();
+            tasks.spawn(async move {
+                stream_udp_loop(listener, route, state, shutdown).await;
+            });
+        } else {
+            let state = state.clone();
+            match route.address.clone() {
+                ListenAddress::Inet(address) => {
+                    let listener =
+                        bind_tcp_listener(address, &route.socket_options).map_err(|err| {
+                            io::Error::new(err.kind(), format!("bind() to {address} failed: {err}"))
+                        })?;
+                    let shutdown = shutdown_rx.clone();
+                    tasks.spawn(async move {
+                        stream_accept_loop(listener, route, state, shutdown).await;
+                    });
+                }
+                ListenAddress::Unix(path) => {
+                    #[cfg(unix)]
+                    {
+                        let listener =
+                            bind_unix_listener(&path, &route.socket_options).map_err(|err| {
+                                io::Error::new(
+                                    err.kind(),
+                                    format!("bind() to unix:{} failed: {err}", path.display()),
+                                )
+                            })?;
+                        unix_socket_paths.paths.push(path);
+                        let shutdown = shutdown_rx.clone();
+                        tasks.spawn(async move {
+                            stream_unix_accept_loop(listener, route, state, shutdown).await;
+                        });
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = path;
+                        return Err(io::Error::new(
+                            io::ErrorKind::Unsupported,
+                            "UNIX domain stream listen sockets are unsupported on this platform",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    state.logger.log(LogLevel::Notice, "start worker process");
+
+    let shutdown_mode;
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = signal(SignalKind::terminate())?;
+        let mut quit = signal(SignalKind::quit())?;
+        let mut interrupt = signal(SignalKind::interrupt())?;
+        let mut hup = signal(SignalKind::hangup())?;
+        let mut user1 = signal(SignalKind::user_defined1())?;
+        loop {
+            tokio::select! {
+                _ = term.recv() => {
+                    state.logger.log(LogLevel::Notice, "signal 15 (SIGTERM) received, exiting");
+                    shutdown_mode = ShutdownMode::Fast;
+                    break;
+                }
+                _ = quit.recv() => {
+                    state.logger.log(LogLevel::Notice, "signal 3 (SIGQUIT) received, shutting down");
+                    shutdown_mode = ShutdownMode::Graceful;
+                    break;
+                }
+                _ = interrupt.recv() => {
+                    state.logger.log(LogLevel::Notice, "signal 2 (SIGINT) received, exiting");
+                    shutdown_mode = ShutdownMode::Fast;
+                    break;
+                }
+                _ = hup.recv() => {
+                    reload(&state, &config_path, &prefix).await;
+                }
+                _ = user1.recv() => {
+                    reopen_access_logs();
+                    state.logger.reopen();
+                    reopen_http_error_loggers(&state).await;
+                    reopen_stream_loggers(&state).await;
+                    state.logger.log(LogLevel::Notice, "reopening logs");
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        shutdown_mode = ShutdownMode::Fast;
+    }
+
+    let _ = shutdown_tx.send(shutdown_mode);
+    let _ = background_shutdown_tx.send(true);
+    let graceful_timeout = (shutdown_mode == ShutdownMode::Graceful)
+        .then_some(worker_shutdown_timeout)
+        .flatten();
+    let log_task_error = |err| {
+        state
+            .logger
+            .log(LogLevel::Error, format!("listener task failed: {err}"));
+    };
+    if drain_tasks(&mut tasks, graceful_timeout, log_task_error).await == TaskDrain::TimedOut {
+        state.logger.log(
+            LogLevel::Notice,
+            format!(
+                "worker_shutdown_timeout {}ms expired, forcing shutdown",
+                worker_shutdown_timeout.unwrap_or_default().as_millis()
+            ),
+        );
+        let _ = shutdown_tx.send(ShutdownMode::Fast);
+        while let Some(result) = tasks.join_next().await {
+            if let Err(err) = result {
+                state
+                    .logger
+                    .log(LogLevel::Error, format!("listener task failed: {err}"));
+            }
+        }
+    }
+    drop(unix_socket_paths);
+    flush_access_logs();
+    state.logger.log(LogLevel::Notice, "exit");
+    Ok(())
+}
+
+#[derive(Default)]
+pub(in crate::server) struct UnixSocketCleanup {
+    paths: Vec<PathBuf>,
+}
+
+impl Drop for UnixSocketCleanup {
+    fn drop(&mut self) {
+        for path in self.paths.drain(..) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, prefix: &Path) {
+    use crate::config::{ConfigLoader, compile};
+
+    let loaded = ConfigLoader::new(prefix.to_path_buf()).load(config_path);
+    let loaded = match loaded {
+        Ok(document) => compile(document, prefix.to_path_buf(), config_path.to_path_buf()),
+        Err(err) => Err(err),
+    };
+    let new_config = match loaded {
+        Ok(config) => Arc::new(config),
+        Err(err) => {
+            state
+                .logger
+                .log(LogLevel::Error, format!("reload failed: {err}"));
+            return;
+        }
+    };
+    let old = state.config.read().await.clone();
+    if listener_signature(&old) != listener_signature(&new_config) {
+        state.logger.log(
+            LogLevel::Error,
+            "reload failed: changing listen sockets requires a restart",
+        );
+        return;
+    }
+    let groups = build_listener_groups(&new_config);
+    let tls_configs = match build_tls_configs(&new_config, &groups) {
+        Ok(configs) => configs,
+        Err(err) => {
+            state
+                .logger
+                .log(LogLevel::Error, format!("reload failed: {err}"));
+            return;
+        }
+    };
+    let stream_tls_configs = match build_stream_tls_configs(&new_config) {
+        Ok(configs) => configs,
+        Err(err) => {
+            state
+                .logger
+                .log(LogLevel::Error, format!("reload failed: {err}"));
+            return;
+        }
+    };
+    let stream_loggers = match build_stream_loggers(&new_config) {
+        Ok(loggers) => loggers,
+        Err(err) => {
+            state.logger.log(
+                LogLevel::Error,
+                format!("reload failed: cannot open new stream error log: {err}"),
+            );
+            return;
+        }
+    };
+    let http_error_loggers = match build_http_error_loggers(&new_config) {
+        Ok(loggers) => loggers,
+        Err(err) => {
+            state.logger.log(
+                LogLevel::Error,
+                format!("reload failed: cannot open new HTTP error log: {err}"),
+            );
+            return;
+        }
+    };
+    if let Err(err) = state
+        .logger
+        .reconfigure(&new_config.core.error_logs, prefix)
+    {
+        state.logger.log(
+            LogLevel::Error,
+            format!("reload failed: cannot open new error log: {err}"),
+        );
+        return;
+    }
+    reopen_access_logs();
+    *state.tls_configs.write().await = tls_configs;
+    *state.stream_tls_configs.write().await = stream_tls_configs;
+    *state.http_error_loggers.write().await = http_error_loggers;
+    *state.stream_loggers.write().await = stream_loggers;
+    let mut config_slot = state.config.write().await;
+    state.upstream_keepalive.clear().await;
+    state.proxy_cache.reload(new_config.http.as_ref());
+    state.client_tls_cache.clear();
+    let warnings = new_config.warnings.clone();
+    *config_slot = new_config;
+    drop(config_slot);
+    for warning in warnings {
+        state.logger.log(LogLevel::Warn, warning.to_string());
+    }
+    state.logger.log(
+        LogLevel::Notice,
+        format!("configuration {} reloaded", config_path.display()),
+    );
+}

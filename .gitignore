@@ -1,0 +1,7 @@
+/target/
+/logs/
+/nginx-release-1.31.9/
+/nginx-release-1.31.9.tar.gz
+*.pid
+*.log
+
