@@ -14,6 +14,7 @@ mod runtime_migration {
     pub(crate) mod reload;
     pub(crate) mod shutdown;
     pub(crate) mod sni;
+    pub(crate) mod spill_shutdown;
     pub(crate) mod static_and_proxy;
     pub(crate) mod support;
     pub(crate) mod tls;
