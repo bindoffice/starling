@@ -4,6 +4,7 @@ mod runtime_migration {
     pub(crate) mod cache_client_abort;
     pub(crate) mod cache_lock;
     pub(crate) mod cache_stale;
+    pub(crate) mod disk_full;
     pub(crate) mod fastcgi;
     pub(crate) mod fastcgi_support;
     pub(crate) mod file_limit;
