@@ -82,6 +82,12 @@ pub(super) async fn trickle_spill_upstream(
 
 pub(super) async fn cancellable_trickle_spill_upstream()
 -> Option<(SocketAddr, tokio::task::JoinHandle<()>)> {
+    cancellable_trickle_spill_upstream_with_delay(Duration::from_millis(5)).await
+}
+
+pub(super) async fn cancellable_trickle_spill_upstream_with_delay(
+    chunk_delay: Duration,
+) -> Option<(SocketAddr, tokio::task::JoinHandle<()>)> {
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
@@ -110,7 +116,7 @@ pub(super) async fn cancellable_trickle_spill_upstream()
             match stream.write_all(&chunk).await {
                 Ok(()) => {
                     sent += chunk.len();
-                    tokio::time::sleep(Duration::from_millis(5)).await;
+                    tokio::time::sleep(chunk_delay).await;
                 }
                 Err(error)
                     if matches!(
