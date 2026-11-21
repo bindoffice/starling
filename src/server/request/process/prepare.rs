@@ -98,7 +98,7 @@ pub(super) async fn prepare_request(
             }
             set_buffered_request_body_variable(request, variables);
         }
-        if let Some(response) = pre_rewrite_response(
+        if let Some(processed) = pre_rewrite_response(
             http,
             server,
             request,
@@ -111,7 +111,7 @@ pub(super) async fn prepare_request(
         )
         .await
         {
-            return response_outcome(*context, response);
+            return PrepareOutcome::Response(processed);
         }
 
         let has_rewrite_script = !context.rewrite_actions.is_empty();
@@ -159,7 +159,7 @@ pub(super) async fn prepare_request(
                     env.bypass_try_files = true;
                 }
                 TryFilesResult::FallbackStatus(status) => {
-                    let response = configured_error_page(
+                    let outcome = configured_error_page(
                         http,
                         server,
                         request,
@@ -169,7 +169,11 @@ pub(super) async fn prepare_request(
                         depth,
                     )
                     .await;
-                    return response_outcome(*context, response);
+                    return PrepareOutcome::Response(Processed {
+                        response: outcome.response,
+                        context: outcome.context,
+                        tunnel: false,
+                    });
                 }
                 TryFilesResult::FallbackUri(uri) => {
                     env.uri = normalize_uri(&uri).unwrap_or_else(|| uri.clone());
@@ -221,44 +225,67 @@ async fn pre_rewrite_response(
     location: Option<&LocationConfig>,
     variables: &mut Variables,
     connection_guard: &mut Option<ConnectionLimitGuard>,
-) -> Option<Response> {
+) -> Option<Processed> {
     if let Err(error) = validate_declared_request_body_size(request, context.client_max_body_size) {
-        return Some(request_body_error_response(&error));
+        return Some(Processed {
+            response: request_body_error_response(&error),
+            context: context.clone(),
+            tunnel: false,
+        });
     }
     if context.client_max_body_size != 0
         && request.buffered_body_len() > context.client_max_body_size
     {
-        return Some(error_response(413));
+        return Some(Processed {
+            response: error_response(413),
+            context: context.clone(),
+            tunnel: false,
+        });
     }
     if location.is_some_and(|location| location.context.internal) && !env.internal {
-        return Some(error_response(404));
+        return Some(Processed {
+            response: error_response(404),
+            context: context.clone(),
+            tunnel: false,
+        });
     }
     if let Some(response) = basic_access_response(context, request, variables).await {
-        return Some(apply_auth_delay(context, response).await);
+        return Some(Processed {
+            response: apply_auth_delay(context, response).await,
+            context: context.clone(),
+            tunnel: false,
+        });
     }
     if !env.limits_checked {
         env.limits_checked = true;
         if let Some(response) = apply_limit_req(context, variables).await {
-            return Some(
+            let outcome =
                 configured_error_page(http, server, request, response, context, variables, depth)
-                    .await,
-            );
+                    .await;
+            return Some(Processed {
+                response: outcome.response,
+                context: outcome.context,
+                tunnel: false,
+            });
         }
         match acquire_connection_limits(context, variables) {
             Ok(guard) => *connection_guard = Some(guard),
             Err(status) => {
-                return Some(
-                    configured_error_page(
-                        http,
-                        server,
-                        request,
-                        error_response(status),
-                        context,
-                        variables,
-                        depth,
-                    )
-                    .await,
-                );
+                let outcome = configured_error_page(
+                    http,
+                    server,
+                    request,
+                    error_response(status),
+                    context,
+                    variables,
+                    depth,
+                )
+                .await;
+                return Some(Processed {
+                    response: outcome.response,
+                    context: outcome.context,
+                    tunnel: false,
+                });
             }
         }
     }
@@ -267,9 +294,13 @@ async fn pre_rewrite_response(
             auth_request_response(http, server, request, context, variables, depth).await
     {
         let response = apply_auth_delay(context, response).await;
-        return Some(
-            configured_error_page(http, server, request, response, context, variables, depth).await,
-        );
+        let outcome =
+            configured_error_page(http, server, request, response, context, variables, depth).await;
+        return Some(Processed {
+            response: outcome.response,
+            context: outcome.context,
+            tunnel: false,
+        });
     }
     None
 }

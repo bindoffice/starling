@@ -186,6 +186,103 @@ async fn multi_hop_named_internal_redirect_preserves_file_backed_body() {
     let _ = std::fs::remove_dir_all(prefix);
 }
 
+#[tokio::test]
+async fn error_page_multi_hop_redirect_retains_file_backed_body_variable() {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping error-page request body test: TCP binding is not permitted");
+            return;
+        }
+        Err(error) => panic!("bind error-page upstream: {error}"),
+    };
+    let upstream = listener.local_addr().unwrap();
+    let backend = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut stream).await;
+        assert!(
+            request.starts_with(b"POST /middle HTTP/1.1\r\n"),
+            "{request:?}"
+        );
+        assert!(request.ends_with(BODY), "{request:?}");
+        stream
+            .write_all(
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 7\r\n\
+                  Connection: close\r\n\r\nmissing",
+            )
+            .await
+            .unwrap();
+    });
+    let (prefix, config) = test_config(
+        &format!(
+            r#"
+                worker_processes 1;
+                events {{ worker_connections 64; }}
+                http {{
+                    client_body_buffer_size 4;
+                    client_body_temp_path body_temp;
+                    server {{
+                        listen 127.0.0.1:18913;
+                        error_page 404 = /recover;
+                        location = /entry {{
+                            rewrite ^ /middle last;
+                        }}
+                        location = /middle {{
+                            internal;
+                            proxy_intercept_errors on;
+                            proxy_pass http://{upstream};
+                            add_header X-Response-Hop middle always;
+                        }}
+                        location = /recover {{
+                            internal;
+                            try_files /missing @final;
+                        }}
+                        location @final {{
+                            add_header X-Response-Hop final always;
+                            add_header X-Request-Body-File $request_body_file always;
+                            return 200 "matrix-fallback";
+                        }}
+                    }}
+                }}
+            "#
+        ),
+        &[],
+    );
+    let response = request_body(
+        &config,
+        "POST /entry HTTP/1.1\r\nHost: localhost\r\nContent-Length: 8\r\n\
+         Connection: close\r\n\r\npartmore",
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    assert!(response.ends_with("matrix-fallback"), "{response}");
+    assert!(
+        response.contains("\r\nX-Response-Hop: final\r\n"),
+        "response filters should use the final error-page location:\n{response}"
+    );
+    assert!(
+        !response.contains("\r\nX-Response-Hop: middle\r\n"),
+        "the triggering location leaked response configuration:\n{response}"
+    );
+    let request_body_file = response
+        .lines()
+        .find_map(|line| line.strip_prefix("X-Request-Body-File: "))
+        .expect("error-page redirect should retain the file-backed request body");
+    assert!(
+        request_body_file.contains(".starling-tmp-"),
+        "unexpected request body path: {request_body_file}"
+    );
+
+    backend.await.unwrap();
+    wait_for_temp_cleanup(&prefix.join("body_temp")).await;
+    assert!(
+        !contains_generated_temp_file(&prefix.join("body_temp")),
+        "error-page redirect leaked the request body file"
+    );
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
 async fn read_request(stream: &mut TcpStream) -> Vec<u8> {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 1024];

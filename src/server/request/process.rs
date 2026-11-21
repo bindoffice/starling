@@ -73,7 +73,7 @@ async fn process_request_inner(
         PrepareOutcome::Response(processed) => return processed,
     };
     let mut env = prepared.env;
-    let context = Box::new(prepared.context);
+    let mut context = Box::new(prepared.context);
     let _connections = prepared.connection_guard;
     let location = resolve_location(&server.locations, &env.uri);
 
@@ -114,9 +114,11 @@ async fn process_request_inner(
         content.intercept_errors(&context),
         &context.error_pages,
     ) {
-        response =
+        let outcome =
             configured_error_page(http, server, request, response, &context, variables, depth)
                 .await;
+        response = outcome.response;
+        *context = outcome.context;
     }
 
     if let Some(redirect) = response.take_upstream_redirect() {

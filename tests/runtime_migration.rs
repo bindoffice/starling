@@ -1,4 +1,5 @@
 mod runtime_migration {
+    pub(crate) mod business_matrix;
     pub(crate) mod business_routing;
     pub(crate) mod cache_background_update;
     pub(crate) mod cache_client_abort;

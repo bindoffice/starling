@@ -194,7 +194,7 @@ pub(in crate::server) async fn dispatch_http_request(
     variables.client_tls_cache = state.client_tls_cache.clone();
 
     let post_action_env = env.clone();
-    let processed = process_request(http, server, &mut request, env, &mut variables, 0).await;
+    let mut processed = process_request(http, server, &mut request, env, &mut variables, 0).await;
     let processed_logger = variables.error_logger_for(&processed.context);
     variables.set_variable_warning_context(&processed.context, processed_logger);
     let max_body = processed.context.client_max_body_size;
@@ -283,7 +283,7 @@ pub(in crate::server) async fn dispatch_http_request(
     .await;
     let conditional = evaluate_conditional_request(&response, &request, &processed.context);
     if conditional == ConditionalResult::PreconditionFailed {
-        let mut replaced = configured_error_page(
+        let outcome = configured_error_page(
             http,
             server,
             &request,
@@ -293,8 +293,12 @@ pub(in crate::server) async fn dispatch_http_request(
             0,
         )
         .await;
+        let mut replaced = outcome.response;
         replaced.inherit_early_hints_from(&response);
         response = replaced;
+        processed.context = outcome.context;
+        let processed_logger = variables.error_logger_for(&processed.context);
+        variables.set_variable_warning_context(&processed.context, processed_logger);
     }
     apply_expires(&mut response, &processed.context, &variables);
     apply_response_headers(&mut response, &processed.context, &request, &mut variables);

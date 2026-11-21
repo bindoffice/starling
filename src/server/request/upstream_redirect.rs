@@ -105,7 +105,7 @@ async fn redirect_failure(
     variables: &mut Variables,
     depth: usize,
 ) -> Processed {
-    let response = configured_error_page(
+    let outcome = configured_error_page(
         http,
         server,
         request,
@@ -116,8 +116,8 @@ async fn redirect_failure(
     )
     .await;
     Processed {
-        response,
-        context: current_context.clone(),
+        response: outcome.response,
+        context: outcome.context,
         tunnel: false,
     }
 }

@@ -149,6 +149,11 @@ pub(in crate::server) fn set_buffered_request_body_variable(
     request: &Request,
     variables: &mut Variables,
 ) {
+    if variables.request_body_prepared && request.body_stream.is_none() && request.body.is_empty() {
+        // Internal redirects intentionally carry no body stream. Keep the
+        // prepared variables request-scoped instead of clearing their file.
+        return;
+    }
     let file = request.body_file();
     variables.request_body = if file.is_some() {
         String::new()

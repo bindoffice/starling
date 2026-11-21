@@ -35,19 +35,19 @@ pub(in crate::server) async fn process_named_location(
     let _connections = if !env.limits_checked {
         env.limits_checked = true;
         if let Some(response) = apply_limit_req(&context, variables).await {
-            let response =
+            let outcome =
                 configured_error_page(http, server, request, response, &context, variables, depth)
                     .await;
             return Some(Processed {
-                response,
-                context: *context,
+                response: outcome.response,
+                context: outcome.context,
                 tunnel: false,
             });
         }
         match acquire_connection_limits(&context, variables) {
             Ok(guard) => Some(guard),
             Err(status) => {
-                let response = configured_error_page(
+                let outcome = configured_error_page(
                     http,
                     server,
                     request,
@@ -58,8 +58,8 @@ pub(in crate::server) async fn process_named_location(
                 )
                 .await;
                 return Some(Processed {
-                    response,
-                    context: *context,
+                    response: outcome.response,
+                    context: outcome.context,
                     tunnel: false,
                 });
             }
@@ -71,12 +71,12 @@ pub(in crate::server) async fn process_named_location(
         && let Some(response) =
             auth_request_response(http, server, request, &context, variables, depth).await
     {
-        let response =
+        let outcome =
             configured_error_page(http, server, request, response, &context, variables, depth)
                 .await;
         return Some(Processed {
-            response,
-            context: *context,
+            response: outcome.response,
+            context: outcome.context,
             tunnel: false,
         });
     }
@@ -149,7 +149,7 @@ pub(in crate::server) async fn process_named_location(
         content.intercept_errors(&context),
         &context.error_pages,
     ) {
-        response = configured_error_page(
+        let outcome = configured_error_page(
             http,
             server,
             request,
@@ -159,6 +159,8 @@ pub(in crate::server) async fn process_named_location(
             depth + 1,
         )
         .await;
+        response = outcome.response;
+        *context = outcome.context;
     }
     if let Some(redirect) = response.take_upstream_redirect() {
         let mut processed = follow_upstream_redirect(

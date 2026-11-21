@@ -52,6 +52,11 @@ pub(in crate::server) fn intercepts_upstream_status(
     status >= 300 && intercept_errors && find_error_page(pages, status).is_some()
 }
 
+pub(in crate::server) struct ErrorPageOutcome {
+    pub(in crate::server) response: Response,
+    pub(in crate::server) context: EffectiveConfig,
+}
+
 pub(in crate::server) async fn configured_error_page(
     http: &HttpConfig,
     server: &ServerConfig,
@@ -60,9 +65,12 @@ pub(in crate::server) async fn configured_error_page(
     context: &EffectiveConfig,
     variables: &mut Variables,
     depth: usize,
-) -> Response {
+) -> ErrorPageOutcome {
     if variables.error_page || context.error_pages.is_empty() {
-        return response;
+        return ErrorPageOutcome {
+            response,
+            context: context.clone(),
+        };
     }
     let auth_challenges = preserved_auth_challenges(&response);
     // Nginx sets r->error_page before searching and keeps it request-scoped.
@@ -70,7 +78,10 @@ pub(in crate::server) async fn configured_error_page(
         variables.error_page = true;
     }
     let Some(page) = find_error_page(&context.error_pages, response.status) else {
-        return response;
+        return ErrorPageOutcome {
+            response,
+            context: context.clone(),
+        };
     };
     let early_hints = response.early_hints().to_vec();
     let Some(mut redirected) = Box::pin(follow_error_page(
@@ -79,18 +90,27 @@ pub(in crate::server) async fn configured_error_page(
         request,
         page,
         response.status,
+        context,
         variables,
         depth + 1,
     ))
     .await
     else {
-        return response;
+        return ErrorPageOutcome {
+            response,
+            context: context.clone(),
+        };
     };
     for challenge in auth_challenges {
-        redirected.add_header(&challenge.name, challenge.value);
+        redirected
+            .response
+            .add_header(&challenge.name, challenge.value);
     }
-    redirected.set_early_hints(early_hints);
-    redirected
+    redirected.response.set_early_hints(early_hints);
+    ErrorPageOutcome {
+        response: redirected.response,
+        context: redirected.context,
+    }
 }
 
 fn preserved_auth_challenges(response: &Response) -> Vec<Header> {
@@ -109,15 +129,17 @@ fn preserved_auth_challenges(response: &Response) -> Vec<Header> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn follow_error_page(
     http: &HttpConfig,
     server: &ServerConfig,
     request: &Request,
     page: &ErrorPage,
     original_status: u16,
+    current_context: &EffectiveConfig,
     variables: &mut Variables,
     depth: usize,
-) -> Option<Response> {
+) -> Option<Processed> {
     let uri = eval_variables(&page.uri, variables);
     if uri.starts_with('@') {
         let mut internal_request = internal_redirect_request(request);
@@ -146,13 +168,21 @@ async fn follow_error_page(
         )
         .await?;
         apply_error_page_overwrite(&mut processed.response, page.overwrite, original_status);
-        return Some(processed.response);
+        return Some(processed);
     }
     if uri.starts_with("http://") || uri.starts_with("https://") {
-        return Some(error_page_redirect(&uri, page.overwrite));
+        return Some(Processed {
+            response: error_page_redirect(&uri, page.overwrite),
+            context: current_context.clone(),
+            tunnel: false,
+        });
     }
     if !uri.starts_with('/') {
-        return Some(error_page_redirect(&uri, page.overwrite));
+        return Some(Processed {
+            response: error_page_redirect(&uri, page.overwrite),
+            context: current_context.clone(),
+            tunnel: false,
+        });
     }
     let (uri, args) = match uri.split_once('?') {
         Some((uri, args)) => (uri, Some(args.to_string())),
@@ -183,7 +213,7 @@ async fn follow_error_page(
     ))
     .await;
     apply_error_page_overwrite(&mut processed.response, page.overwrite, original_status);
-    Some(processed.response)
+    Some(processed)
 }
 
 pub(in crate::server) fn internal_redirect_request(request: &Request) -> Request {
