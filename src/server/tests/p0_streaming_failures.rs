@@ -6,6 +6,7 @@ const BODY_SIZE: usize = 4 * 1024 * 1024;
 const SLOW_BODY_SIZE: usize = 1024 * 1024;
 
 mod fixtures;
+mod generation_pressure;
 mod half_close;
 mod keepalive;
 mod midflight_delete;
