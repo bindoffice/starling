@@ -5,11 +5,18 @@ mod connection;
 mod fault;
 mod informational;
 mod plaintext;
+mod request;
+mod send;
 
 use connection::settings_for_connection;
 pub(in crate::server) use fault::H2ConnectionFault;
 pub(in crate::server) use informational::send_h2_early_hints;
 pub(in crate::server) use plaintext::handle_plaintext_http_connection;
+use request::{
+    h2_content_length, h2_header_field_too_large, h2_header_list_too_large,
+    receive_header_list_limit, request_from_h2_parts,
+};
+pub(super) use send::{is_h2_connection_header, send_h2_response};
 
 pub(super) async fn handle_h2<S>(
     stream: S,
@@ -285,86 +292,6 @@ async fn finish_or_detach_body_task(task: H2BodyTask) {
     }
 }
 
-pub(super) fn h2_content_length(headers: &http::HeaderMap) -> io::Result<Option<u64>> {
-    let mut content_length = None;
-    for value in headers.get_all(http::header::CONTENT_LENGTH).iter() {
-        let parsed = value
-            .to_str()
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid Content-Length"))?;
-        if content_length.is_some_and(|previous| previous != parsed) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "conflicting Content-Length headers",
-            ));
-        }
-        content_length = Some(parsed);
-    }
-    Ok(content_length)
-}
-
-fn h2_header_field_too_large(parts: &http::request::Parts, limit: usize) -> bool {
-    if limit == 0 {
-        return false;
-    }
-    let uri = &parts.uri;
-    let uri_field_too_large = uri.scheme_str().is_some_and(|value| value.len() > limit)
-        || uri
-            .authority()
-            .is_some_and(|value| value.as_str().len() > limit)
-        || uri
-            .path_and_query()
-            .is_some_and(|value| value.as_str().len() > limit);
-    // The h2 crate exposes only the aggregate decoded header-list size. Check each
-    // decoded field here to preserve Nginx's per-field large_client_header_buffers
-    // limit before the request enters routing or application code.
-    uri_field_too_large
-        || parts.method.as_str().len() > limit
-        || parts
-            .headers
-            .iter()
-            .any(|(name, value)| name.as_str().len() > limit || value.as_bytes().len() > limit)
-}
-
-fn h2_header_list_too_large(parts: &http::request::Parts, limit: usize) -> bool {
-    if limit == 0 {
-        return false;
-    }
-    let uri = &parts.uri;
-    let mut size = ":method".len().saturating_add(parts.method.as_str().len());
-    if let Some(scheme) = uri.scheme_str() {
-        size = size
-            .saturating_add(":scheme".len())
-            .saturating_add(scheme.len());
-    }
-    if let Some(authority) = uri.authority() {
-        size = size
-            .saturating_add(":authority".len())
-            .saturating_add(authority.as_str().len());
-    }
-    if let Some(path) = uri.path_and_query() {
-        size = size
-            .saturating_add(":path".len())
-            .saturating_add(path.as_str().len());
-    }
-    size = parts.headers.iter().fold(size, |total, (name, value)| {
-        total
-            .saturating_add(name.as_str().len())
-            .saturating_add(value.as_bytes().len())
-    });
-    size > limit
-}
-
-fn receive_header_list_limit(limit: u32) -> u32 {
-    // The h2 crate enforces the advertised limit itself and answers with
-    // 431/RST_STREAM. Keep a bounded decode ceiling here, then enforce Nginx's
-    // aggregate limit after decoding so protocol violations become
-    // GOAWAY(ENHANCE_YOUR_CALM). The 4x ceiling matches the crate's own abuse
-    // guard and prevents unbounded header allocation.
-    limit.saturating_mul(4)
-}
-
 #[cfg(test)]
 pub(super) fn http2_limits_for_connection(
     config: &RuntimeConfig,
@@ -372,123 +299,4 @@ pub(super) fn http2_limits_for_connection(
     connection: &ConnectionAddresses,
 ) -> Http2Limits {
     settings_for_connection(config, group, connection).limits
-}
-
-pub(super) fn request_from_h2_parts(
-    parts: http::request::Parts,
-    body: Vec<u8>,
-    remote_addr: String,
-    local_addr: String,
-) -> Request {
-    let mut headers: Vec<Header> = parts
-        .headers
-        .iter()
-        .map(|(name, value)| Header {
-            name: name.as_str().to_string(),
-            value: String::from_utf8_lossy(value.as_bytes()).into_owned(),
-        })
-        .collect();
-    if !headers
-        .iter()
-        .any(|header| header.name.eq_ignore_ascii_case("host"))
-        && let Some(authority) = parts.uri.authority()
-    {
-        headers.push(Header {
-            name: "Host".into(),
-            value: authority.as_str().to_string(),
-        });
-    }
-    let target = parts
-        .uri
-        .path_and_query()
-        .map(|path| path.as_str().to_string())
-        .unwrap_or_else(|| parts.uri.to_string());
-    Request {
-        method: parts.method.as_str().to_string(),
-        target,
-        version: "HTTP/2.0".into(),
-        headers,
-        body,
-        body_stream: None,
-        remote_addr,
-        local_addr,
-        keep_alive: true,
-    }
-}
-
-pub(super) async fn send_h2_response(
-    mut respond: SendResponse<Bytes>,
-    mut response: Response,
-    request_method: &str,
-    server_tokens: ServerTokens,
-    chunk_size: usize,
-) -> io::Result<()> {
-    prepare_response_headers(&mut response, server_tokens);
-    let mut builder = HttpResponse::builder()
-        .status(StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
-    for header in &response.headers {
-        if is_h2_connection_header(&header.name) {
-            continue;
-        }
-        let Ok(name) = http::header::HeaderName::from_bytes(header.name.as_bytes()) else {
-            continue;
-        };
-        let value = sanitize_header_value(&header.value);
-        let Ok(value) = http::header::HeaderValue::from_str(&value) else {
-            continue;
-        };
-        builder = builder.header(name, value);
-    }
-    let response_head = builder.body(()).map_err(io::Error::other)?;
-    let is_head = request_method.eq_ignore_ascii_case("HEAD");
-    let has_body = !is_head && !response.body.is_empty();
-    let has_trailers = !is_head
-        && !response.trailers.is_empty()
-        && response.status >= 200
-        && !matches!(response.status, 204 | 304);
-    let has_output = has_body || has_trailers;
-    let mut send = respond
-        .send_response(response_head, !has_output)
-        .map_err(io::Error::other)?;
-    if !has_output {
-        return Ok(());
-    }
-
-    let body = std::mem::replace(&mut response.body, ResponseBody::Empty);
-    let mut trailers = match body::send_h2_body(&mut send, body, has_trailers, chunk_size).await {
-        Ok(trailers) => trailers,
-        Err(error) => {
-            send.send_reset(h2_reset_reason(&error));
-            return Err(error);
-        }
-    };
-    if has_trailers {
-        trailers.extend(response.trailers.iter().cloned());
-    }
-    if !trailers.is_empty() {
-        body::send_h2_trailers(&mut send, &trailers)?;
-    }
-    Ok(())
-}
-
-fn h2_reset_reason(error: &io::Error) -> h2::Reason {
-    match error.kind() {
-        io::ErrorKind::BrokenPipe
-        | io::ErrorKind::ConnectionAborted
-        | io::ErrorKind::ConnectionReset => h2::Reason::CANCEL,
-        _ => h2::Reason::INTERNAL_ERROR,
-    }
-}
-
-pub(super) fn is_h2_connection_header(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "connection"
-            | "keep-alive"
-            | "proxy-connection"
-            | "transfer-encoding"
-            | "upgrade"
-            | "te"
-            | "trailer"
-    )
 }
