@@ -1,17 +1,11 @@
 use std::fs;
-use std::io::{self, Read, Write};
-use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{
-    ClientConfig, ClientConnection, DigitallySignedStruct, Error, SignatureScheme, StreamOwned,
+use super::support::{
+    RunningServer, TestDirectory, assert_status, fake_upstream, reserve_port,
+    tls_request_unverified,
 };
-
-use super::support::{RunningServer, TestDirectory, assert_status, fake_upstream, reserve_port};
 
 const UPSTREAM_BODY: &str = "sni-business-body";
 
@@ -35,11 +29,11 @@ fn routes_sni_rewrite_cache_store_and_limit_except_over_tls() {
         ),
     );
 
-    let default = tls_get_unverified(port, "default.test", "GET", "/");
+    let default = tls_request_unverified(port, "default.test", "GET", "/", &[], b"");
     assert_status(&default, 200);
     assert!(default.ends_with("default:GET"), "{default}");
 
-    let first = tls_get_unverified(port, "named.test", "GET", "/legacy/item.txt");
+    let first = tls_request_unverified(port, "named.test", "GET", "/legacy/item.txt", &[], b"");
     assert_status(&first, 200);
     assert!(first.ends_with(UPSTREAM_BODY), "{first}");
     assert!(
@@ -51,7 +45,7 @@ fn routes_sni_rewrite_cache_store_and_limit_except_over_tls() {
         "the final rewritten location should supply its response headers:\n{first}"
     );
 
-    let second = tls_get_unverified(port, "named.test", "GET", "/legacy/item.txt");
+    let second = tls_request_unverified(port, "named.test", "GET", "/legacy/item.txt", &[], b"");
     assert_status(&second, 200);
     assert!(second.ends_with(UPSTREAM_BODY), "{second}");
     assert!(
@@ -59,7 +53,14 @@ fn routes_sni_rewrite_cache_store_and_limit_except_over_tls() {
         "the second rewritten request should hit the cache:\n{second}"
     );
 
-    let denied = tls_get_unverified(port, "named.test", "POST", "/legacy/item.txt");
+    let denied = tls_request_unverified(
+        port,
+        "named.test",
+        "POST",
+        "/legacy/item.txt",
+        &[],
+        b"denied",
+    );
     assert_status(&denied, 403);
     assert!(
         !denied.contains(UPSTREAM_BODY),
@@ -143,89 +144,10 @@ fn config(port: u16, upstream_port: u16, certificate: &Path, key: &Path) -> Stri
     )
 }
 
-fn tls_get_unverified(port: u16, server_name: &str, method: &str, target: &str) -> String {
-    let config =
-        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-            .with_safe_default_protocol_versions()
-            .unwrap()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(AcceptAnyServerCertificate))
-            .with_no_client_auth();
-    let connection = ClientConnection::new(
-        Arc::new(config),
-        ServerName::try_from(server_name.to_owned()).expect("TLS server name"),
-    )
-    .expect("create TLS business client");
-    let socket = TcpStream::connect(("127.0.0.1", port)).expect("connect to TLS business listener");
-    socket
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    socket
-        .set_write_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    let mut stream = StreamOwned::new(connection, socket);
-    write!(
-        stream,
-        "{method} {target} HTTP/1.1\r\nHost: {server_name}\r\nConnection: close\r\n\r\n"
-    )
-    .expect("write TLS business request");
-    let mut response = Vec::new();
-    let mut chunk = [0_u8; 4096];
-    loop {
-        match stream.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(count) => response.extend_from_slice(&chunk[..count]),
-            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
-            Err(error) => panic!("read TLS business response: {error}"),
-        }
-    }
-    String::from_utf8_lossy(&response).into_owned()
-}
-
 fn wait_until(timeout: Duration, label: &str, mut condition: impl FnMut() -> bool) {
     let deadline = Instant::now() + timeout;
     while !condition() {
         assert!(Instant::now() < deadline, "timed out waiting for {label}");
         std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-#[derive(Debug)]
-struct AcceptAnyServerCertificate;
-
-impl ServerCertVerifier for AcceptAnyServerCertificate {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        rustls::crypto::ring::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
     }
 }

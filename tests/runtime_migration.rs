@@ -35,6 +35,7 @@ mod runtime_migration {
     pub(crate) mod support;
     pub(crate) mod tls;
     pub(crate) mod tls_business;
+    pub(crate) mod tls_internal_business;
     pub(crate) mod tunnel;
     pub(crate) mod upstream_failover;
     pub(crate) mod upstream_timeout;

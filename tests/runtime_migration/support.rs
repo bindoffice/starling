@@ -8,9 +8,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 mod fake_upstream;
+mod tls_client;
 pub(crate) use fake_upstream::{
     fake_upstream, fake_upstream_with_delay, fake_upstream_with_status, read_request_head,
 };
+pub(crate) use tls_client::tls_request_unverified;
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 static NEXT_TEST_PORT: AtomicU32 = AtomicU32::new(0);
