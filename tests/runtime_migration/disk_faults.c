@@ -355,3 +355,17 @@ int unlinkat(int dirfd, const char *path, int flags) {
     }
     return real_unlinkat(dirfd, path, flags);
 }
+
+int close(int fd) {
+    static int (*real_close)(int);
+    if (real_close == NULL) {
+        real_close = dlsym(RTLD_NEXT, "close");
+    }
+    int matched = should_fail_fd(fd, "close");
+    int result = real_close(fd);
+    if (matched && result == 0) {
+        errno = configured_errno();
+        return -1;
+    }
+    return result;
+}
