@@ -9,6 +9,7 @@ mod fixtures;
 mod half_close;
 mod keepalive;
 mod midflight_delete;
+mod mixed_pressure;
 mod slow_network;
 mod spill_cancellation;
 mod timeout_retry;
