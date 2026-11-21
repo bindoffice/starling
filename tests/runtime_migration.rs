@@ -20,6 +20,8 @@ mod runtime_migration {
     pub(crate) mod file_limit;
     pub(crate) mod gateway_support;
     pub(crate) mod http2;
+    pub(crate) mod http2_pressure;
+    pub(crate) mod http2_pressure_support;
     pub(crate) mod proxy_keepalive;
     pub(crate) mod proxy_store_cache;
     pub(crate) mod reload;
