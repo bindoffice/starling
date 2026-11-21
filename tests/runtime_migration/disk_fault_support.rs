@@ -84,6 +84,39 @@ impl FaultServer {
         );
     }
 
+    pub(super) fn shutdown_gracefully(&mut self) {
+        self.assert_running();
+        let result = unsafe { libc::kill(self.child.id() as i32, libc::SIGQUIT) };
+        assert_eq!(
+            result,
+            0,
+            "send SIGQUIT failed: {}\n{}",
+            std::io::Error::last_os_error(),
+            self.diagnostics()
+        );
+    }
+
+    pub(super) fn wait_for_exit(&mut self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                assert!(
+                    status.success(),
+                    "starling exited with {status}:\n{}",
+                    self.diagnostics()
+                );
+                return;
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "starling did not exit within {timeout:?}:\n{}",
+                    self.diagnostics()
+                );
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn wait_until_ready(&mut self, port: u16) {
         let address = SocketAddr::from(([127, 0, 0, 1], port));
         let deadline = Instant::now() + Duration::from_secs(10);

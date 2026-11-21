@@ -23,6 +23,7 @@ fn close_faults_preserve_responses_and_cleanup_attempts() {
     request_body_close_eio_keeps_the_response_and_cleans_temp();
     close_and_unlink_faults_leave_only_cleanup_residue();
     reset_during_close_and_unlink_faults_keeps_the_worker_usable();
+    graceful_shutdown_and_reset_with_close_faults_exit_cleanly();
 }
 
 fn response_spill_close_eio_keeps_the_complete_body() {
@@ -168,6 +169,45 @@ fn reset_during_close_and_unlink_faults_keeps_the_worker_usable() {
     assert!(
         !files_under(&server.temp_path("proxy-temp")).is_empty(),
         "the unlink fault should leave reset cleanup residue observable"
+    );
+}
+
+fn graceful_shutdown_and_reset_with_close_faults_exit_cleanly() {
+    let port = reserve_port();
+    let body = "q".repeat(128 * 1024);
+    let Some(upstream) = fake_upstream(&body) else {
+        return;
+    };
+    let directory = TestDirectory::new("close-unlink-sigquit");
+    let Some(mut server) = FaultServer::start(
+        directory,
+        port,
+        &response_config(port, upstream.port),
+        FaultSpec {
+            path: "/proxy-temp/",
+            error: EIO,
+            operations: "close,unlink",
+        },
+    ) else {
+        return;
+    };
+
+    let mut client = TcpStream::connect(("127.0.0.1", port)).expect("connect shutdown client");
+    socket2::SockRef::from(&client)
+        .set_recv_buffer_size(1024)
+        .unwrap();
+    client
+        .write_all(b"GET /spill HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .unwrap();
+    wait_for_files(&server.temp_path("proxy-temp"), "SIGQUIT spill");
+
+    server.shutdown_gracefully();
+    reset_client(client);
+    server.wait_for_exit(Duration::from_secs(5));
+    upstream.captured();
+    assert!(
+        !files_under(&server.temp_path("proxy-temp")).is_empty(),
+        "unlink failure during SIGQUIT should leave cleanup residue observable"
     );
 }
 
