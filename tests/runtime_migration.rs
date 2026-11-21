@@ -25,6 +25,7 @@ mod runtime_migration {
     pub(crate) mod reload_stress;
     pub(crate) mod reload_stress_support;
     pub(crate) mod shutdown;
+    pub(crate) mod slow_resource_stress;
     pub(crate) mod sni;
     pub(crate) mod spill_shutdown;
     pub(crate) mod static_and_proxy;

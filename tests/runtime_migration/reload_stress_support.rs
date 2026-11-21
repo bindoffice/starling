@@ -10,12 +10,14 @@ use std::time::{Duration, Instant};
 #[derive(Debug)]
 pub(super) struct ProcessResources {
     pub(super) fds: usize,
+    pub(super) tasks: usize,
     pub(super) rss_kib: u64,
 }
 
 impl ProcessResources {
     pub(super) fn capture(pid: u32) -> Option<Self> {
         let fds = fs::read_dir(format!("/proc/{pid}/fd")).ok()?.count();
+        let tasks = fs::read_dir(format!("/proc/{pid}/task")).ok()?.count();
         let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
         let rss_kib = status.lines().find_map(|line| {
             line.strip_prefix("VmRSS:")?
@@ -24,7 +26,11 @@ impl ProcessResources {
                 .parse()
                 .ok()
         })?;
-        Some(Self { fds, rss_kib })
+        Some(Self {
+            fds,
+            tasks,
+            rss_kib,
+        })
     }
 }
 
