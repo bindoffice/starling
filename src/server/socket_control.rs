@@ -17,6 +17,13 @@ pub(in crate::server) struct ClientSocketControl {
     socket: Arc<Socket>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::server) enum ClientCloseState {
+    Open,
+    ReadHalfClosed,
+    Reset,
+}
+
 impl ClientSocketControl {
     pub(in crate::server) fn attach_tcp(
         stream: TcpStream,
@@ -56,11 +63,12 @@ impl ClientSocketControl {
         Ok(())
     }
 
-    /// Check for a peer close without consuming request bytes.
+    /// Inspect peer closure without consuming request bytes.
     ///
-    /// Nginx's `ngx_http_upstream_check_broken_connection()` treats both a
-    /// pending reset and `recv() == 0` as a prematurely closed client.
-    pub(in crate::server) fn close_detected(&self) -> bool {
+    /// A TCP FIN closes only the peer's write half. It can cancel an in-flight
+    /// request body, but the response direction remains writable. A reset or
+    /// socket error makes both directions unusable.
+    pub(in crate::server) fn close_state(&self) -> ClientCloseState {
         #[cfg(unix)]
         {
             use std::os::fd::{AsRawFd, RawFd};
@@ -81,20 +89,32 @@ impl ClientSocketControl {
                 )
             };
             if result > 0 {
-                return false;
+                return ClientCloseState::Open;
             }
             if result == 0 {
-                return true;
+                return ClientCloseState::ReadHalfClosed;
             }
             let Some(error) = io::Error::last_os_error().raw_os_error() else {
-                return false;
+                return ClientCloseState::Reset;
             };
-            error != libc::EAGAIN && error != libc::EWOULDBLOCK && error != libc::EINTR
+            if error == libc::EAGAIN || error == libc::EWOULDBLOCK || error == libc::EINTR {
+                ClientCloseState::Open
+            } else {
+                ClientCloseState::Reset
+            }
         }
         #[cfg(not(unix))]
         {
-            false
+            ClientCloseState::Open
         }
+    }
+
+    pub(in crate::server) fn close_detected(&self) -> bool {
+        self.close_state() != ClientCloseState::Open
+    }
+
+    pub(in crate::server) fn reset_detected(&self) -> bool {
+        self.close_state() == ClientCloseState::Reset
     }
 
     #[cfg(test)]
@@ -130,7 +150,10 @@ mod tests {
             .shutdown(std::net::Shutdown::Write)
             .unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(control.as_ref().unwrap().close_detected());
+        assert_eq!(
+            control.as_ref().unwrap().close_state(),
+            ClientCloseState::ReadHalfClosed
+        );
 
         let reset_client = TcpStream::connect(address).await.unwrap();
         let (server, _) = listener.accept().await.unwrap();
@@ -142,7 +165,7 @@ mod tests {
         drop(reset_client);
 
         tokio::time::timeout(Duration::from_secs(1), async {
-            while !control.as_ref().unwrap().close_detected() {
+            while !control.as_ref().unwrap().reset_detected() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })

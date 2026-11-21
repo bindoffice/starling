@@ -6,5 +6,8 @@ const BODY_SIZE: usize = 4 * 1024 * 1024;
 const SLOW_BODY_SIZE: usize = 1024 * 1024;
 
 mod fixtures;
+mod half_close;
+mod keepalive;
 mod slow_network;
 mod spill_cancellation;
+mod timeout_retry;

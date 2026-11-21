@@ -10,7 +10,7 @@ pub(super) async fn write_dispatch_response<W>(
     write_half: &mut W,
     outcome: &mut DispatchOutcome,
     request: &Request,
-    nodelay: Option<&ClientSocketControl>,
+    control: Option<&ClientSocketControl>,
 ) -> DispatchWrite
 where
     W: AsyncWrite + Unpin,
@@ -30,10 +30,10 @@ where
         },
     );
     tokio::pin!(write);
-    let result = if let Some(control) = nodelay {
+    let result = if let Some(control) = control {
         tokio::select! {
             result = &mut write => Some(result),
-            _ = wait_for_client_close(control) => None,
+            _ = wait_for_client_reset(control) => None,
         }
     } else {
         Some(write.await)

@@ -2,6 +2,8 @@ use std::path::Path;
 
 use super::*;
 
+pub(super) const SLOW_CHUNK_SIZE: usize = 32 * 1024;
+
 pub(super) async fn slow_spill_upstream() -> Option<(SocketAddr, tokio::task::JoinHandle<()>)> {
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
@@ -63,7 +65,7 @@ pub(super) async fn trickle_spill_upstream(
             )
             .await
             .unwrap();
-        let chunk = vec![b'x'; 32 * 1024];
+        let chunk = vec![b'x'; SLOW_CHUNK_SIZE];
         for _ in 0..SLOW_BODY_SIZE / chunk.len() {
             stream.write_all(&chunk).await.unwrap();
             tokio::time::sleep(chunk_delay).await;
@@ -102,7 +104,7 @@ pub(super) async fn cancellable_trickle_spill_upstream()
             )
             .await
             .unwrap();
-        let chunk = vec![b'x'; 32 * 1024];
+        let chunk = vec![b'x'; SLOW_CHUNK_SIZE];
         let mut sent = 0;
         while sent < SLOW_BODY_SIZE {
             match stream.write_all(&chunk).await {
@@ -176,7 +178,7 @@ pub(super) fn spawn_frontend(
     })
 }
 
-async fn read_request_head(stream: &mut TcpStream) {
+pub(super) async fn read_request_head(stream: &mut TcpStream) -> String {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 1024];
     while !request.windows(4).any(|window| window == b"\r\n\r\n") {
@@ -184,6 +186,7 @@ async fn read_request_head(stream: &mut TcpStream) {
         assert!(read > 0, "upstream closed before request headers");
         request.extend_from_slice(&buffer[..read]);
     }
+    String::from_utf8(request).expect("upstream request headers should be UTF-8")
 }
 
 pub(super) async fn read_response_with_body(
@@ -217,6 +220,15 @@ pub(super) async fn read_response_with_body(
             return Ok(response);
         }
     }
+}
+
+pub(super) async fn read_to_end_within(stream: &mut TcpStream, limit: Duration) -> Vec<u8> {
+    let mut response = Vec::new();
+    tokio::time::timeout(limit, stream.read_to_end(&mut response))
+        .await
+        .expect("response should close within the test deadline")
+        .unwrap();
+    response
 }
 
 pub(super) async fn wait_for_generated_temp_file(root: &Path, present: bool) {
@@ -281,6 +293,42 @@ pub(super) fn spill_config_with_timeout(
                         proxy_temp_path {temp_path};
                         proxy_max_temp_file_size 5m;
                         proxy_read_timeout {read_timeout};
+                    }}
+                }}
+            }}
+        "#
+    )
+}
+
+pub(super) fn spill_config_with_named_upstream(
+    temp_path: &str,
+    upstream_servers: &str,
+    marker: u64,
+    read_timeout: &str,
+    next_upstream: &str,
+) -> String {
+    format!(
+        r#"
+            worker_processes 1;
+            events {{ worker_connections 64; }}
+            http {{
+                client_max_body_size {marker};
+                upstream p0_backend {{
+                    {upstream_servers}
+                }}
+                server {{
+                    listen 127.0.0.1:{LISTEN_PORT};
+                    lingering_close off;
+                    location / {{
+                        proxy_pass http://p0_backend;
+                        proxy_buffer_size 1k;
+                        proxy_buffers 4 1k;
+                        proxy_busy_buffers_size 2k;
+                        proxy_temp_file_write_size 1k;
+                        proxy_temp_path {temp_path};
+                        proxy_max_temp_file_size 5m;
+                        proxy_read_timeout {read_timeout};
+                        {next_upstream}
                     }}
                 }}
             }}

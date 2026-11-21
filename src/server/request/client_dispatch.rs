@@ -42,7 +42,7 @@ where
             _ = wait_for_client_close(control) => {
                 if client_abort.preserve() {
                     client_closed = true;
-                } else {
+                } else if client_abort.upstream_active() {
                     return DispatchWait::Cancelled;
                 }
             }
@@ -51,11 +51,24 @@ where
 }
 
 pub(in crate::server) async fn wait_for_client_close(control: &ClientSocketControl) {
+    tokio::time::sleep(Duration::from_millis(50)).await;
     let mut interval = tokio::time::interval(Duration::from_millis(50));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         interval.tick().await;
         if control.close_detected() {
+            return;
+        }
+    }
+}
+
+pub(in crate::server) async fn wait_for_client_reset(control: &ClientSocketControl) {
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let mut interval = tokio::time::interval(Duration::from_millis(50));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        if control.reset_detected() {
             return;
         }
     }
