@@ -12,6 +12,7 @@ mod runtime_migration {
     pub(crate) mod proxy_keepalive;
     pub(crate) mod proxy_store_cache;
     pub(crate) mod reload;
+    pub(crate) mod reload_stress;
     pub(crate) mod shutdown;
     pub(crate) mod sni;
     pub(crate) mod spill_shutdown;

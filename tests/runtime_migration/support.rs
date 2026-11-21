@@ -100,6 +100,14 @@ impl RunningServer {
         self.directory.write("conf/nginx.conf", contents);
     }
 
+    pub(crate) fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    pub(crate) fn directory_path(&self) -> &Path {
+        self.directory.path()
+    }
+
     pub(crate) fn reload(&mut self) {
         assert!(
             self.child.try_wait().unwrap().is_none(),
@@ -303,6 +311,10 @@ impl Http1Connection {
         )
         .unwrap();
         self.read_response()
+    }
+
+    pub(crate) fn into_stream(self) -> TcpStream {
+        self.stream
     }
 
     fn read_response(&mut self) -> String {
