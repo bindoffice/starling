@@ -120,6 +120,7 @@ async fn intercepted_proxy_error_is_served_from_negative_cache() {
                     proxy_cache_path cache keys_zone=proxy_cache:1m;
                     server {{
                         listen 127.0.0.1:18622;
+                        add_header X-Cache-Status $upstream_cache_status always;
                         error_page 404 /fallback;
                         location / {{
                             proxy_pass http://{upstream};
@@ -141,12 +142,14 @@ async fn intercepted_proxy_error_is_served_from_negative_cache() {
     let request = "GET /item HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 
     let first = request_body_with_state(&config, state.clone(), request).await;
-    assert!(first.starts_with("HTTP/1.1 200 OK\r\n"), "{first}");
+    assert!(first.starts_with("HTTP/1.1 404 Not Found\r\n"), "{first}");
+    assert!(first.contains("X-Cache-Status: MISS\r\n"), "{first}");
     assert!(first.ends_with("fallback-ok"), "{first}");
     assert!(!first.contains("upstream-error"), "{first}");
 
     let second = request_body_with_state(&config, state, request).await;
-    assert!(second.starts_with("HTTP/1.1 200 OK\r\n"), "{second}");
+    assert!(second.starts_with("HTTP/1.1 404 Not Found\r\n"), "{second}");
+    assert!(second.contains("X-Cache-Status: HIT\r\n"), "{second}");
     assert!(second.ends_with("fallback-ok"), "{second}");
     assert!(!second.contains("upstream-error"), "{second}");
 

@@ -105,7 +105,7 @@ async fn informational_response_followed_by_truncation_is_discarded_before_retry
                         listen 127.0.0.1:18721;
                         location / {{
                             proxy_pass http://file_retry;
-                            proxy_next_upstream invalid_header non_idempotent;
+                            proxy_next_upstream error non_idempotent;
                             proxy_next_upstream_tries 2;
                         }}
                     }}

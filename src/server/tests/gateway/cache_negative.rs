@@ -40,7 +40,7 @@ async fn run_uwsgi_negative_cache_case(listen_port: u16) {
 
     assert_negative_cache_miss_and_hit(&config, state.clone(), request).await;
 
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
     let listener = TcpListener::bind(upstream_address)
         .await
         .unwrap_or_else(|error| panic!("rebind uWSGI upstream: {error}"));
@@ -81,7 +81,7 @@ async fn run_scgi_negative_cache_case(listen_port: u16) {
 
     assert_negative_cache_miss_and_hit(&config, state.clone(), request).await;
 
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
     let listener = TcpListener::bind(upstream_address)
         .await
         .unwrap_or_else(|error| panic!("rebind SCGI upstream: {error}"));
@@ -134,12 +134,14 @@ async fn run_intercepted_error_case(kind: &str, listen_port: u16) {
     let request = "GET /item HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 
     let first = request_body_with_state(&config, state.clone(), request).await;
-    assert!(first.starts_with("HTTP/1.1 200 OK\r\n"), "{first}");
+    assert!(first.starts_with("HTTP/1.1 404 Not Found\r\n"), "{first}");
+    assert!(first.contains("X-Cache-Status: MISS\r\n"), "{first}");
     assert!(first.ends_with("fallback-ok"), "{first}");
     assert!(!first.contains("upstream-error"), "{first}");
 
     let second = request_body_with_state(&config, state, request).await;
-    assert!(second.starts_with("HTTP/1.1 200 OK\r\n"), "{second}");
+    assert!(second.starts_with("HTTP/1.1 404 Not Found\r\n"), "{second}");
+    assert!(second.contains("X-Cache-Status: HIT\r\n"), "{second}");
     assert!(second.ends_with("fallback-ok"), "{second}");
     assert!(!second.contains("upstream-error"), "{second}");
 
@@ -180,12 +182,14 @@ async fn run_fastcgi_intercepted_error_case(listen_port: u16) {
     let request = "GET /item HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 
     let first = request_body_with_state(&config, state.clone(), request).await;
-    assert!(first.starts_with("HTTP/1.1 200 OK\r\n"), "{first}");
+    assert!(first.starts_with("HTTP/1.1 404 Not Found\r\n"), "{first}");
+    assert!(first.contains("X-Cache-Status: MISS\r\n"), "{first}");
     assert!(first.ends_with("fallback-ok"), "{first}");
     assert!(!first.contains("upstream-error"), "{first}");
 
     let second = request_body_with_state(&config, state, request).await;
-    assert!(second.starts_with("HTTP/1.1 200 OK\r\n"), "{second}");
+    assert!(second.starts_with("HTTP/1.1 404 Not Found\r\n"), "{second}");
+    assert!(second.contains("X-Cache-Status: HIT\r\n"), "{second}");
     assert!(second.ends_with("fallback-ok"), "{second}");
     assert!(!second.contains("upstream-error"), "{second}");
 
@@ -278,7 +282,7 @@ fn negative_cache_config(kind: &str, upstream: &str, listen_port: u16) -> String
                         {kind}_pass {upstream};
                         {kind}_cache gateway_cache;
                         {kind}_cache_key "$request_method$host$request_uri";
-                        {kind}_cache_valid 502 1ms;
+                        {kind}_cache_valid 502 1s;
                         {kind}_next_upstream off;
                     }}
                 }}
@@ -296,6 +300,7 @@ fn intercepted_error_config(kind: &str, upstream: &str, listen_port: u16) -> Str
                 {kind}_cache_path cache keys_zone=gateway_cache:1m;
                 server {{
                     listen 127.0.0.1:{listen_port};
+                    add_header X-Cache-Status $upstream_cache_status always;
                     error_page 404 /fallback;
                     location / {{
                         {kind}_pass {upstream};

@@ -111,7 +111,7 @@ async fn fastcgi_caches_gateway_failure_status_until_validity_expires() {
                             fastcgi_pass {upstream_address};
                             fastcgi_cache gateway_cache;
                             fastcgi_cache_key "$request_method$host$request_uri";
-                            fastcgi_cache_valid 502 1ms;
+                            fastcgi_cache_valid 502 1s;
                             fastcgi_next_upstream off;
                         }}
                     }}
@@ -134,7 +134,7 @@ async fn fastcgi_caches_gateway_failure_status_until_validity_expires() {
     );
     assert!(second.contains("X-Cache-Status: HIT\r\n"), "{second}");
 
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
     let listener = TcpListener::bind(upstream_address)
         .await
         .unwrap_or_else(|error| panic!("rebind FastCGI upstream: {error}"));

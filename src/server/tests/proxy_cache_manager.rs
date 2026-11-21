@@ -123,6 +123,49 @@ async fn enforces_min_free() {
     let _ = std::fs::remove_dir_all(prefix);
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn delete_failure_keeps_the_entry_and_recovers_after_permissions_return() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipping cache manager delete failure test as root");
+        return;
+    }
+
+    let Some((prefix, config, backend)) = fill_single_cache_entry(18626, 1, 0).await else {
+        return;
+    };
+    let state = test_state(&config);
+    let response = request_body_with_state(
+        &config,
+        state.clone(),
+        "GET /item HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(response.ends_with("cached"), "{response}");
+
+    let cache_file = find_cache_file(&prefix.join("cache")).expect("cache entry");
+    let parent = cache_file
+        .parent()
+        .expect("cache entry parent")
+        .to_path_buf();
+    let original = std::fs::metadata(&parent).unwrap().permissions();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let error = state.proxy_cache.maintain().await.unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(cache_file.exists(), "failed delete removed the cache entry");
+
+    std::fs::set_permissions(&parent, original).unwrap();
+    let stats = state.proxy_cache.maintain().await.unwrap();
+    assert_eq!(stats.removed, 1);
+    assert!(!cache_file.exists());
+
+    backend.await.unwrap();
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
 async fn fill_single_cache_entry(
     port: u16,
     max_size: u64,
