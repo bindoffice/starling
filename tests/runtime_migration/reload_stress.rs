@@ -1,18 +1,20 @@
-use std::collections::HashSet;
+use std::env;
 use std::fs;
-use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{self, Read};
+use std::net::TcpStream;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::reload_stress_support::{ProcessResources, StressUpstream, config};
 use super::support::{Http1Connection, RunningServer, TestDirectory, assert_status, reserve_port};
 
 const RELOADS: u64 = 24;
 const TRAFFIC_CLIENTS: usize = 8;
 const IDLE_CLIENTS: usize = 8;
+const SOAK_SECONDS_ENV: &str = "STARLING_RELOAD_SOAK_SECONDS";
 
 #[test]
 #[ignore = "requires local TCP bind; run with --ignored"]
@@ -48,7 +50,21 @@ fn repeated_reload_keepalive_traffic_and_sigquit_leave_no_runtime_leaks() {
         }));
     }
 
-    for revision in 1..=RELOADS {
+    let soak = env::var(SOAK_SECONDS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::ZERO);
+    let soak_started = Instant::now();
+    let mut resource_samples = Vec::new();
+    let mut revision = 0_u64;
+    loop {
+        let short_run_complete = soak.is_zero() && revision >= RELOADS;
+        let soak_complete = !soak.is_zero() && soak_started.elapsed() >= soak;
+        if short_run_complete || soak_complete {
+            break;
+        }
+        revision += 1;
         server.write_config(&config(port, upstream.port, revision));
         server.reload();
         let version = format!("rev-{revision}");
@@ -61,6 +77,15 @@ fn repeated_reload_keepalive_traffic_and_sigquit_leave_no_runtime_leaks() {
             response.contains("proxied"),
             "proxied request after {version} failed:\n{response}"
         );
+        if let Some(resources) = ProcessResources::capture(server.pid()) {
+            if revision.is_multiple_of(8) {
+                eprintln!(
+                    "reload soak t={:.1}s revision={revision} {resources:?}",
+                    soak_started.elapsed().as_secs_f64()
+                );
+            }
+            resource_samples.push(resources);
+        }
     }
 
     stop.store(true, Ordering::Relaxed);
@@ -74,13 +99,13 @@ fn repeated_reload_keepalive_traffic_and_sigquit_leave_no_runtime_leaks() {
     );
 
     // No request races this final clear, so every pooled upstream connection must close.
-    server.write_config(&config(port, upstream.port, RELOADS));
+    server.write_config(&config(port, upstream.port, revision));
     server.reload();
-    wait_for_version(&mut control, &format!("rev-{RELOADS}"));
+    wait_for_version(&mut control, &format!("rev-{revision}"));
     upstream.wait_for_no_active(Duration::from_secs(5));
 
     assert!(
-        upstream.stats.opened() >= RELOADS as usize,
+        upstream.stats.opened() >= revision as usize,
         "each reload generation should establish an upstream connection: {:?}",
         upstream.stats.summary()
     );
@@ -98,6 +123,11 @@ fn repeated_reload_keepalive_traffic_and_sigquit_leave_no_runtime_leaks() {
     thread::sleep(Duration::from_millis(200));
     let final_resources = ProcessResources::capture(server.pid());
     if let (Some(baseline), Some(final_resources)) = (baseline, final_resources) {
+        let peak_rss_kib = resource_samples
+            .iter()
+            .map(|sample| sample.rss_kib)
+            .max()
+            .unwrap_or(final_resources.rss_kib);
         assert!(
             final_resources.fds <= baseline.fds + 4,
             "file descriptors grew across reloads: baseline={baseline:?} final={final_resources:?}"
@@ -105,6 +135,10 @@ fn repeated_reload_keepalive_traffic_and_sigquit_leave_no_runtime_leaks() {
         assert!(
             final_resources.rss_kib <= baseline.rss_kib + 64 * 1024,
             "RSS grew across reloads: baseline={baseline:?} final={final_resources:?}"
+        );
+        assert!(
+            peak_rss_kib <= baseline.rss_kib + 96 * 1024,
+            "RSS peak grew too far during the soak: baseline={baseline:?} peak={peak_rss_kib} KiB"
         );
     }
     assert!(
@@ -115,7 +149,7 @@ fn repeated_reload_keepalive_traffic_and_sigquit_leave_no_runtime_leaks() {
     let mut idle = Vec::new();
     for _ in 0..IDLE_CLIENTS {
         let mut connection = Http1Connection::connect(port);
-        wait_for_version(&mut connection, &format!("rev-{RELOADS}"));
+        wait_for_version(&mut connection, &format!("rev-{revision}"));
         idle.push(connection.into_stream());
     }
     server.shutdown_gracefully();
@@ -164,230 +198,6 @@ fn wait_for_eof(stream: &mut TcpStream) {
     }
 }
 
-#[derive(Debug)]
-struct ProcessResources {
-    fds: usize,
-    rss_kib: u64,
-}
-
-impl ProcessResources {
-    fn capture(pid: u32) -> Option<Self> {
-        let fds = fs::read_dir(format!("/proc/{pid}/fd")).ok()?.count();
-        let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-        let rss_kib = status.lines().find_map(|line| {
-            line.strip_prefix("VmRSS:")?
-                .split_whitespace()
-                .next()?
-                .parse()
-                .ok()
-        })?;
-        Some(Self { fds, rss_kib })
-    }
-}
-
-#[derive(Clone)]
-struct UpstreamStats {
-    opened: Arc<AtomicUsize>,
-    active: Arc<AtomicUsize>,
-    closed: Arc<AtomicUsize>,
-    requests: Arc<AtomicUsize>,
-    revisions: Arc<Mutex<HashSet<u64>>>,
-    mixed: Arc<Mutex<Vec<String>>>,
-}
-
-impl UpstreamStats {
-    fn new() -> Self {
-        Self {
-            opened: Arc::new(AtomicUsize::new(0)),
-            active: Arc::new(AtomicUsize::new(0)),
-            closed: Arc::new(AtomicUsize::new(0)),
-            requests: Arc::new(AtomicUsize::new(0)),
-            revisions: Arc::new(Mutex::new(HashSet::new())),
-            mixed: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    fn opened(&self) -> usize {
-        self.opened.load(Ordering::Relaxed)
-    }
-
-    fn active(&self) -> usize {
-        self.active.load(Ordering::Relaxed)
-    }
-
-    fn revisions(&self) -> HashSet<u64> {
-        self.revisions.lock().unwrap().clone()
-    }
-
-    fn mixed_revisions(&self) -> Vec<String> {
-        self.mixed.lock().unwrap().clone()
-    }
-
-    fn summary(&self) -> String {
-        format!(
-            "opened={} active={} closed={} requests={} revisions={:?}",
-            self.opened(),
-            self.active(),
-            self.closed.load(Ordering::Relaxed),
-            self.requests.load(Ordering::Relaxed),
-            self.revisions()
-        )
-    }
-}
-
-struct StressUpstream {
-    port: u16,
-    stats: UpstreamStats,
-    stop: Arc<AtomicBool>,
-    accept: Option<thread::JoinHandle<()>>,
-}
-
-impl StressUpstream {
-    fn start() -> Option<Self> {
-        let listener = match TcpListener::bind(("127.0.0.1", 0)) {
-            Ok(listener) => listener,
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                eprintln!("skipping runtime reload stress test: TCP binding is not permitted");
-                return None;
-            }
-            Err(error) => panic!("bind stress upstream: {error}"),
-        };
-        listener.set_nonblocking(true).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let stats = UpstreamStats::new();
-        let stop = Arc::new(AtomicBool::new(false));
-        let accept = thread::spawn({
-            let stats = stats.clone();
-            let stop = stop.clone();
-            move || accept_loop(listener, stats, stop)
-        });
-        Some(Self {
-            port,
-            stats,
-            stop,
-            accept: Some(accept),
-        })
-    }
-
-    fn wait_for_no_active(&self, timeout: Duration) {
-        let deadline = Instant::now() + timeout;
-        while self.stats.active() != 0 {
-            assert!(
-                Instant::now() < deadline,
-                "reload did not close pooled upstream connections: {:?}",
-                self.stats.summary()
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    fn stop(mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(accept) = self.accept.take() {
-            accept.join().unwrap();
-        }
-    }
-}
-
-fn accept_loop(listener: TcpListener, stats: UpstreamStats, stop: Arc<AtomicBool>) {
-    while !stop.load(Ordering::Relaxed) {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let stats = stats.clone();
-                thread::spawn(move || serve_connection(stream, stats));
-            }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(1));
-            }
-            Err(error) => panic!("stress upstream accept failed: {error}"),
-        }
-    }
-}
-
-fn serve_connection(mut stream: TcpStream, stats: UpstreamStats) {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    stream
-        .set_write_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    let connection = stats.opened.fetch_add(1, Ordering::Relaxed) + 1;
-    stats.active.fetch_add(1, Ordering::Relaxed);
-    let mut revision = None;
-
-    loop {
-        let request = match read_request_head_or_end(&mut stream) {
-            Ok(Some(request)) => request,
-            Ok(None) => break,
-            Err(error) => panic!("stress upstream request failed: {error}"),
-        };
-        let current = header_value(&request, "x-config-revision")
-            .and_then(|value| value.parse::<u64>().ok())
-            .expect("proxied request must include X-Config-Revision");
-        if let Some(previous) = revision {
-            if previous != current {
-                stats.mixed.lock().unwrap().push(format!(
-                    "connection {connection} served revisions {previous} and {current}"
-                ));
-            }
-        } else {
-            revision = Some(current);
-            stats.revisions.lock().unwrap().insert(current);
-        }
-        stats.requests.fetch_add(1, Ordering::Relaxed);
-
-        let body = format!("proxied rev {current}");
-        if write!(
-            stream,
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\
-             Connection: keep-alive\r\n\r\n{body}",
-            body.len()
-        )
-        .and_then(|()| stream.flush())
-        .is_err()
-        {
-            break;
-        }
-    }
-
-    stats.active.fetch_sub(1, Ordering::Relaxed);
-    stats.closed.fetch_add(1, Ordering::Relaxed);
-}
-
-fn header_value<'a>(head: &'a str, expected: &str) -> Option<&'a str> {
-    head.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        name.eq_ignore_ascii_case(expected).then_some(value.trim())
-    })
-}
-
-fn read_request_head_or_end(stream: &mut TcpStream) -> io::Result<Option<String>> {
-    let mut request = Vec::new();
-    let mut chunk = [0_u8; 1024];
-    while request.len() < 64 * 1024 {
-        match stream.read(&mut chunk) {
-            Ok(0) => return Ok(None),
-            Ok(count) => request.extend_from_slice(&chunk[..count]),
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::ConnectionAborted | io::ErrorKind::ConnectionReset
-                ) =>
-            {
-                return Ok(None);
-            }
-            Err(error) => return Err(error),
-        }
-        if request.windows(4).any(|window| window == b"\r\n\r\n") {
-            return Ok(Some(String::from_utf8_lossy(&request).into_owned()));
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::InvalidData,
-        "upstream request head was too large",
-    ))
-}
-
 fn files_under(root: &Path) -> Vec<std::path::PathBuf> {
     let Ok(entries) = fs::read_dir(root) else {
         return Vec::new();
@@ -402,49 +212,4 @@ fn files_under(root: &Path) -> Vec<std::path::PathBuf> {
         }
     }
     files
-}
-
-fn config(port: u16, upstream_port: u16, revision: u64) -> String {
-    format!(
-        r#"
-            daemon off;
-            worker_processes 1;
-            worker_shutdown_timeout 250ms;
-            pid logs/nginx.pid;
-            error_log logs/error.log notice;
-
-            events {{
-                worker_connections 512;
-            }}
-
-            http {{
-                default_type text/plain;
-                access_log logs/access.log;
-                client_body_temp_path temp/client-body;
-                proxy_temp_path temp/proxy;
-
-                upstream backend {{
-                    server 127.0.0.1:{upstream_port};
-                    keepalive 2;
-                }}
-
-                server {{
-                    listen 127.0.0.1:{port};
-                    server_name localhost;
-
-                    location = /version {{
-                        return 200 "rev-{revision}";
-                    }}
-
-                    location = /proxied {{
-                        proxy_pass http://backend;
-                        proxy_http_version 1.1;
-                        proxy_set_header Host $host;
-                        proxy_set_header Connection "";
-                        proxy_set_header X-Config-Revision "{revision}";
-                    }}
-                }}
-            }}
-        "#
-    )
 }
