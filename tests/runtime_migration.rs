@@ -10,6 +10,7 @@ mod runtime_migration {
     pub(crate) mod disk_fault_support;
     pub(crate) mod disk_full;
     pub(crate) mod disk_metadata;
+    pub(crate) mod disk_multistage;
     pub(crate) mod disk_open;
     pub(crate) mod disk_read;
     pub(crate) mod disk_unlink;

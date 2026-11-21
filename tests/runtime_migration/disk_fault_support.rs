@@ -34,6 +34,16 @@ impl FaultServer {
         config: &str,
         fault: FaultSpec<'_>,
     ) -> Option<Self> {
+        Self::start_with_rules(directory, port, config, std::slice::from_ref(&fault), false)
+    }
+
+    pub(super) fn start_with_rules(
+        directory: TestDirectory,
+        port: u16,
+        config: &str,
+        faults: &[FaultSpec<'_>],
+        use_rules: bool,
+    ) -> Option<Self> {
         if compiler_available().is_none() {
             eprintln!("skipping disk fault migration: cc is not available");
             return None;
@@ -52,18 +62,45 @@ impl FaultServer {
 
         let stdout = fs::File::create(directory.path().join("logs/stdout.log")).unwrap();
         let stderr = fs::File::create(directory.path().join("logs/stderr.log")).unwrap();
-        let child = Command::new(env!("CARGO_BIN_EXE_starling"))
+        let legacy = faults
+            .first()
+            .expect("at least one disk fault rule is required");
+        let rules = faults
+            .iter()
+            .map(|fault| {
+                assert!(
+                    !fault.path.contains(['|', ';']),
+                    "fault paths cannot contain rule delimiters: {}",
+                    fault.path
+                );
+                assert!(
+                    !fault.operations.contains(['|', ';']),
+                    "fault operations cannot contain rule delimiters: {}",
+                    fault.operations
+                );
+                format!("{}|{}|{}", fault.path, fault.error, fault.operations)
+            })
+            .collect::<Vec<_>>()
+            .join(";");
+        let mut command = Command::new(env!("CARGO_BIN_EXE_starling"));
+        command
             .arg("-p")
             .arg(directory.path())
             .arg("-c")
             .arg("conf/nginx.conf")
             .env("LD_PRELOAD", preload)
-            .env("STARLING_FAULT_MATCH", fault.path)
-            .env("STARLING_FAULT_ERRNO", fault.error.to_string())
-            .env("STARLING_FAULT_OPS", fault.operations)
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr))
+            .stderr(Stdio::from(stderr));
+        if use_rules {
+            command.env("STARLING_FAULT_RULES", rules);
+        } else {
+            command
+                .env("STARLING_FAULT_MATCH", legacy.path)
+                .env("STARLING_FAULT_ERRNO", legacy.error.to_string())
+                .env("STARLING_FAULT_OPS", legacy.operations);
+        }
+        let child = command
             .spawn()
             .expect("start starling with disk fault injection");
         let mut server = Self { directory, child };

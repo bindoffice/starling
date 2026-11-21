@@ -20,6 +20,7 @@ fn close_faults_preserve_cache_store_publication_and_reload_generations() {
 
     cache_close_fault_publishes_entry();
     store_close_fault_publishes_target();
+    cache_and_store_sink_failures_leave_only_temp_residue();
     reload_during_close_faults_keeps_generations_isolated();
 }
 
@@ -97,6 +98,100 @@ fn store_close_fault_publishes_target() {
     upstream.captured();
     wait_for_store_file(&server.temp_path("html/stored"), &body);
     server.assert_running();
+}
+
+fn cache_and_store_sink_failures_leave_only_temp_residue() {
+    let port = reserve_port();
+    let body = "m".repeat(128 * 1024);
+    let Some(upstream) = fake_upstream(&body) else {
+        return;
+    };
+    let config = format!(
+        r#"
+            daemon off;
+            worker_processes 1;
+            pid logs/nginx.pid;
+            error_log stderr notice;
+
+            events {{ worker_connections 128; }}
+
+            http {{
+                default_type text/plain;
+                access_log off;
+                proxy_cache_path state/cache keys_zone=sequence_cache:1m;
+
+                server {{
+                    listen 127.0.0.1:{port};
+                    server_name localhost;
+                    root state/html;
+
+                    location /combined {{
+                        proxy_pass http://127.0.0.1:{};
+                        proxy_buffering off;
+                        proxy_cache sequence_cache;
+                        proxy_cache_valid 200 1m;
+                        proxy_store on;
+                        proxy_read_timeout 5s;
+                    }}
+                }}
+            }}
+        "#,
+        upstream.port
+    );
+    let directory = TestDirectory::new("close-cache-store-sequence");
+    let Some(mut server) = FaultServer::start(
+        directory,
+        port,
+        &config,
+        FaultSpec {
+            path: "/state/",
+            error: EIO,
+            operations: "write,unlink,close",
+        },
+    ) else {
+        return;
+    };
+
+    let response = request(port, "/combined");
+    let (head, response_body) = response
+        .split_once("\r\n\r\n")
+        .expect("cache/store sequence headers");
+    assert!(
+        head.starts_with("HTTP/1.1 200 OK\r\n"),
+        "cache/store sink failures changed the downstream response:\n{head}"
+    );
+    assert_eq!(
+        response_body, body,
+        "cache/store sink failures truncated the downstream body"
+    );
+    upstream.captured();
+
+    let files = files_under(&server.temp_path("state"));
+    assert!(
+        files.len() >= 2,
+        "both cache and store cleanup residue should remain observable: {files:?}"
+    );
+    assert!(
+        files.iter().all(
+            |path| path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".starling-cache-")
+                    || name.starts_with(".starling-store-"))
+        ),
+        "a failed cache/store request published a non-temporary artifact: {files:?}"
+    );
+    assert!(
+        !server.temp_path("state/html/combined").exists(),
+        "store published its target after write, unlink and close failures"
+    );
+
+    server.assert_running();
+    let health = request(port, "/health");
+    assert!(
+        health.starts_with("HTTP/1.1 404 "),
+        "worker did not serve a request after combined cache/store failures:\n{health}"
+    );
 }
 
 fn reload_during_close_faults_keeps_generations_isolated() {
