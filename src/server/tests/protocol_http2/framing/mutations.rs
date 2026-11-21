@@ -1,6 +1,9 @@
 use super::*;
 
 const CASES: u64 = 128;
+const MALFORMED_CONNECTIONS: u64 = 32;
+const HEALTHY_CONNECTIONS: u64 = 8;
+const HEALTHY_REQUESTS: usize = 8;
 
 #[tokio::test]
 async fn deterministic_malformed_frame_mutations_terminate_cleanly() {
@@ -66,6 +69,156 @@ async fn deterministic_malformed_frame_mutations_terminate_cleanly() {
     }
 
     let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_malformed_connections_do_not_disrupt_healthy_http2_clients() {
+    let source = r#"
+        worker_processes 1;
+        events { worker_connections 128; }
+        http {
+            server {
+                listen 127.0.0.1:18464 http2;
+                server_name localhost;
+                location / { return 200 "healthy"; }
+            }
+        }
+    "#;
+    let (prefix, config) = test_config(source, &[]);
+    let group = build_listener_groups(&config)[0].clone();
+    let state = test_state(&config);
+    let local = group.address.clone();
+    let remote: SocketAddr = "127.0.0.1:45686".parse().unwrap();
+    let mut tasks = tokio::task::JoinSet::new();
+    let start = std::sync::Arc::new(tokio::sync::Barrier::new(
+        (MALFORMED_CONNECTIONS + HEALTHY_CONNECTIONS) as usize,
+    ));
+
+    for case in 0..MALFORMED_CONNECTIONS {
+        let group = group.clone();
+        let state = state.clone();
+        let local = local.clone();
+        let start = start.clone();
+        tasks.spawn(async move {
+            start.wait().await;
+            run_malformed_connection(case, group, state, local, remote).await;
+        });
+    }
+    for client in 0..HEALTHY_CONNECTIONS {
+        let group = group.clone();
+        let state = state.clone();
+        let local = local.clone();
+        let start = start.clone();
+        tasks.spawn(async move {
+            start.wait().await;
+            run_healthy_connection(client, group, state, local, remote).await;
+        });
+    }
+
+    while let Some(result) = tasks.join_next().await {
+        result.unwrap_or_else(|error| panic!("concurrent HTTP/2 task panicked: {error}"));
+    }
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+async fn run_malformed_connection(
+    case: u64,
+    group: ListenerGroup,
+    state: SharedState,
+    local: ListenAddress,
+    remote: SocketAddr,
+) {
+    let mut seed = 0xa076_1d64_78bd_642f_u64 ^ case;
+    let malformed = malformed_frame(case, &mut seed);
+    let mut bytes = Vec::new();
+    if case.is_multiple_of(3) {
+        bytes.extend(frame(
+            FRAME_HEADERS,
+            FLAG_END_HEADERS,
+            1,
+            b"\x83\x86\x84\x01\x09localhost",
+        ));
+    }
+    bytes.extend(malformed);
+
+    let (mut client, server) = tokio::io::duplex(64 * 1024);
+    let server_task = tokio::spawn(handle_http_connection(
+        server,
+        ConnectionAddresses::direct(ListenAddress::Inet(remote), local),
+        group,
+        state,
+    ));
+    client
+        .write_all(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+        .await
+        .unwrap();
+    if case.is_multiple_of(2) {
+        client
+            .write_all(&frame(FRAME_SETTINGS, 0, 0, &[]))
+            .await
+            .unwrap();
+    }
+    client.write_all(&bytes).await.unwrap();
+    client.flush().await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(3), wait_for_terminal(&mut client))
+        .await
+        .unwrap_or_else(|_| panic!("concurrent malformed case {case} did not terminate"));
+    drop(client);
+    tokio::time::timeout(Duration::from_secs(3), server_task)
+        .await
+        .unwrap_or_else(|_| panic!("concurrent malformed case {case} left its handler running"))
+        .unwrap_or_else(|error| panic!("concurrent malformed case {case} panicked: {error}"));
+}
+
+async fn run_healthy_connection(
+    client: u64,
+    group: ListenerGroup,
+    state: SharedState,
+    local: ListenAddress,
+    remote: SocketAddr,
+) {
+    let (client_io, server) = tokio::io::duplex(64 * 1024);
+    let server_task = tokio::spawn(handle_http_connection(
+        server,
+        ConnectionAddresses::direct(ListenAddress::Inet(remote), local),
+        group,
+        state,
+    ));
+    let (mut sender, connection) = h2::client::handshake(client_io).await.unwrap();
+    let driver = tokio::spawn(connection);
+
+    for request in 0..HEALTHY_REQUESTS {
+        let (response, _) = sender
+            .send_request(
+                http::Request::builder()
+                    .uri("http://localhost/")
+                    .body(())
+                    .unwrap(),
+                true,
+            )
+            .unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(3), response)
+            .await
+            .unwrap_or_else(|_| panic!("healthy client {client} request {request} timed out"))
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut body = response.into_body();
+        let mut output = Vec::new();
+        while let Some(data) = body.data().await {
+            let data = data.unwrap();
+            body.flow_control().release_capacity(data.len()).unwrap();
+            output.extend_from_slice(&data);
+        }
+        assert_eq!(output, b"healthy");
+    }
+
+    drop(sender);
+    driver.abort();
+    tokio::time::timeout(Duration::from_secs(3), server_task)
+        .await
+        .unwrap_or_else(|_| panic!("healthy client {client} left its handler running"))
+        .unwrap();
 }
 
 fn malformed_frame(case: u64, seed: &mut u64) -> Vec<u8> {
