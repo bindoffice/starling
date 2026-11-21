@@ -27,7 +27,7 @@ async fn caches_negative_proxy_results_until_cache_validity_expires() {
                         location / {{
                             proxy_pass http://{upstream};
                             proxy_cache proxy_cache;
-                            proxy_cache_valid 502 1ms;
+                            proxy_cache_valid 502 1s;
                             proxy_next_upstream off;
                         }}
                     }}
@@ -50,7 +50,7 @@ async fn caches_negative_proxy_results_until_cache_validity_expires() {
     );
     assert!(second.contains("X-Cache-Status: HIT\r\n"), "{second}");
 
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
     let listener = TcpListener::bind(upstream)
         .await
         .unwrap_or_else(|error| panic!("rebind upstream: {error}"));

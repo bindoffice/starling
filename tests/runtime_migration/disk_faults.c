@@ -51,6 +51,16 @@ static int should_fail_path(const char *path, const char *operation) {
     return operation_enabled(operation) && path_matches(path);
 }
 
+static int should_fail_unlink(const char *path, int dirfd) {
+    if (!operation_enabled("unlink")) {
+        return 0;
+    }
+    if (path_matches(path)) {
+        return 1;
+    }
+    return path[0] != '/' && dirfd != AT_FDCWD && fd_matches(dirfd);
+}
+
 static int should_fail_open(const char *path, int dirfd, const char *operation) {
     if (!operation_enabled(operation)) {
         return 0;
@@ -213,6 +223,54 @@ ssize_t writev(int fd, const struct iovec *iov, int iovcnt) {
     return real_writev(fd, iov, iovcnt);
 }
 
+ssize_t read(int fd, void *buffer, size_t count) {
+    static ssize_t (*real_read)(int, void *, size_t);
+    if (real_read == NULL) {
+        real_read = dlsym(RTLD_NEXT, "read");
+    }
+    if (should_fail_fd(fd, "read")) {
+        errno = configured_errno();
+        return -1;
+    }
+    return real_read(fd, buffer, count);
+}
+
+ssize_t readv(int fd, const struct iovec *iov, int iovcnt) {
+    static ssize_t (*real_readv)(int, const struct iovec *, int);
+    if (real_readv == NULL) {
+        real_readv = dlsym(RTLD_NEXT, "readv");
+    }
+    if (should_fail_fd(fd, "read")) {
+        errno = configured_errno();
+        return -1;
+    }
+    return real_readv(fd, iov, iovcnt);
+}
+
+ssize_t pread(int fd, void *buffer, size_t count, off_t offset) {
+    static ssize_t (*real_pread)(int, void *, size_t, off_t);
+    if (real_pread == NULL) {
+        real_pread = dlsym(RTLD_NEXT, "pread");
+    }
+    if (should_fail_fd(fd, "read")) {
+        errno = configured_errno();
+        return -1;
+    }
+    return real_pread(fd, buffer, count, offset);
+}
+
+ssize_t pread64(int fd, void *buffer, size_t count, off64_t offset) {
+    static ssize_t (*real_pread64)(int, void *, size_t, off64_t);
+    if (real_pread64 == NULL) {
+        real_pread64 = dlsym(RTLD_NEXT, "pread64");
+    }
+    if (should_fail_fd(fd, "read")) {
+        errno = configured_errno();
+        return -1;
+    }
+    return real_pread64(fd, buffer, count, offset);
+}
+
 int rename(const char *old_path, const char *new_path) {
     static int (*real_rename)(const char *, const char *);
     if (real_rename == NULL) {
@@ -272,4 +330,28 @@ int fdatasync(int fd) {
         return -1;
     }
     return real_fdatasync(fd);
+}
+
+int unlink(const char *path) {
+    static int (*real_unlink)(const char *);
+    if (real_unlink == NULL) {
+        real_unlink = dlsym(RTLD_NEXT, "unlink");
+    }
+    if (should_fail_unlink(path, AT_FDCWD)) {
+        errno = configured_errno();
+        return -1;
+    }
+    return real_unlink(path);
+}
+
+int unlinkat(int dirfd, const char *path, int flags) {
+    static int (*real_unlinkat)(int, const char *, int);
+    if (real_unlinkat == NULL) {
+        real_unlinkat = dlsym(RTLD_NEXT, "unlinkat");
+    }
+    if (should_fail_unlink(path, dirfd)) {
+        errno = configured_errno();
+        return -1;
+    }
+    return real_unlinkat(dirfd, path, flags);
 }

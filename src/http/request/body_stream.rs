@@ -110,7 +110,7 @@ impl RequestBodyStream {
                 }
                 if matches!(*state, FileReader::NotStarted) {
                     *state = FileReader::Open {
-                        reader: file.open().await?,
+                        reader: file.open().await.map_err(request_body_file_error)?,
                         remaining: file.len(),
                     };
                 }
@@ -123,7 +123,10 @@ impl RequestBodyStream {
                 }
                 let read_size = (*remaining).min(REQUEST_BODY_FILE_CHUNK_SIZE as u64) as usize;
                 let mut buffer = vec![0_u8; read_size];
-                let read = reader.read(&mut buffer).await?;
+                let read = reader
+                    .read(&mut buffer)
+                    .await
+                    .map_err(request_body_file_error)?;
                 if read == 0 {
                     *state = FileReader::Done;
                     return Err(request_body_status_error(
@@ -221,6 +224,10 @@ fn request_body_status_error(status: u16, message: &str) -> io::Error {
             message: message.to_string(),
         },
     )
+}
+
+fn request_body_file_error(error: io::Error) -> io::Error {
+    request_body_status_error(500, &format!("request body file read failed: {error}"))
 }
 
 pub(crate) fn request_body_error_status(error: &io::Error) -> Option<u16> {
