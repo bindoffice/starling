@@ -76,10 +76,26 @@ impl FaultServer {
         self.directory.path().join(relative)
     }
 
+    pub(super) fn write_config(&self, contents: &str) {
+        self.directory.write("conf/nginx.conf", contents);
+    }
+
     pub(super) fn assert_running(&mut self) {
         assert!(
             self.child.try_wait().unwrap().is_none(),
             "starling exited after a recoverable disk fault:\n{}",
+            self.diagnostics()
+        );
+    }
+
+    pub(super) fn reload(&mut self) {
+        self.assert_running();
+        let result = unsafe { libc::kill(self.child.id() as i32, libc::SIGHUP) };
+        assert_eq!(
+            result,
+            0,
+            "send SIGHUP failed: {}\n{}",
+            std::io::Error::last_os_error(),
             self.diagnostics()
         );
     }

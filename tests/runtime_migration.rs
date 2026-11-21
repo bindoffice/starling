@@ -5,6 +5,7 @@ mod runtime_migration {
     pub(crate) mod cache_lock;
     pub(crate) mod cache_stale;
     pub(crate) mod disk_close;
+    pub(crate) mod disk_close_sequences;
     pub(crate) mod disk_fault_support;
     pub(crate) mod disk_full;
     pub(crate) mod disk_metadata;
