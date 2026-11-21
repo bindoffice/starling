@@ -3,7 +3,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use super::disk_fault_support::{
-    EDQUOT, ENOSPC, FaultServer, FaultSpec, assert_complete_stream, cache_config,
+    EDQUOT, EIO, ENOSPC, EROFS, FaultServer, FaultSpec, assert_complete_stream, cache_config,
     compiler_available, request_body_config, response_config, store_config, wait_for_no_files,
 };
 use super::support::{TestDirectory, fake_upstream, request, reserve_port};
@@ -16,7 +16,12 @@ fn write_faults_preserve_stream_semantics_and_clean_temp_files() {
         return;
     }
 
-    for (error, label) in [(ENOSPC, "ENOSPC"), (EDQUOT, "EDQUOT")] {
+    for (error, label) in [
+        (ENOSPC, "ENOSPC"),
+        (EDQUOT, "EDQUOT"),
+        (EROFS, "EROFS"),
+        (EIO, "EIO"),
+    ] {
         response_spill_write_fault_truncates_after_commit(error, label);
         cache_write_fault_keeps_downstream_complete(error, label);
         store_write_fault_keeps_downstream_complete(error, label);

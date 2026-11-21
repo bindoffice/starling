@@ -12,6 +12,9 @@ const PRELOAD_SOURCE: &str = include_str!("disk_faults.c");
 pub(super) const ENOSPC: i32 = libc::ENOSPC;
 pub(super) const EDQUOT: i32 = libc::EDQUOT;
 pub(super) const EIO: i32 = libc::EIO;
+pub(super) const EMFILE: i32 = libc::EMFILE;
+pub(super) const ENFILE: i32 = libc::ENFILE;
+pub(super) const EROFS: i32 = libc::EROFS;
 
 pub(super) struct FaultSpec<'a> {
     pub path: &'a str,

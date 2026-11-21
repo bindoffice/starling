@@ -1,10 +1,13 @@
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/uio.h>
 #include <unistd.h>
 
@@ -46,6 +49,120 @@ static int should_fail_fd(int fd, const char *operation) {
 
 static int should_fail_path(const char *path, const char *operation) {
     return operation_enabled(operation) && path_matches(path);
+}
+
+static int should_fail_open(const char *path, int dirfd, const char *operation) {
+    if (!operation_enabled(operation)) {
+        return 0;
+    }
+    if (path_matches(path)) {
+        return 1;
+    }
+    return path[0] != '/' && dirfd != AT_FDCWD && fd_matches(dirfd);
+}
+
+static int open_needs_mode(int flags) {
+    return (flags & O_CREAT) != 0 || (flags & O_TMPFILE) == O_TMPFILE;
+}
+
+int open(const char *path, int flags, ...) {
+    static int (*real_open)(const char *, int, ...);
+    if (real_open == NULL) {
+        real_open = dlsym(RTLD_NEXT, "open");
+    }
+    va_list arguments;
+    va_start(arguments, flags);
+    mode_t mode = open_needs_mode(flags) ? va_arg(arguments, mode_t) : 0;
+    va_end(arguments);
+    if (should_fail_open(path, AT_FDCWD, "open")) {
+        errno = configured_errno();
+        return -1;
+    }
+    if (open_needs_mode(flags)) {
+        return real_open(path, flags, mode);
+    }
+    return real_open(path, flags);
+}
+
+int open64(const char *path, int flags, ...) {
+    static int (*real_open64)(const char *, int, ...);
+    if (real_open64 == NULL) {
+        real_open64 = dlsym(RTLD_NEXT, "open64");
+    }
+    va_list arguments;
+    va_start(arguments, flags);
+    mode_t mode = open_needs_mode(flags) ? va_arg(arguments, mode_t) : 0;
+    va_end(arguments);
+    if (should_fail_open(path, AT_FDCWD, "open")) {
+        errno = configured_errno();
+        return -1;
+    }
+    if (open_needs_mode(flags)) {
+        return real_open64(path, flags, mode);
+    }
+    return real_open64(path, flags);
+}
+
+int openat(int dirfd, const char *path, int flags, ...) {
+    static int (*real_openat)(int, const char *, int, ...);
+    if (real_openat == NULL) {
+        real_openat = dlsym(RTLD_NEXT, "openat");
+    }
+    va_list arguments;
+    va_start(arguments, flags);
+    mode_t mode = open_needs_mode(flags) ? va_arg(arguments, mode_t) : 0;
+    va_end(arguments);
+    if (should_fail_open(path, dirfd, "open")) {
+        errno = configured_errno();
+        return -1;
+    }
+    if (open_needs_mode(flags)) {
+        return real_openat(dirfd, path, flags, mode);
+    }
+    return real_openat(dirfd, path, flags);
+}
+
+int openat64(int dirfd, const char *path, int flags, ...) {
+    static int (*real_openat64)(int, const char *, int, ...);
+    if (real_openat64 == NULL) {
+        real_openat64 = dlsym(RTLD_NEXT, "openat64");
+    }
+    va_list arguments;
+    va_start(arguments, flags);
+    mode_t mode = open_needs_mode(flags) ? va_arg(arguments, mode_t) : 0;
+    va_end(arguments);
+    if (should_fail_open(path, dirfd, "open")) {
+        errno = configured_errno();
+        return -1;
+    }
+    if (open_needs_mode(flags)) {
+        return real_openat64(dirfd, path, flags, mode);
+    }
+    return real_openat64(dirfd, path, flags);
+}
+
+int creat(const char *path, mode_t mode) {
+    static int (*real_creat)(const char *, mode_t);
+    if (real_creat == NULL) {
+        real_creat = dlsym(RTLD_NEXT, "creat");
+    }
+    if (should_fail_open(path, AT_FDCWD, "open")) {
+        errno = configured_errno();
+        return -1;
+    }
+    return real_creat(path, mode);
+}
+
+int creat64(const char *path, mode_t mode) {
+    static int (*real_creat64)(const char *, mode_t);
+    if (real_creat64 == NULL) {
+        real_creat64 = dlsym(RTLD_NEXT, "creat64");
+    }
+    if (should_fail_open(path, AT_FDCWD, "open")) {
+        errno = configured_errno();
+        return -1;
+    }
+    return real_creat64(path, mode);
 }
 
 ssize_t write(int fd, const void *buffer, size_t count) {
