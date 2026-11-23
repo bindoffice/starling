@@ -18,7 +18,7 @@ fn loads_small_static_files_into_memory_and_streams_large_files() {
 
     let small_path = temp_dir.join("small");
     std::fs::write(&small_path, b"Hello, World!\n").unwrap();
-    let small = file_response(small_path, "text/plain".into()).unwrap();
+    let small = file_response(&small_path, "text/plain".into()).unwrap();
     assert!(matches!(
         small.body,
         ResponseBody::Bytes(ref body) if body == b"Hello, World!\n"
@@ -27,7 +27,7 @@ fn loads_small_static_files_into_memory_and_streams_large_files() {
 
     let large_path = temp_dir.join("large");
     std::fs::write(&large_path, vec![b'x'; 64 * 1024 + 1]).unwrap();
-    let large = file_response(large_path, "application/octet-stream".into()).unwrap();
+    let large = file_response(&large_path, "application/octet-stream".into()).unwrap();
     assert!(matches!(large.body, ResponseBody::File { .. }));
     assert_eq!(large.header("content-length"), Some("65537"));
 

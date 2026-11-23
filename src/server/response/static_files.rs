@@ -64,7 +64,8 @@ pub(in crate::server) async fn gzip_static_candidate(
     if context.gzip_static == GzipStatic::On && !accepts_gzip {
         return GzipStaticCandidate::Declined { vary: true };
     }
-    let Ok(mut response) = crate::http::file_response(compressed_path, content_type(path, context))
+    let Ok(mut response) =
+        crate::http::file_response(&compressed_path, content_type(path, context))
     else {
         return GzipStaticCandidate::Off;
     };

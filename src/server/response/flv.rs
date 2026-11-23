@@ -36,8 +36,7 @@ pub(in crate::server) async fn serve_flv(
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|start| *start < size)
         .unwrap_or(0);
-    let mut response = match crate::http::file_response(path.clone(), content_type(&path, context))
-    {
+    let mut response = match crate::http::file_response(&path, content_type(&path, context)) {
         Ok(response) => response,
         Err(_) => return Some(error_response(403)),
     };

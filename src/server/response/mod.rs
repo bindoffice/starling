@@ -155,7 +155,7 @@ pub(super) async fn static_file_response(
         return Some(error_response(status));
     }
     let content_type = content_type(path, context);
-    let mut response = match crate::http::file_response(path.to_path_buf(), content_type) {
+    let mut response = match crate::http::file_response(path, content_type) {
         Ok(response) => response,
         Err(_) => return Some(error_response(403)),
     };

@@ -2,8 +2,8 @@ use super::*;
 use std::io::Read as _;
 use std::net::Ipv6Addr;
 
-pub fn file_response(path: PathBuf, content_type: String) -> io::Result<Response> {
-    let file = std::fs::File::open(&path)?;
+pub fn file_response(path: &Path, content_type: String) -> io::Result<Response> {
+    let file = std::fs::File::open(path)?;
     let metadata = file.metadata()?;
     file_response_with_metadata(file, &metadata, content_type)
 }
