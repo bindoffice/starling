@@ -241,6 +241,7 @@ fn run_async(config: RuntimeConfig, logger: Arc<Logger>) -> Result<(), String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(worker_threads)
+        .max_blocking_threads(blocking_thread_limit(worker_threads))
         .thread_stack_size(WORKER_THREAD_STACK_SIZE)
         .thread_name("starling-worker")
         .build()
@@ -248,6 +249,13 @@ fn run_async(config: RuntimeConfig, logger: Arc<Logger>) -> Result<(), String> {
     runtime
         .block_on(server::run(config, logger))
         .map_err(|err| format!("runtime error: {err}"))
+}
+
+fn blocking_thread_limit(worker_threads: usize) -> usize {
+    // Buffered request bodies can keep ingress spooling and proxy replay in
+    // flight together; bound their blocking I/O instead of growing one OS
+    // thread per concurrent file operation.
+    worker_threads.saturating_mul(2).clamp(8, 64)
 }
 
 fn send_signal(signal: &str, pid_path: &Path) -> Result<(), String> {
@@ -404,5 +412,12 @@ mod tests {
         assert!(cli.test);
         assert_eq!(cli.prefix, PathBuf::from("/tmp/nginx"));
         assert_eq!(cli.config, PathBuf::from("custom.conf"));
+    }
+
+    #[test]
+    fn bounds_blocking_threads_for_large_worker_counts() {
+        assert_eq!(blocking_thread_limit(1), 8);
+        assert_eq!(blocking_thread_limit(16), 32);
+        assert_eq!(blocking_thread_limit(64), 64);
     }
 }
