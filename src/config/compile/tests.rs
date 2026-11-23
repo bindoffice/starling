@@ -23,6 +23,68 @@ fn normalizes_uri_and_blocks_traversal() {
     );
 }
 
+fn normalize_uri_reference(path: &str, merge_slashes: bool) -> Option<String> {
+    if path.bytes().any(|byte| byte.is_ascii_control()) {
+        return None;
+    }
+    let decoded = percent_encoding::percent_decode_str(path)
+        .decode_utf8()
+        .ok()?;
+    if decoded.contains('\0') {
+        return None;
+    }
+    let trailing_segment = decoded.rsplit('/').next()?;
+    let mut parts = Vec::new();
+    for (index, part) in decoded.split('/').enumerate() {
+        match part {
+            "" if merge_slashes || index == 0 => {}
+            "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            other => parts.push(other),
+        }
+    }
+    let mut normalized = String::from("/");
+    normalized.push_str(&parts.join("/"));
+    let trailing_slash = decoded.ends_with('/') || matches!(trailing_segment, "." | "..");
+    if trailing_slash && normalized != "/" && !normalized.ends_with('/') {
+        normalized.push('/');
+    }
+    Some(normalized)
+}
+
+#[test]
+fn normalized_uri_matches_reference_for_segment_matrix() {
+    const SEGMENTS: &[&str] = &["", ".", "..", "a", "b"];
+
+    for len in 0_usize..=4 {
+        let combinations = SEGMENTS.len().pow(len as u32);
+        for mut encoded in 0..combinations {
+            let mut parts = Vec::with_capacity(len);
+            for _ in 0..len {
+                parts.push(SEGMENTS[encoded % SEGMENTS.len()]);
+                encoded /= SEGMENTS.len();
+            }
+            let joined = parts.join("/");
+            for leading_slash in [false, true] {
+                let path = if leading_slash {
+                    format!("/{joined}")
+                } else {
+                    joined.clone()
+                };
+                for merge_slashes in [false, true] {
+                    assert_eq!(
+                        normalize_uri_with_merge(&path, merge_slashes),
+                        normalize_uri_reference(&path, merge_slashes),
+                        "path={path:?} merge_slashes={merge_slashes}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn parses_sizes_and_times() {
     let location = SourceLocation::new("test", 1, 1);

@@ -23,19 +23,32 @@ pub fn normalize_uri_with_merge(path: &str, merge_slashes: bool) -> Option<Strin
         return None;
     }
     let trailing_segment = decoded.rsplit('/').next()?;
-    let mut parts = Vec::new();
+    let mut normalized = String::with_capacity(decoded.len() + 1);
+    normalized.push('/');
+    let mut segment_count = 0_usize;
     for (index, part) in decoded.split('/').enumerate() {
         match part {
             "" if merge_slashes || index == 0 => {}
             "." => {}
             ".." => {
-                parts.pop()?;
+                if segment_count == 0 {
+                    return None;
+                }
+                if normalized.len() > 1 {
+                    let last_slash = normalized.rfind('/')?;
+                    normalized.truncate(if last_slash <= 1 { 1 } else { last_slash });
+                }
+                segment_count -= 1;
             }
-            other => parts.push(other),
+            other => {
+                if segment_count > 0 {
+                    normalized.push('/');
+                }
+                normalized.push_str(other);
+                segment_count += 1;
+            }
         }
     }
-    let mut normalized = String::from("/");
-    normalized.push_str(&parts.join("/"));
     let trailing_slash = decoded.ends_with('/') || matches!(trailing_segment, "." | "..");
     if trailing_slash && normalized != "/" && !normalized.ends_with('/') {
         normalized.push('/');

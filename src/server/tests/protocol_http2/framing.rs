@@ -1,6 +1,7 @@
 use super::*;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
+mod corpus;
 mod header_limits;
 mod mutations;
 

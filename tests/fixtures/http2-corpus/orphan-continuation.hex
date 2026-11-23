@@ -1,0 +1,2 @@
+# CONTINUATION without an open header block is a connection error.
+00 00 01 09 04 00 00 00 01 00

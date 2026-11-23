@@ -5,6 +5,7 @@ mod runtime_migration {
     pub(crate) mod cache_client_abort;
     pub(crate) mod cache_lock;
     pub(crate) mod cache_stale;
+    pub(crate) mod cleanup_fault_generation;
     pub(crate) mod cleanup_pressure;
     pub(crate) mod disk_close;
     pub(crate) mod disk_close_sequences;
@@ -24,6 +25,8 @@ mod runtime_migration {
     pub(crate) mod http2;
     pub(crate) mod http2_pressure;
     pub(crate) mod http2_pressure_support;
+    pub(crate) mod mixed_keepalive_cache;
+    pub(crate) mod mixed_keepalive_support;
     pub(crate) mod proxy_keepalive;
     pub(crate) mod proxy_store_cache;
     pub(crate) mod reload;
@@ -39,6 +42,7 @@ mod runtime_migration {
     pub(crate) mod tls;
     pub(crate) mod tls_business;
     pub(crate) mod tls_internal_business;
+    pub(crate) mod tls_redirect_failure_matrix;
     pub(crate) mod tunnel;
     pub(crate) mod upstream_failover;
     pub(crate) mod upstream_timeout;

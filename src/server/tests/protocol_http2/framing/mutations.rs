@@ -221,7 +221,7 @@ async fn run_healthy_connection(
         .unwrap();
 }
 
-fn malformed_frame(case: u64, seed: &mut u64) -> Vec<u8> {
+pub(super) fn malformed_frame(case: u64, seed: &mut u64) -> Vec<u8> {
     let stream_id = odd_stream(*seed);
     match case % 8 {
         // DATA is never valid on stream zero.
@@ -300,7 +300,7 @@ fn malformed_frame(case: u64, seed: &mut u64) -> Vec<u8> {
     }
 }
 
-async fn wait_for_terminal<R>(client: &mut R)
+pub(super) async fn wait_for_terminal<R>(client: &mut R)
 where
     R: AsyncRead + Unpin,
 {

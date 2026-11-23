@@ -1,0 +1,2 @@
+# A zero WINDOW_UPDATE increment is a connection error.
+00 00 04 08 00 00 00 00 00 00 00 00 00

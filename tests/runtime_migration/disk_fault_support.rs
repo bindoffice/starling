@@ -192,7 +192,7 @@ impl FaultServer {
         }
     }
 
-    fn diagnostics(&self) -> String {
+    pub(super) fn diagnostics(&self) -> String {
         let stderr = fs::read_to_string(self.directory.path().join("logs/stderr.log"))
             .unwrap_or_else(|error| format!("<cannot read stderr: {error}>"));
         format!("stderr:\n{stderr}")
