@@ -10,6 +10,8 @@ use crate::logging::Logger;
 use crate::server;
 use crate::{SERVER_SOFTWARE, STARLING_VERSION};
 
+const CONFIGURE_ARGUMENTS: &str = "--with-http_starling_module --with-http_v2_module";
+
 pub(crate) const WORKER_THREAD_STACK_SIZE: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
@@ -354,7 +356,7 @@ fn print_version(verbose: bool) {
     println!("nginx version: {SERVER_SOFTWARE} (starling/{STARLING_VERSION})");
     if verbose {
         println!("built by rustc");
-        println!("configure arguments: --with-http_starling_module");
+        println!("configure arguments: {CONFIGURE_ARGUMENTS}");
     }
 }
 
@@ -419,5 +421,10 @@ mod tests {
         assert_eq!(blocking_thread_limit(1), 8);
         assert_eq!(blocking_thread_limit(16), 32);
         assert_eq!(blocking_thread_limit(64), 64);
+    }
+
+    #[test]
+    fn reports_http2_in_configure_arguments() {
+        assert!(CONFIGURE_ARGUMENTS.contains("--with-http_v2_module"));
     }
 }

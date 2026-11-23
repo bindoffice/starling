@@ -5,26 +5,31 @@ const REQUESTS_PER_CLIENT: usize = 32;
 const MALFORMED_WORKERS: u64 = 8;
 const DEFAULT_SOAK_CASES: u64 = 1024;
 
-const CORPUS: &[(&str, &str)] = &[
+const CORPUS: &[(&str, &str, h2::Reason)] = &[
     (
         "settings-stream-id",
         include_str!("../../../../../tests/fixtures/http2-corpus/settings-stream-id.hex"),
+        h2::Reason::PROTOCOL_ERROR,
     ),
     (
         "rst-short",
         include_str!("../../../../../tests/fixtures/http2-corpus/rst-short.hex"),
+        h2::Reason::FRAME_SIZE_ERROR,
     ),
     (
         "ping-short",
         include_str!("../../../../../tests/fixtures/http2-corpus/ping-short.hex"),
+        h2::Reason::FRAME_SIZE_ERROR,
     ),
     (
         "window-update-zero",
         include_str!("../../../../../tests/fixtures/http2-corpus/window-update-zero.hex"),
+        h2::Reason::PROTOCOL_ERROR,
     ),
     (
         "orphan-continuation",
         include_str!("../../../../../tests/fixtures/http2-corpus/orphan-continuation.hex"),
+        h2::Reason::PROTOCOL_ERROR,
     ),
 ];
 
@@ -59,12 +64,12 @@ async fn external_corpus_cases_do_not_disrupt_a_healthy_connection() {
     let (mut sender, connection) = h2::client::handshake(healthy_io).await.unwrap();
     let driver = tokio::spawn(connection);
 
-    for (name, source) in CORPUS {
+    for (name, source, expected) in CORPUS {
         let frames = parse_hex_fixture(name, source);
         assert_goaway_reason(
             name,
             frames,
-            h2::Reason::PROTOCOL_ERROR,
+            *expected,
             group.clone(),
             state.clone(),
             local.clone(),

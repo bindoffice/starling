@@ -146,3 +146,63 @@ async fn oversized_individual_header_field_is_rejected_before_dispatch() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn hpack_encoded_field_is_rejected_even_when_decoded_value_fits() {
+    let source = r#"
+        worker_processes 1;
+        events { worker_connections 64; }
+        http {
+            large_client_header_buffers 4 96;
+            server {
+                listen 127.0.0.1:18464 http2;
+                location / { return 204; }
+            }
+        }
+    "#;
+    let (prefix, config) = test_config(source, &[]);
+    let group = build_listener_groups(&config)[0].clone();
+    let state = test_state(&config);
+    let local = group.address.clone();
+    let remote: SocketAddr = "127.0.0.1:45686".parse().unwrap();
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let server_task = tokio::spawn(handle_http_connection(
+        server,
+        ConnectionAddresses::direct(ListenAddress::Inet(remote), local),
+        group,
+        state,
+    ));
+    let (mut sender, connection) = h2::client::handshake(client).await.unwrap();
+    let driver = tokio::spawn(connection);
+
+    // HPACK encodes '!' with a 10-bit Huffman code. The 90-byte decoded
+    // value is under the 96-byte limit, but its 113-byte encoding is over it.
+    let request = http::Request::builder()
+        .uri("http://localhost/")
+        .header("x-expand", "!".repeat(90))
+        .body(())
+        .unwrap();
+    let (response, _request_body) = sender.send_request(request, true).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), response)
+        .await
+        .expect("oversized encoded field should close the request")
+        .expect_err("oversized encoded field must not produce a normal response");
+
+    drop(sender);
+    let error = tokio::time::timeout(Duration::from_secs(2), driver)
+        .await
+        .expect("HTTP/2 client driver should observe the connection error")
+        .expect("HTTP/2 client driver task should not panic")
+        .expect_err("oversized encoded field must close the connection");
+    assert_eq!(
+        error.reason(),
+        Some(h2::Reason::ENHANCE_YOUR_CALM),
+        "encoded field limit should be a connection error: {error:?}"
+    );
+
+    tokio::time::timeout(Duration::from_secs(2), server_task)
+        .await
+        .expect("HTTP/2 server should stop")
+        .unwrap();
+    let _ = std::fs::remove_dir_all(prefix);
+}

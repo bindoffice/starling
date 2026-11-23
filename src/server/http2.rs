@@ -3,6 +3,8 @@ use super::*;
 mod body;
 mod connection;
 mod fault;
+mod frame_validation;
+mod hpack_validation;
 mod informational;
 mod plaintext;
 mod request;
@@ -10,6 +12,7 @@ mod send;
 
 use connection::settings_for_connection;
 pub(in crate::server) use fault::H2ConnectionFault;
+use frame_validation::FrameValidatedStream;
 pub(in crate::server) use informational::send_h2_early_hints;
 pub(in crate::server) use plaintext::handle_plaintext_http_connection;
 use request::{
@@ -33,6 +36,7 @@ pub(super) async fn handle_h2<S>(
         settings_for_connection(&config, &group, &addresses)
     };
     let limits = settings.limits;
+    let stream = FrameValidatedStream::new(stream, settings.max_header_field_size);
     let mut builder = h2_server::Builder::new();
     builder
         .max_concurrent_streams(limits.max_concurrent_streams)

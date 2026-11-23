@@ -15,6 +15,7 @@ const FRAME_PING: u8 = 0x6;
 const FRAME_GOAWAY: u8 = 0x7;
 const FRAME_WINDOW_UPDATE: u8 = 0x8;
 const FRAME_CONTINUATION: u8 = 0x9;
+const FRAME_PRIORITY_UPDATE: u8 = 0x10;
 const FLAG_END_STREAM: u8 = 0x1;
 const FLAG_END_HEADERS: u8 = 0x4;
 const FLAG_ACK: u8 = 0x1;
@@ -120,7 +121,12 @@ async fn reset_on_an_idle_stream_sends_connection_goaway() {
 #[tokio::test]
 async fn headers_on_an_even_client_stream_sends_connection_goaway() {
     assert_goaway(
-        frame(FRAME_HEADERS, FLAG_END_HEADERS | FLAG_END_STREAM, 2, &[]),
+        frame(
+            FRAME_HEADERS,
+            FLAG_END_HEADERS | FLAG_END_STREAM,
+            2,
+            b"\x83\x86\x84\x01\x09localhost",
+        ),
         h2::Reason::PROTOCOL_ERROR,
     )
     .await;
@@ -193,21 +199,88 @@ async fn priority_on_stream_zero_sends_connection_goaway() {
 async fn short_reset_stream_sends_connection_goaway() {
     assert_goaway(
         frame(FRAME_RST_STREAM, 0, 1, &[0, 0, 8]),
-        h2::Reason::PROTOCOL_ERROR,
+        h2::Reason::FRAME_SIZE_ERROR,
     )
     .await;
 }
 
 #[tokio::test]
 async fn short_ping_sends_connection_goaway() {
-    assert_goaway(frame(FRAME_PING, 0, 0, &[0; 7]), h2::Reason::PROTOCOL_ERROR).await;
+    assert_goaway(
+        frame(FRAME_PING, 0, 0, &[0; 7]),
+        h2::Reason::FRAME_SIZE_ERROR,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn short_priority_sends_connection_goaway() {
+    assert_goaway(
+        frame(FRAME_PRIORITY, 0, 1, &[0; 4]),
+        h2::Reason::FRAME_SIZE_ERROR,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn short_window_update_sends_connection_goaway() {
+    assert_goaway(
+        frame(FRAME_WINDOW_UPDATE, 0, 0, &[0; 3]),
+        h2::Reason::FRAME_SIZE_ERROR,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn malformed_settings_length_sends_frame_size_error() {
+    assert_goaway(
+        frame(FRAME_SETTINGS, 0, 0, &[0; 5]),
+        h2::Reason::FRAME_SIZE_ERROR,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn short_goaway_sends_frame_size_error() {
+    assert_goaway(
+        frame(FRAME_GOAWAY, 0, 0, &[0; 7]),
+        h2::Reason::FRAME_SIZE_ERROR,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn short_priority_update_sends_frame_size_error() {
+    assert_goaway(
+        frame(FRAME_PRIORITY_UPDATE, 0, 0, &[0; 3]),
+        h2::Reason::FRAME_SIZE_ERROR,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn empty_headers_sends_frame_size_error() {
+    assert_goaway(
+        frame(FRAME_HEADERS, FLAG_END_HEADERS, 1, &[]),
+        h2::Reason::FRAME_SIZE_ERROR,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn empty_padded_data_sends_frame_size_error() {
+    assert_goaway(
+        frame(FRAME_DATA, FLAG_PADDED, 1, &[]),
+        h2::Reason::FRAME_SIZE_ERROR,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn settings_ack_with_payload_sends_connection_goaway() {
     assert_goaway(
         frame(FRAME_SETTINGS, FLAG_ACK, 0, &[0; 6]),
-        h2::Reason::PROTOCOL_ERROR,
+        h2::Reason::FRAME_SIZE_ERROR,
     )
     .await;
 }
