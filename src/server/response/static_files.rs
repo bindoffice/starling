@@ -182,16 +182,19 @@ pub(in crate::server) fn content_type(path: &Path, context: &EffectiveConfig) ->
     path.extension()
         .and_then(|extension| extension.to_str())
         .and_then(|extension| {
-            context
-                .mime_types
-                .get(&extension.to_ascii_lowercase())
-                .cloned()
-                .or_else(|| {
-                    HTTP_MIME_TYPES
-                        .iter()
-                        .find(|(existing, _)| existing.eq_ignore_ascii_case(extension))
-                        .map(|(_, mime)| (*mime).to_string())
-                })
+            if let Some(mime) = context.mime_types.get(extension) {
+                return Some(mime.clone());
+            }
+            if extension.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                let lowercase = extension.to_ascii_lowercase();
+                if let Some(mime) = context.mime_types.get(&lowercase) {
+                    return Some(mime.clone());
+                }
+            }
+            HTTP_MIME_TYPES
+                .iter()
+                .find(|(existing, _)| existing.eq_ignore_ascii_case(extension))
+                .map(|(_, mime)| (*mime).to_string())
         })
         .unwrap_or_else(|| context.default_type.clone())
 }

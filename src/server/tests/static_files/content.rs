@@ -140,6 +140,46 @@ async fn applies_charset_to_configured_mime_types() {
 }
 
 #[tokio::test]
+async fn serves_uppercase_extensions_with_configured_and_builtin_mime_types() {
+    let (prefix, config) = test_config(
+        r#"
+                worker_processes 1;
+                events { worker_connections 64; }
+                http {
+                    default_type application/octet-stream;
+                    types {
+                        application/x-configured mixed;
+                    }
+                    server {
+                        listen 127.0.0.1:18145;
+                        root html;
+                        location / { }
+                    }
+                }
+            "#,
+        &[
+            ("html/PAGE.HTML", "html\n"),
+            ("html/FILE.MIXED", "configured\n"),
+        ],
+    );
+    for (uri, content_type) in [
+        ("/PAGE.HTML", "text/html"),
+        ("/FILE.MIXED", "application/x-configured"),
+    ] {
+        let response = request_body(
+            &config,
+            &format!("GET {uri} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"),
+        )
+        .await;
+        assert!(
+            response.contains(&format!("Content-Type: {content_type}\r\n")),
+            "{response}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
 async fn suppresses_missing_file_access_logs_when_disabled() {
     let source = |setting: &str| {
         format!(

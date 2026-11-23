@@ -17,8 +17,7 @@ pub(in crate::server) async fn send_h2_response(
         let Ok(name) = http::header::HeaderName::from_bytes(header.name.as_bytes()) else {
             continue;
         };
-        let value = sanitize_header_value(&header.value);
-        let Ok(value) = http::header::HeaderValue::from_str(&value) else {
+        let Ok(value) = h2_header_value(&header.value) else {
             continue;
         };
         builder = builder.header(name, value);
@@ -66,14 +65,56 @@ fn h2_reset_reason(error: &io::Error) -> h2::Reason {
 }
 
 pub(in crate::server) fn is_h2_connection_header(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "connection"
-            | "keep-alive"
-            | "proxy-connection"
-            | "transfer-encoding"
-            | "upgrade"
-            | "te"
-            | "trailer"
-    )
+    [
+        "connection",
+        "keep-alive",
+        "proxy-connection",
+        "transfer-encoding",
+        "upgrade",
+        "te",
+        "trailer",
+    ]
+    .iter()
+    .any(|candidate| name.eq_ignore_ascii_case(candidate))
+}
+
+fn h2_header_value(
+    value: &str,
+) -> Result<http::header::HeaderValue, http::header::InvalidHeaderValue> {
+    if value
+        .as_bytes()
+        .iter()
+        .any(|byte| matches!(byte, b'\r' | b'\n'))
+    {
+        http::header::HeaderValue::from_str(&sanitize_header_value(value))
+    } else {
+        http::header::HeaderValue::from_str(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_connection_headers_case_insensitively() {
+        assert!(is_h2_connection_header("Connection"));
+        assert!(is_h2_connection_header("TRANSFER-ENCODING"));
+        assert!(!is_h2_connection_header("content-type"));
+    }
+
+    #[test]
+    fn sanitizes_only_header_values_with_line_breaks() {
+        assert_eq!(
+            h2_header_value("safe value").unwrap().to_str().unwrap(),
+            "safe value"
+        );
+        assert_eq!(
+            h2_header_value("first\r\nsecond")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "first  second"
+        );
+    }
 }

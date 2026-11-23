@@ -399,6 +399,8 @@ async fn rejects_malformed_request_headers() {
         "GET / HTTP/1.1\r\nHost: example.test\r\nContent-Length: 1\r\nContent-Length: 1\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: example.test\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: example.test\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost: example.test\r\nTransfer-Encoding: foo\r\nTransfer-Encoding: bar\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost: example.test\r\nContent-Length: 1\r\nTransfer-Encoding: identity\r\n\r\n",
         "GET / HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n",
         "GET / HTTP/2.0\r\nHost: example.test\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: example.test\r\n X-Folded: yes\r\n\r\n",

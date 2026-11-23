@@ -176,6 +176,7 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
     let mut content_length_seen = false;
     let mut chunked = false;
     let mut transfer_encoding_seen = false;
+    let mut unsupported_transfer_encoding = false;
     let mut connection_values = Vec::new();
     let mut expect_continue = false;
     let mut expect_seen = false;
@@ -207,7 +208,7 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
             if header.value.eq_ignore_ascii_case("chunked") {
                 chunked = true;
             } else {
-                return Err(unsupported("unsupported transfer encoding"));
+                unsupported_transfer_encoding = true;
             }
         } else if header.name.eq_ignore_ascii_case("connection") {
             connection_values.push(header.value.to_ascii_lowercase());
@@ -221,10 +222,13 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
             }
         }
     }
-    if chunked && content_length.is_some() {
+    if transfer_encoding_seen && content_length.is_some() {
         return Err(invalid_data(
             "both Content-Length and Transfer-Encoding are present",
         ));
+    }
+    if unsupported_transfer_encoding {
+        return Err(unsupported("unsupported transfer encoding"));
     }
 
     let connection_tokens: HashSet<&str> = connection_values
