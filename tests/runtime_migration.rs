@@ -18,7 +18,9 @@ mod runtime_migration {
     pub(crate) mod fastcgi;
     pub(crate) mod fastcgi_support;
     pub(crate) mod file_limit;
+    pub(crate) mod gateway_resource_curve;
     pub(crate) mod gateway_support;
+    pub(crate) mod grpc_resource_curve;
     pub(crate) mod http2;
     pub(crate) mod http2_pressure;
     pub(crate) mod http2_pressure_support;
@@ -31,6 +33,7 @@ mod runtime_migration {
     pub(crate) mod slow_resource_stress;
     pub(crate) mod sni;
     pub(crate) mod spill_shutdown;
+    pub(crate) mod sse_cache_resource_curve;
     pub(crate) mod static_and_proxy;
     pub(crate) mod support;
     pub(crate) mod tls;
