@@ -1,5 +1,37 @@
 use super::*;
 
+pub(in crate::server) fn try_fast_static_file(
+    path: &Path,
+    context: &EffectiveConfig,
+) -> Result<Option<Response>, u16> {
+    if context.disable_symlinks.mode != DisableSymlinksMode::Off
+        || context.gzip_static != GzipStatic::Off
+    {
+        return Ok(None);
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // A special file must not stall an async worker before the type check.
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let Ok(file) = options.open(path) else {
+        return Ok(None);
+    };
+    let Ok(metadata) = file.metadata() else {
+        return Ok(None);
+    };
+    if !metadata.is_file() {
+        return Ok(None);
+    }
+    let response =
+        crate::http::file_response_with_metadata(file, &metadata, content_type(path, context))
+            .map_err(|_| 403_u16)?;
+    Ok(finalize_static_response(response, &metadata, context))
+}
+
 pub(in crate::server) async fn gzip_static_candidate(
     request: &Request,
     path: &Path,

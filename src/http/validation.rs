@@ -3,10 +3,18 @@ use std::io::Read as _;
 use std::net::Ipv6Addr;
 
 pub fn file_response(path: PathBuf, content_type: String) -> io::Result<Response> {
+    let file = std::fs::File::open(&path)?;
+    let metadata = file.metadata()?;
+    file_response_with_metadata(file, &metadata, content_type)
+}
+
+pub(crate) fn file_response_with_metadata(
+    mut file: std::fs::File,
+    metadata: &std::fs::Metadata,
+    content_type: String,
+) -> io::Result<Response> {
     const SMALL_FILE_MEMORY_LIMIT: u64 = 64 * 1024;
 
-    let mut file = std::fs::File::open(&path)?;
-    let metadata = file.metadata()?;
     let modified = metadata.modified().ok();
     let body = if metadata.len() <= SMALL_FILE_MEMORY_LIMIT {
         let mut body = Vec::with_capacity(metadata.len() as usize);

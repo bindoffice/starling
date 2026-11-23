@@ -38,6 +38,11 @@ pub(super) async fn serve_static(
         env.add_uri_to_alias,
         variables,
     );
+    match try_fast_static_file(&path, context) {
+        Ok(Some(response)) => return Some(response),
+        Ok(None) => {}
+        Err(status) => return Some(error_response(status)),
+    }
     if !env.uri.ends_with('/') {
         match gzip_static_candidate(request, &path, context, variables).await {
             GzipStaticCandidate::Served(response) => return Some(*response),
