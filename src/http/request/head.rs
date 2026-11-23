@@ -180,12 +180,13 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
     let mut connection_values = Vec::new();
     let mut expect_continue = false;
     let mut expect_seen = false;
-    let mut unique_headers = HashSet::new();
+    let mut unique_headers = 0_u16;
     for header in &headers {
-        if header_required_unique(&header.name)
-            && !unique_headers.insert(header.name.to_ascii_lowercase())
-        {
-            return Err(invalid_data("duplicate request header"));
+        if let Some(bit) = required_unique_header(&header.name) {
+            if unique_headers & bit != 0 {
+                return Err(invalid_data("duplicate request header"));
+            }
+            unique_headers |= bit;
         }
         if header.name.eq_ignore_ascii_case("content-length") {
             if content_length_seen {
@@ -270,21 +271,21 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
     }))
 }
 
-fn header_required_unique(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "host"
-            | "if-modified-since"
-            | "if-unmodified-since"
-            | "if-match"
-            | "if-none-match"
-            | "content-length"
-            | "content-range"
-            | "if-range"
-            | "transfer-encoding"
-            | "expect"
-            | "authorization"
-    )
+fn required_unique_header(name: &str) -> Option<u16> {
+    let (index, candidates): (u32, &[&str]) = match name.len() {
+        4 => (0, &["host"]),
+        6 => (1, &["expect"]),
+        8 => (2, &["if-match", "if-range"]),
+        13 => (4, &["if-none-match", "authorization", "content-range"]),
+        14 => (7, &["content-length"]),
+        17 => (8, &["transfer-encoding", "if-modified-since"]),
+        19 => (10, &["if-unmodified-since"]),
+        _ => return None,
+    };
+    let offset = candidates
+        .iter()
+        .position(|candidate| name.eq_ignore_ascii_case(candidate))?;
+    Some(1 << (index + offset as u32))
 }
 
 pub(crate) fn parse_connect_authority(value: &str) -> Option<(&str, u16)> {

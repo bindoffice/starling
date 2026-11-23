@@ -286,21 +286,22 @@ pub(crate) fn sanitize_header_value(value: &str) -> String {
 }
 
 pub(crate) fn is_forbidden_trailer_name(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "connection"
-            | "content-encoding"
-            | "content-length"
-            | "content-range"
-            | "content-type"
-            | "host"
-            | "keep-alive"
-            | "proxy-connection"
-            | "te"
-            | "trailer"
-            | "transfer-encoding"
-            | "upgrade"
-    )
+    [
+        "connection",
+        "content-encoding",
+        "content-length",
+        "content-range",
+        "content-type",
+        "host",
+        "keep-alive",
+        "proxy-connection",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    ]
+    .into_iter()
+    .any(|candidate| name.eq_ignore_ascii_case(candidate))
 }
 
 pub fn error_response(status: u16) -> Response {

@@ -396,9 +396,11 @@ async fn rejects_malformed_request_headers() {
     let cases = [
         "GET / HTTP/1.1\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: one\r\nHost: two\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost: one\r\nhOsT: two\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: example.test\r\nContent-Length: 1\r\nContent-Length: 1\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: example.test\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: example.test\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost: example.test\r\nTransfer-Encoding: chunked\r\ntRaNsFeR-EnCoDiNg: chunked\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: example.test\r\nTransfer-Encoding: foo\r\nTransfer-Encoding: bar\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: example.test\r\nContent-Length: 1\r\nTransfer-Encoding: identity\r\n\r\n",
         "GET / HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n",
@@ -430,6 +432,39 @@ async fn rejects_malformed_request_headers() {
         assert!(
             request.invalid_host,
             "input should carry an invalid Host: {input:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn rejects_duplicate_unique_request_headers_case_insensitively() {
+    let cases = [
+        ("host", "example.test"),
+        ("if-modified-since", "Sun, 06 Nov 1994 08:49:37 GMT"),
+        ("if-unmodified-since", "Sun, 06 Nov 1994 08:49:37 GMT"),
+        ("if-match", "\"etag\""),
+        ("if-none-match", "\"etag\""),
+        ("content-length", "0"),
+        ("content-range", "bytes 0-0/1"),
+        ("if-range", "\"etag\""),
+        ("transfer-encoding", "chunked"),
+        ("expect", "100-continue"),
+        ("authorization", "Basic dGVzdDp0ZXN0"),
+    ];
+
+    for (name, value) in cases {
+        let duplicate = name.to_ascii_uppercase();
+        let input = format!(
+            "GET / HTTP/1.1\r\nHost: example.test\r\n{name}: {value}\r\n{duplicate}: {value}\r\n\r\n"
+        );
+        let mut reader = BufReader::new(input.as_bytes());
+
+        let error = read_request_head(&mut reader).await.unwrap_err();
+
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::InvalidData,
+            "duplicate {name} should be rejected case-insensitively"
         );
     }
 }
