@@ -116,26 +116,42 @@ run_wrk_scenario() {
     done
 }
 
+run_h2load_request() {
+    local data_file="$1"
+    local requests="$2"
+    local url="$3"
+    local -a args=(-t"$THREADS" -c"$H2_CLIENTS" -m"$H2_STREAMS" -n"$requests")
+    if [[ -n "$data_file" ]]; then
+        args+=(-d"$data_file")
+    fi
+    run_client "$H2LOAD_BIN" "${args[@]}" "$url"
+}
+
 run_h2_scenario() {
     local implementation="$1"
+    local scenario="$2"
+    local path="$3"
+    local requests="$4"
+    local data_file="${5:-}"
     local round raw resources
-    raw="$OUTPUT_DIR/$implementation-h2-small-warmup.txt"
-    run_client "$H2LOAD_BIN" -t"$THREADS" -c"$H2_CLIENTS" -m"$H2_STREAMS" \
-        -n"$((H2_REQUESTS / 10 > 0 ? H2_REQUESTS / 10 : 1))" \
-        "http://127.0.0.1:$PORT/small" >"$raw"
+    local warmup_requests=$((requests / 10))
+    ((warmup_requests >= H2_CLIENTS)) || warmup_requests="$H2_CLIENTS"
+    raw="$OUTPUT_DIR/$implementation-h2-$scenario-warmup.txt"
+    run_h2load_request "$data_file" "$warmup_requests" \
+        "http://127.0.0.1:$PORT$path" >"$raw"
     for ((round = 1; round <= ROUNDS; round++)); do
-        raw="$OUTPUT_DIR/$implementation-h2-small-$round.txt"
-        resources="$OUTPUT_DIR/$implementation-h2-small-$round.resources.tsv"
+        raw="$OUTPUT_DIR/$implementation-h2-$scenario-$round.txt"
+        resources="$OUTPUT_DIR/$implementation-h2-$scenario-$round.resources.tsv"
         start_sampler "$SERVER_PID" "$resources"
-        run_client "$H2LOAD_BIN" -t"$THREADS" -c"$H2_CLIENTS" -m"$H2_STREAMS" -n"$H2_REQUESTS" \
-            "http://127.0.0.1:$PORT/small" >"$raw"
+        run_h2load_request "$data_file" "$requests" \
+            "http://127.0.0.1:$PORT$path" >"$raw"
         stop_sampler
         local parsed
         parsed="$(awk '
             /finished in/ {
                 for (i = 1; i <= NF; i++) {
                     if ($i == "req/s,") req_s = $(i - 1)
-                    if ($i ~ /MB\/s/) {
+                    if ($i ~ /(KB|MB|GB)\/s/) {
                         transfer = $i
                         sub(/,$/, "", transfer)
                     }
@@ -167,7 +183,7 @@ run_h2_scenario() {
         transfer="$(normalize_mb "$transfer_raw")"
         peak="$(peak_resources "$resources")"
         IFS=$'\t' read -r peak_rss peak_threads peak_fds <<<"$peak"
-        write_result_row "$implementation" h2c small "$round" "$req_s" "-" "-" "$mean" \
+        write_result_row "$implementation" h2c "$scenario" "$round" "$req_s" "-" "-" "$mean" \
             "$transfer" "$requests" "$succeeded" "$failed" "$errored" "$timeout" \
             "$peak_rss" "$peak_threads" "$peak_fds" "$raw"
     done

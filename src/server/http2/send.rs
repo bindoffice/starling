@@ -81,14 +81,17 @@ pub(in crate::server) fn is_h2_connection_header(name: &str) -> bool {
 fn h2_header_value(
     value: &str,
 ) -> Result<http::header::HeaderValue, http::header::InvalidHeaderValue> {
-    if value
-        .as_bytes()
-        .iter()
-        .any(|byte| matches!(byte, b'\r' | b'\n'))
-    {
-        http::header::HeaderValue::from_str(&sanitize_header_value(value))
-    } else {
-        http::header::HeaderValue::from_str(value)
+    match http::header::HeaderValue::from_str(value) {
+        Ok(value) => Ok(value),
+        Err(_)
+            if value
+                .as_bytes()
+                .iter()
+                .any(|byte| matches!(byte, b'\r' | b'\n')) =>
+        {
+            http::header::HeaderValue::from_str(&sanitize_header_value(value))
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -116,5 +119,6 @@ mod tests {
                 .unwrap(),
             "first  second"
         );
+        assert!(h2_header_value("invalid\0value").is_err());
     }
 }

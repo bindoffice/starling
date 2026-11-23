@@ -2,6 +2,11 @@ use super::*;
 
 #[test]
 fn normalizes_uri_and_blocks_traversal() {
+    assert_eq!(normalize_uri("/plain/path/"), Some("/plain/path/".into()));
+    assert_eq!(
+        normalize_uri_with_merge("//plain//path", false),
+        Some("//plain//path".into())
+    );
     assert_eq!(normalize_uri("/a/../b//c"), Some("/b/c".into()));
     assert_eq!(normalize_uri("/a/../"), Some("/".into()));
     assert_eq!(normalize_uri("/foo/bar/."), Some("/foo/bar/".into()));

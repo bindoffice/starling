@@ -16,6 +16,9 @@ pub fn normalize_uri_with_merge(path: &str, merge_slashes: bool) -> Option<Strin
     if path.bytes().any(|byte| byte.is_ascii_control()) || !valid_percent_escapes(path) {
         return None;
     }
+    if is_plain_normalized_uri(path, merge_slashes) {
+        return Some(path.to_string());
+    }
     let decoded = percent_encoding::percent_decode_str(path)
         .decode_utf8()
         .ok()?;
@@ -54,6 +57,13 @@ pub fn normalize_uri_with_merge(path: &str, merge_slashes: bool) -> Option<Strin
         normalized.push('/');
     }
     Some(normalized)
+}
+
+fn is_plain_normalized_uri(path: &str, merge_slashes: bool) -> bool {
+    path.starts_with('/')
+        && !path.contains('%')
+        && !(merge_slashes && path.contains("//"))
+        && !path.split('/').any(|segment| matches!(segment, "." | ".."))
 }
 
 fn valid_percent_escapes(path: &str) -> bool {

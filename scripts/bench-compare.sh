@@ -25,6 +25,7 @@ Options:
   --h2-clients N            HTTP/2 clients (default: 64)
   --h2-streams N            HTTP/2 streams per connection (default: 16)
   --h2-requests N           HTTP/2 total requests (default: 500000)
+  --upload-requests N       HTTP/2 1 MiB upload requests (default: 1024)
   --workers VALUE           worker_processes value (default: auto)
   --small-bytes N           Small response size (default: 14)
   --large-mib N             Large response size in MiB (default: 8)
@@ -33,6 +34,7 @@ Options:
   --skip-native             Run Starling only
   --skip-starling           Run native Nginx only
   --skip-large              Skip the 8 MiB download scenario
+  --skip-upload             Skip the HTTP/2 upload scenario
   --keep                    Keep the generated artifact directory on exit
   -h, --help                Show this help
 EOF
@@ -63,6 +65,7 @@ LARGE_CONNECTIONS=16
 H2_CLIENTS=64
 H2_STREAMS=16
 H2_REQUESTS=500000
+UPLOAD_REQUESTS=1024
 WORKERS=auto
 SMALL_BYTES=14
 LARGE_MIB=8
@@ -71,6 +74,7 @@ BUILD=1
 RUN_STARLING=1
 RUN_NATIVE=1
 RUN_LARGE=1
+RUN_UPLOAD=1
 KEEP=0
 
 while (($#)); do
@@ -90,6 +94,7 @@ while (($#)); do
         --h2-clients) H2_CLIENTS="${2:?missing value}"; shift 2 ;;
         --h2-streams) H2_STREAMS="${2:?missing value}"; shift 2 ;;
         --h2-requests) H2_REQUESTS="${2:?missing value}"; shift 2 ;;
+        --upload-requests) UPLOAD_REQUESTS="${2:?missing value}"; shift 2 ;;
         --workers) WORKERS="${2:?missing value}"; shift 2 ;;
         --small-bytes) SMALL_BYTES="${2:?missing value}"; shift 2 ;;
         --large-mib) LARGE_MIB="${2:?missing value}"; shift 2 ;;
@@ -98,6 +103,7 @@ while (($#)); do
         --skip-native) RUN_NATIVE=0; shift ;;
         --skip-starling) RUN_STARLING=0; shift ;;
         --skip-large) RUN_LARGE=0; shift ;;
+        --skip-upload) RUN_UPLOAD=0; shift ;;
         --keep) KEEP=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1" ;;
@@ -112,6 +118,11 @@ done
 [[ "$H2_CLIENTS" =~ ^[1-9][0-9]*$ ]] || die "invalid h2 clients: $H2_CLIENTS"
 [[ "$H2_STREAMS" =~ ^[1-9][0-9]*$ ]] || die "invalid h2 streams: $H2_STREAMS"
 [[ "$H2_REQUESTS" =~ ^[1-9][0-9]*$ ]] || die "invalid h2 requests: $H2_REQUESTS"
+[[ "$UPLOAD_REQUESTS" =~ ^[1-9][0-9]*$ ]] || die "invalid upload requests: $UPLOAD_REQUESTS"
+((H2_REQUESTS >= H2_CLIENTS)) || die "h2 requests must be at least h2 clients"
+if ((RUN_UPLOAD)); then
+    ((UPLOAD_REQUESTS >= H2_CLIENTS)) || die "upload requests must be at least h2 clients"
+fi
 [[ "$SMALL_BYTES" =~ ^[1-9][0-9]*$ ]] || die "invalid small size: $SMALL_BYTES"
 [[ "$LARGE_MIB" =~ ^[1-9][0-9]*$ ]] || die "invalid large size: $LARGE_MIB"
 ((RUN_STARLING || RUN_NATIVE)) || die "both implementations were skipped"
@@ -173,6 +184,7 @@ mkdir -p "$HTML_DIR"
 
 head -c "$SMALL_BYTES" /dev/zero | tr '\0' 'x' >"$HTML_DIR/small"
 head -c "$((LARGE_MIB * 1024 * 1024))" /dev/zero | tr '\0' 'y' >"$HTML_DIR/large.bin"
+head -c "$((1024 * 1024))" /dev/zero | tr '\0' 'u' >"$OUTPUT_DIR/upload-1mib.bin"
 
 SERVER_PID=""
 SAMPLER_PID=""
@@ -254,6 +266,10 @@ http {
         }
         location = /upload {
             client_body_buffer_size 64k;
+            proxy_request_buffering on;
+            proxy_pass http://127.0.0.1:$PORT/__drain;
+        }
+        location = /__drain {
             return 204;
         }
     }
@@ -339,6 +355,7 @@ start_sampler() {
     local root="$1"
     local output="$2"
     printf 'rss_kib\tthreads\tfds\n' >"$output"
+    snapshot_resources "$root" >>"$output"
     (
         while kill -0 "$root" 2>/dev/null; do
             snapshot_resources "$root" >>"$output"
@@ -356,7 +373,11 @@ run_implementation() {
     if ((RUN_LARGE)); then
         run_wrk_scenario "$implementation" h1-large /large.bin "$LARGE_CONNECTIONS"
     fi
-    run_h2_scenario "$implementation"
+    run_h2_scenario "$implementation" small /small "$H2_REQUESTS"
+    if ((RUN_UPLOAD)); then
+        run_h2_scenario "$implementation" upload-1mib /upload "$UPLOAD_REQUESTS" \
+            "$OUTPUT_DIR/upload-1mib.bin"
+    fi
     stop_server
 }
 
