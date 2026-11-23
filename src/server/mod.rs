@@ -217,21 +217,27 @@ enum ConnectionPhase {
 struct ConnectionStatsGuard {
     stats: Arc<ConnectionStats>,
     phase: Option<ConnectionPhase>,
+    id: u64,
 }
 
 impl ConnectionStats {
     fn connection_started(self: &Arc<Self>) -> ConnectionStatsGuard {
-        self.accepted.fetch_add(1, Ordering::Relaxed);
+        let id = self.accepted.fetch_add(1, Ordering::Relaxed) + 1;
         self.handled.fetch_add(1, Ordering::Relaxed);
         self.active.fetch_add(1, Ordering::Relaxed);
         ConnectionStatsGuard {
             stats: self.clone(),
             phase: Some(ConnectionPhase::Idle),
+            id,
         }
     }
 }
 
 impl ConnectionStatsGuard {
+    fn id(&self) -> u64 {
+        self.id
+    }
+
     fn set_idle(&mut self) {
         self.transition(ConnectionPhase::Idle);
     }

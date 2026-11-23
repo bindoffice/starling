@@ -375,7 +375,10 @@ fn location_auto_redirect(
             let mut response = Response::empty(301);
             response.set_header(
                 "Location",
-                append_args(format!("{uri}/"), args.map(str::to_string)),
+                append_args(
+                    format!("{}/", escape_nginx_uri(uri)),
+                    args.map(str::to_string),
+                ),
             );
             return Some((location.context.clone(), response));
         }

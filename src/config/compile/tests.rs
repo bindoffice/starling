@@ -6,7 +6,8 @@ fn normalizes_uri_and_blocks_traversal() {
     assert_eq!(normalize_uri("/a/../"), Some("/".into()));
     assert_eq!(normalize_uri("/foo/bar/."), Some("/foo/bar/".into()));
     assert_eq!(normalize_uri("/foo/bar/.."), Some("/foo/".into()));
-    assert_eq!(normalize_uri("/%2e%2e/secret"), Some("/secret".into()));
+    assert_eq!(normalize_uri("/%2e%2e/secret"), None);
+    assert_eq!(normalize_uri("/a/%2e%2e/secret"), Some("/secret".into()));
     assert_eq!(normalize_uri("/%00"), None);
     assert_eq!(normalize_uri("/%02"), Some("/\u{2}".into()));
     assert_eq!(normalize_uri("/bad%"), None);

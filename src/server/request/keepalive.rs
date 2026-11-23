@@ -3,13 +3,19 @@ use tokio::io::AsyncBufReadExt;
 
 #[derive(Clone, Copy)]
 pub(in crate::server) struct ConnectionRequestState {
+    pub(in crate::server) connection_id: u64,
     pub(in crate::server) started: Instant,
     pub(in crate::server) served_requests: u64,
 }
 
 impl ConnectionRequestState {
-    pub(in crate::server) fn new(started: Instant, served_requests: u64) -> Self {
+    pub(in crate::server) fn new(
+        connection_id: u64,
+        started: Instant,
+        served_requests: u64,
+    ) -> Self {
         Self {
+            connection_id,
             started,
             served_requests,
         }
@@ -116,6 +122,7 @@ pub(in crate::server) fn should_keep_alive(
     !force_close
         && !keepalive_disabled(context, request)
         && request.keep_alive
+        && !matches!(request.method.as_str(), "TRACE" | "CONNECT")
         && !(unsized_stream
             && (request.version != "HTTP/1.1" || !context.chunked_transfer_encoding))
         && response.status < 500

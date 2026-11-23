@@ -261,16 +261,16 @@ pub struct ServerConfig {
 #[derive(Debug, Clone)]
 pub enum ServerName {
     Exact(String),
-    LeadingWildcard(String),
-    TrailingWildcard(String),
-    Regex(Regex),
+    LeadingWildcard { value: String, display: String },
+    TrailingWildcard { value: String, display: String },
+    Regex { regex: Regex, display: String },
 }
 
 impl ServerName {
     pub fn matches(&self, host: &str) -> bool {
         match self {
             Self::Exact(name) => name.eq_ignore_ascii_case(host),
-            Self::LeadingWildcard(suffix) => {
+            Self::LeadingWildcard { value: suffix, .. } => {
                 let bare = suffix.strip_prefix('.').unwrap_or(suffix);
                 host.eq_ignore_ascii_case(bare)
                     || (host.len() > suffix.len()
@@ -278,7 +278,7 @@ impl ServerName {
                             .get(host.len() - suffix.len()..)
                             .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix)))
             }
-            Self::TrailingWildcard(prefix) => {
+            Self::TrailingWildcard { value: prefix, .. } => {
                 let bare = prefix.strip_suffix('.').unwrap_or(prefix);
                 host.eq_ignore_ascii_case(bare)
                     || (host.len() > prefix.len()
@@ -286,7 +286,34 @@ impl ServerName {
                             .get(..prefix.len())
                             .is_some_and(|head| head.eq_ignore_ascii_case(prefix)))
             }
-            Self::Regex(regex) => regex.is_match(host),
+            Self::Regex { regex, .. } => regex.is_match(host),
+        }
+    }
+
+    pub fn display(&self) -> &str {
+        match self {
+            Self::Exact(value) => value,
+            Self::LeadingWildcard { display, .. }
+            | Self::TrailingWildcard { display, .. }
+            | Self::Regex { display, .. } => display,
+        }
+    }
+
+    pub fn regex(&self) -> Option<&Regex> {
+        match self {
+            Self::Regex { regex, .. } => Some(regex),
+            _ => None,
+        }
+    }
+
+    pub fn wildcard_specificity(&self, host: &str) -> Option<usize> {
+        match self {
+            Self::LeadingWildcard { value, .. } | Self::TrailingWildcard { value, .. }
+                if self.matches(host) =>
+            {
+                Some(value.len())
+            }
+            _ => None,
         }
     }
 }

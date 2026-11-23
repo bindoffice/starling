@@ -64,7 +64,7 @@ pub(in crate::server) fn log_stream_access(
         };
         let mut stack = Vec::new();
         let mut line = render_log_format(&format.template, format.escape, |name| {
-            eval_stream_variable(name, log, &mut stack)
+            Some(eval_stream_variable(name, log, &mut stack))
         });
         line.push('\n');
         write_access_log_target(

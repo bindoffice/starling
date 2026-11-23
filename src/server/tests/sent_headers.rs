@@ -36,7 +36,7 @@ async fn exposes_protocol_generated_sent_header_variables() {
     assert!(response.contains("Content-Length: 5\r\n"), "{response}");
 
     let log = std::fs::read_to_string(prefix.join("logs/sent.log")).unwrap_or_default();
-    assert_eq!(log.trim_end(), "keep-alive|timeout=12||5");
+    assert_eq!(log.trim_end(), "keep-alive|timeout=12|-|5");
     let _ = std::fs::remove_dir_all(prefix);
 }
 
@@ -76,6 +76,6 @@ async fn sent_variables_reflect_chunked_trailers() {
     assert!(!response.contains("Keep-Alive:"), "{response}");
 
     let log = std::fs::read_to_string(prefix.join("logs/sent.log")).unwrap_or_default();
-    assert_eq!(log.trim_end(), "close||chunked|");
+    assert_eq!(log.trim_end(), "close|-|chunked|-");
     let _ = std::fs::remove_dir_all(prefix);
 }

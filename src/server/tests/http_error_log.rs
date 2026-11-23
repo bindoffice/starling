@@ -49,10 +49,13 @@ async fn selects_the_inherited_or_overridden_http_error_logger() {
         let action = dispatch_http_request(
             snapshot,
             &group,
-            &request,
-            connection.clone(),
-            ConnectionRequestState::new(std::time::Instant::now(), 0),
-            None,
+            DispatchRequestContext {
+                request: &request,
+                connection: connection.clone(),
+                connection_request: ConnectionRequestState::new(0, std::time::Instant::now(), 0),
+                invalid_host: false,
+                client_abort: None,
+            },
             &state,
         )
         .await

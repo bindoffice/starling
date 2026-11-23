@@ -59,7 +59,7 @@ pub(super) async fn serve_static(
     };
     if metadata.is_dir() {
         if !env.uri.ends_with('/') {
-            let mut location = format!("{}/", env.uri);
+            let mut location = format!("{}/", escape_nginx_uri(&env.uri));
             if let Some(args) = &env.args {
                 location.push('?');
                 location.push_str(args);

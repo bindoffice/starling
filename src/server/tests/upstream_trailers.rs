@@ -88,7 +88,7 @@ async fn exposes_and_optionally_passes_upstream_trailers() {
     let passed_log = std::fs::read_to_string(prefix.join("logs/pass.log")).unwrap_or_default();
     assert_eq!(passed_log.trim_end(), "done|secret|done|done");
     let dropped_log = std::fs::read_to_string(prefix.join("logs/drop.log")).unwrap_or_default();
-    assert_eq!(dropped_log.trim_end(), "done|secret||done");
+    assert_eq!(dropped_log.trim_end(), "done|secret|-|done");
 
     backend.await.unwrap();
     let _ = std::fs::remove_dir_all(prefix);

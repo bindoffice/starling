@@ -33,7 +33,7 @@ pub(in crate::server) fn log_access(
         );
         let mut stack = Vec::new();
         let mut line = render_log_format(template, escape, |name| {
-            variable_value(name, variables, &mut stack)
+            variable_value_for_log(name, variables, &mut stack)
         });
         line.push('\n');
         write_access_log_target(
@@ -89,6 +89,27 @@ pub(in crate::server) fn percent_encode_path_segment(value: &str) -> String {
             encoded.push('%');
             encoded.push(HEX[(byte >> 4) as usize] as char);
             encoded.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+    }
+    encoded
+}
+
+pub(in crate::server) fn escape_nginx_uri(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::new();
+    for &byte in value.as_bytes() {
+        if byte <= 0x20
+            || byte >= 0x7f
+            || matches!(
+                byte,
+                b'"' | b'#' | b'%' | b'<' | b'>' | b'?' | b'\\' | b'^' | b'`' | b'{' | b'|' | b'}'
+            )
+        {
+            encoded.push('%');
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0f) as usize] as char);
+        } else {
+            encoded.push(byte as char);
         }
     }
     encoded

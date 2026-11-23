@@ -29,7 +29,7 @@ pub fn normalize_uri_with_merge(path: &str, merge_slashes: bool) -> Option<Strin
             "" if merge_slashes || index == 0 => {}
             "." => {}
             ".." => {
-                parts.pop();
+                parts.pop()?;
             }
             other => parts.push(other),
         }

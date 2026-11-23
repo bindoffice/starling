@@ -179,7 +179,13 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
     let mut connection_values = Vec::new();
     let mut expect_continue = false;
     let mut expect_seen = false;
+    let mut unique_headers = HashSet::new();
     for header in &headers {
+        if header_required_unique(&header.name)
+            && !unique_headers.insert(header.name.to_ascii_lowercase())
+        {
+            return Err(invalid_data("duplicate request header"));
+        }
         if header.name.eq_ignore_ascii_case("content-length") {
             if content_length_seen {
                 return Err(invalid_data("duplicate Content-Length header"));
@@ -246,13 +252,10 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
     if host_headers > 1 {
         return Err(invalid_data("duplicate Host header"));
     }
-    if let Some(host) = headers
+    let invalid_host = headers
         .iter()
         .find(|header| header.name.eq_ignore_ascii_case("host"))
-        && !valid_host(&host.value)
-    {
-        return Err(invalid_data("invalid Host header"));
-    }
+        .is_some_and(|host| !valid_host(&host.value));
 
     Ok(Some(RequestHead {
         method: method.to_string(),
@@ -264,7 +267,25 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
         content_length,
         chunked,
         expect_continue,
+        invalid_host,
     }))
+}
+
+fn header_required_unique(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "host"
+            | "if-modified-since"
+            | "if-unmodified-since"
+            | "if-match"
+            | "if-none-match"
+            | "content-length"
+            | "content-range"
+            | "if-range"
+            | "transfer-encoding"
+            | "expect"
+            | "authorization"
+    )
 }
 
 pub(crate) fn parse_connect_authority(value: &str) -> Option<(&str, u16)> {

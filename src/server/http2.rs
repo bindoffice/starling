@@ -199,10 +199,13 @@ pub(super) async fn handle_h2_request(
         let dispatch = dispatch_http_request(
             snapshot,
             group,
-            &request,
-            connection,
-            ConnectionRequestState::new(Instant::now(), 0),
-            Some(client_abort.clone()),
+            DispatchRequestContext {
+                request: &request,
+                connection,
+                connection_request: ConnectionRequestState::new(0, Instant::now(), 0),
+                invalid_host: false,
+                client_abort: Some(client_abort.clone()),
+            },
             state,
         );
         tokio::pin!(dispatch);

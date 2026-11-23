@@ -145,10 +145,13 @@ fn build_stream_tls_config(
                         .entry(name.clone())
                         .or_insert_with(|| server_config.clone());
                 }
-                ServerName::LeadingWildcard(name) | ServerName::TrailingWildcard(name) => {
+                ServerName::LeadingWildcard { value: name, .. }
+                | ServerName::TrailingWildcard { value: name, .. } => {
                     wildcard.push((name.clone(), server_config.clone()));
                 }
-                ServerName::Regex(regex) => regexes.push((regex.clone(), server_config.clone())),
+                ServerName::Regex { regex, .. } => {
+                    regexes.push((regex.clone(), server_config.clone()));
+                }
                 _ => {}
             }
         }

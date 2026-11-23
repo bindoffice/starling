@@ -250,7 +250,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             .await;
             break;
         }
-        if head.expect_continue {
+        if head.expect_continue && head.version == "HTTP/1.1" {
             let mut writer = TimedWriter::new(&mut write_half, send_timeout);
             if let Err(err) = writer.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await {
                 timed_out = err.kind() == io::ErrorKind::TimedOut;
@@ -261,7 +261,10 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 break;
             }
         }
-        let body_stream = if head.chunked || head.content_length.is_some_and(|length| length > 0) {
+        let invalid_host = head.invalid_host;
+        let body_stream = if !invalid_host
+            && (head.chunked || head.content_length.is_some_and(|length| length > 0))
+        {
             let reader_owned = reader
                 .take()
                 .expect("HTTP/1 reader available for request body");
@@ -289,10 +292,17 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
         let dispatch = dispatch_http_request(
             snapshot,
             &group,
-            &request,
-            connection.clone(),
-            ConnectionRequestState::new(connection_started, served_requests),
-            Some(client_abort.clone()),
+            DispatchRequestContext {
+                request: &request,
+                connection: connection.clone(),
+                connection_request: ConnectionRequestState::new(
+                    connection_stats.id(),
+                    connection_started,
+                    served_requests,
+                ),
+                invalid_host,
+                client_abort: Some(client_abort.clone()),
+            },
             &state,
         );
         let (action, client_closed_during_dispatch) =

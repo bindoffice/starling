@@ -3,7 +3,7 @@ use crate::config::LogEscapeMode;
 pub fn render_log_format(
     template: &str,
     escape: LogEscapeMode,
-    mut variable: impl FnMut(&str) -> String,
+    mut variable: impl FnMut(&str) -> Option<String>,
 ) -> String {
     let mut output = Vec::with_capacity(template.len());
     let bytes = template.as_bytes();
@@ -42,7 +42,10 @@ pub fn render_log_format(
             }
             &template[start..index]
         };
-        append_escaped(&mut output, variable(name).as_bytes(), escape);
+        match variable(name) {
+            Some(value) => append_escaped(&mut output, value.as_bytes(), escape),
+            None => output.push(b'-'),
+        }
     }
     String::from_utf8(output)
         .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
@@ -95,7 +98,7 @@ mod tests {
     fn applies_nginx_default_escaping_to_variables_only() {
         let value = "quote\"slash\\line\nnonascii-\u{e9}";
         let rendered = render_log_format("prefix:$value", LogEscapeMode::Default, |_| {
-            value.to_string()
+            Some(value.to_string())
         });
         assert_eq!(
             rendered,
@@ -106,7 +109,8 @@ mod tests {
     #[test]
     fn applies_nginx_json_escaping() {
         let value = "quote\"slash\\line\ncontrol\u{1f}tab\t\u{e9}";
-        let rendered = render_log_format("$value", LogEscapeMode::Json, |_| value.to_string());
+        let rendered =
+            render_log_format("$value", LogEscapeMode::Json, |_| Some(value.to_string()));
         assert_eq!(
             rendered,
             "quote\\\"slash\\\\line\\ncontrol\\u001Ftab\\t\u{e9}"
@@ -116,15 +120,22 @@ mod tests {
     #[test]
     fn leaves_values_unchanged_when_escaping_is_disabled() {
         let value = "quote\"slash\\line\n\u{e9}";
-        let rendered = render_log_format("$value", LogEscapeMode::None, |_| value.to_string());
+        let rendered =
+            render_log_format("$value", LogEscapeMode::None, |_| Some(value.to_string()));
         assert_eq!(rendered, value);
     }
 
     #[test]
     fn supports_braced_variable_names() {
         let rendered = render_log_format("${request_id}", LogEscapeMode::Default, |name| {
-            format!("value-{name}")
+            Some(format!("value-{name}"))
         });
         assert_eq!(rendered, "value-request_id");
+    }
+
+    #[test]
+    fn renders_missing_variables_as_dash() {
+        let rendered = render_log_format("$missing", LogEscapeMode::Default, |_| None);
+        assert_eq!(rendered, "-");
     }
 }

@@ -109,6 +109,9 @@ pub(in crate::server) fn variable_value(
         "is_request_port" => variables.is_request_port.clone(),
         "scheme" => variables.scheme.clone(),
         "https" => variables.https.clone(),
+        "connection" => variables.connection.clone(),
+        "connection_requests" => variables.connection_requests.clone(),
+        "connection_time" => variables.connection_time.clone(),
         "ssl_protocol" => variables.ssl_protocol.clone(),
         "ssl_cipher" => variables.ssl_cipher.clone(),
         "ssl_server_name" => variables.ssl_server_name.clone(),
@@ -205,27 +208,29 @@ pub(in crate::server) fn variable_value(
                 .cloned()
                 .unwrap_or_default()
         }
+        "limit_rate" => variables
+            .custom
+            .get(name)
+            .and_then(|value| parse_size_value(value))
+            .unwrap_or(0)
+            .to_string(),
         name if name.starts_with("http_") => {
             if let Some(value) = variables.custom.get(name) {
                 return value.clone();
             }
             let header_name = name["http_".len()..].replace('_', "-");
-            variables
-                .headers
-                .iter()
-                .find(|header| header.name.eq_ignore_ascii_case(&header_name))
-                .or_else(|| {
-                    variables.headers.iter().find(|header| {
-                        header
-                            .name
-                            .eq_ignore_ascii_case(&header_name.replace('-', "_"))
-                    })
-                })
-                .map(|header| header.value.clone())
-                .unwrap_or_default()
+            combined_request_header(
+                &variables.headers,
+                &header_name,
+                header_name.eq_ignore_ascii_case("cookie"),
+            )
         }
         name if name.starts_with("upstream_http_") => {
             response_header_value(&variables.upstream_headers, &name["upstream_http_".len()..])
+        }
+        name if name.starts_with("upstream_cookie_") => {
+            let cookie_name = &name["upstream_cookie_".len()..];
+            upstream_cookie_value(&variables.upstream_headers, cookie_name)
         }
         name if name.starts_with("upstream_trailer_") => response_header_value(
             &variables.upstream_trailers,
@@ -257,14 +262,8 @@ pub(in crate::server) fn variable_value(
             variables
                 .headers
                 .iter()
-                .find(|header| header.name.eq_ignore_ascii_case("cookie"))
-                .and_then(|header| {
-                    header.value.split(';').find_map(|cookie| {
-                        let (name, value) = cookie.trim().split_once('=')?;
-                        name.eq_ignore_ascii_case(cookie_name)
-                            .then(|| value.to_string())
-                    })
-                })
+                .filter(|header| header.name.eq_ignore_ascii_case("cookie"))
+                .find_map(|header| cookie_value_from_header(&header.value, cookie_name))
                 .unwrap_or_default()
         }
         _ => {
@@ -291,6 +290,122 @@ pub(in crate::server) fn variable_value(
             String::new()
         }
     }
+}
+
+pub(in crate::server) fn variable_value_for_log(
+    name: &str,
+    variables: &Variables,
+    stack: &mut Vec<String>,
+) -> Option<String> {
+    if log_variable_missing(name, variables) {
+        None
+    } else {
+        Some(variable_value(name, variables, stack))
+    }
+}
+
+fn log_variable_missing(name: &str, variables: &Variables) -> bool {
+    if variables.custom.contains_key(name) {
+        return false;
+    }
+    if name == "http_host" {
+        return !has_request_header(&variables.headers, "host");
+    }
+    if let Some(header_name) = name.strip_prefix("http_") {
+        let header_name = header_name.replace('_', "-");
+        return !has_request_header(&variables.headers, &header_name);
+    }
+    if name == "sent_http_connection" {
+        return variables.sent_connection.is_empty();
+    }
+    if name == "sent_http_keep_alive" {
+        return variables.sent_keep_alive.is_empty();
+    }
+    if name == "sent_http_transfer_encoding" {
+        return variables.sent_transfer_encoding.is_empty();
+    }
+    for (prefix, headers) in [
+        ("sent_http_", variables.sent_headers.as_slice()),
+        ("sent_trailer_", variables.sent_trailers.as_slice()),
+        ("upstream_http_", variables.upstream_headers.as_slice()),
+        ("upstream_trailer_", variables.upstream_trailers.as_slice()),
+    ] {
+        if let Some(header_name) = name.strip_prefix(prefix) {
+            return !has_response_header(headers, &header_name.replace('_', "-"));
+        }
+    }
+    if let Some(cookie_name) = name.strip_prefix("cookie_") {
+        return !variables
+            .headers
+            .iter()
+            .filter(|header| header.name.eq_ignore_ascii_case("cookie"))
+            .any(|header| cookie_value_from_header(&header.value, cookie_name).is_some());
+    }
+    if let Some(cookie_name) = name.strip_prefix("upstream_cookie_") {
+        return !variables
+            .upstream_headers
+            .iter()
+            .filter(|header| header.name.eq_ignore_ascii_case("set-cookie"))
+            .any(|header| cookie_value_from_header(&header.value, cookie_name).is_some());
+    }
+    if let Some(argument_name) = name.strip_prefix("arg_") {
+        return !variables.args.split('&').any(|argument| {
+            argument
+                .split_once('=')
+                .is_some_and(|(name, _)| name.eq_ignore_ascii_case(argument_name))
+        });
+    }
+    false
+}
+
+fn has_request_header(headers: &[Header], name: &str) -> bool {
+    headers.iter().any(|header| {
+        header.name.eq_ignore_ascii_case(name)
+            || header.name.eq_ignore_ascii_case(&name.replace('-', "_"))
+    })
+}
+
+fn has_response_header(headers: &[Header], name: &str) -> bool {
+    headers.iter().any(|header| {
+        header.name.eq_ignore_ascii_case(name)
+            || header.name.eq_ignore_ascii_case(&name.replace('-', "_"))
+    })
+}
+
+fn combined_request_header(headers: &[Header], name: &str, semicolon: bool) -> String {
+    let mut values = headers
+        .iter()
+        .filter(|header| {
+            header.name.eq_ignore_ascii_case(name)
+                || header.name.eq_ignore_ascii_case(&name.replace('-', "_"))
+        })
+        .map(|header| header.value.as_str());
+    let Some(first) = values.next() else {
+        return String::new();
+    };
+    let separator = if semicolon { "; " } else { ", " };
+    let mut value = first.to_string();
+    for next in values {
+        value.push_str(separator);
+        value.push_str(next);
+    }
+    value
+}
+
+fn cookie_value_from_header(value: &str, cookie_name: &str) -> Option<String> {
+    value.split(';').find_map(|cookie| {
+        let (name, value) = cookie.trim().split_once('=')?;
+        name.eq_ignore_ascii_case(cookie_name)
+            .then(|| value.to_string())
+    })
+}
+
+fn upstream_cookie_value(headers: &[Header], cookie_name: &str) -> String {
+    headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("set-cookie"))
+        .find_map(|header| cookie_value_from_header(&header.value, cookie_name))
+        .unwrap_or_default()
 }
 
 fn userid_variable(state: &UserIdState, uid: [u32; 4], set: bool) -> String {

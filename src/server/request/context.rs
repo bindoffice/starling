@@ -305,14 +305,7 @@ pub(in crate::server) fn select_server<'a>(
     for server_id in &group.server_ids {
         let server = &http.servers[*server_id];
         for name in &server.names {
-            let specificity = match name {
-                ServerName::LeadingWildcard(suffix) | ServerName::TrailingWildcard(suffix)
-                    if name.matches(host) =>
-                {
-                    suffix.len()
-                }
-                _ => 0,
-            };
+            let specificity = name.wildcard_specificity(host).unwrap_or(0);
             if specificity > 0 && wildcard_match.is_none_or(|(_, previous)| specificity > previous)
             {
                 wildcard_match = Some((server, specificity));
@@ -327,7 +320,7 @@ pub(in crate::server) fn select_server<'a>(
         if server
             .names
             .iter()
-            .any(|name| matches!(name, ServerName::Regex(regex) if regex.is_match(host)))
+            .any(|name| name.regex().is_some_and(|regex| regex.is_match(host)))
         {
             return server;
         }

@@ -121,18 +121,29 @@ async fn normalizes_and_validates_request_hosts_like_nginx() {
         assert_eq!(request.request_port(), port, "{input}");
     }
 
-    let invalid = [
+    let invalid_targets = [
         "GET http:/// HTTP/1.0\r\nHost: localhost\r\n\r\n",
         "GET http://example.com.:1.2/ HTTP/1.0\r\nHost: localhost\r\n\r\n",
         "GET http://123.40.56.78:9000:80/ HTTP/1.0\r\nHost: localhost\r\n\r\n",
         "GET http://extra[abcd::ef98:0:7654:321]/ HTTP/1.0\r\nHost: localhost\r\n\r\n",
-        "GET / HTTP/1.0\r\nHost: [abcd::ef98:0:7654:321].\r\n\r\n",
-        "GET / HTTP/1.0\r\nHost: \u{2}\r\n\r\n",
     ];
-    for input in invalid {
+    for input in invalid_targets {
         let mut reader = BufReader::new(input.as_bytes());
         let error = read_request_head(&mut reader).await.unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{input:?}");
+    }
+
+    let invalid_hosts = [
+        "GET / HTTP/1.0\r\nHost: [abcd::ef98:0:7654:321].\r\n\r\n",
+        "GET / HTTP/1.0\r\nHost: \u{2}\r\n\r\n",
+    ];
+    for input in invalid_hosts {
+        let mut reader = BufReader::new(input.as_bytes());
+        let request = read_request_head(&mut reader)
+            .await
+            .unwrap()
+            .expect("request head");
+        assert!(request.invalid_host, "{input:?}");
     }
 }
 
@@ -358,8 +369,6 @@ async fn rejects_malformed_request_headers() {
     let cases = [
         "GET / HTTP/1.1\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: one\r\nHost: two\r\n\r\n",
-        "GET / HTTP/1.1\r\nHost: bad host\r\n\r\n",
-        "GET / HTTP/1.1\r\nHost: bad..host\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: example.test\r\nContent-Length: 1\r\nContent-Length: 1\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: example.test\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: example.test\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n",
@@ -377,6 +386,21 @@ async fn rejects_malformed_request_headers() {
             error.kind(),
             io::ErrorKind::InvalidData,
             "input should be rejected: {input:?}"
+        );
+    }
+
+    for input in [
+        "GET / HTTP/1.1\r\nHost: bad host\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost: bad..host\r\n\r\n",
+    ] {
+        let mut reader = BufReader::new(input.as_bytes());
+        let request = read_request_head(&mut reader)
+            .await
+            .unwrap()
+            .expect("request head");
+        assert!(
+            request.invalid_host,
+            "input should carry an invalid Host: {input:?}"
         );
     }
 }

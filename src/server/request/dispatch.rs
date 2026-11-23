@@ -22,15 +22,27 @@ pub(in crate::server) struct DispatchOutcome {
     pub(in crate::server) _body_file_guard: Option<Arc<RequestBodyFile>>,
 }
 
+pub(in crate::server) struct DispatchRequestContext<'a> {
+    pub(in crate::server) request: &'a Request,
+    pub(in crate::server) connection: ConnectionAddresses,
+    pub(in crate::server) connection_request: ConnectionRequestState,
+    pub(in crate::server) invalid_host: bool,
+    pub(in crate::server) client_abort: Option<ClientAbortState>,
+}
+
 pub(in crate::server) async fn dispatch_http_request(
     snapshot: RuntimeSnapshot,
     group: &ListenerGroup,
-    request: &Request,
-    connection: ConnectionAddresses,
-    connection_request: ConnectionRequestState,
-    client_abort: Option<ClientAbortState>,
+    context: DispatchRequestContext<'_>,
     state: &SharedState,
 ) -> Option<DispatchAction> {
+    let DispatchRequestContext {
+        request,
+        connection,
+        connection_request,
+        invalid_host,
+        client_abort,
+    } = context;
     let RuntimeSnapshot {
         config,
         upstream_keepalive_generation,
@@ -59,6 +71,9 @@ pub(in crate::server) async fn dispatch_http_request(
         .unwrap_or_else(|| group.clone());
     let server = select_server(http, &active_group, &request.host_without_port());
     let mut request = request.clone();
+    if invalid_host {
+        request.keep_alive = false;
+    }
     if server.context.ignore_invalid_headers && !server.context.underscores_in_headers {
         request
             .headers
@@ -79,6 +94,17 @@ pub(in crate::server) async fn dispatch_http_request(
         &connection.local,
         &connection.remote,
     );
+    variables.connection = connection_request.connection_id.to_string();
+    variables.connection_requests = connection_request.served_requests.to_string();
+    variables.connection_time =
+        format!("{:.3}", connection_request.started.elapsed().as_secs_f64());
+    if let Some((regex, captures)) = server.names.iter().find_map(|name| {
+        let regex = name.regex()?;
+        let captures = regex.captures(&host)?;
+        Some((regex, captures))
+    }) {
+        set_regex_captures(&mut variables, regex, &captures);
+    }
     variables.error_logs = Some(RequestErrorLogs::new(
         state.logger.clone(),
         state.http_error_loggers.read().await.clone(),
@@ -156,9 +182,14 @@ pub(in crate::server) async fn dispatch_http_request(
                 });
             }
             None => {
+                variables.uri.clear();
+                variables.args.clear();
+                variables.status = 400;
                 let error_logger = http_logger_for_context(state, &server.context).await;
+                let response = error_response(400);
+                log_access(http, &server.context, &request, &variables, &response);
                 return Some(DispatchAction::Response(DispatchOutcome {
-                    response: error_response(400),
+                    response,
                     error_logger,
                     keepalive_timeout: server.context.keepalive_timeout,
                     keepalive_min_timeout: server.context.keepalive_min_timeout,
@@ -196,7 +227,25 @@ pub(in crate::server) async fn dispatch_http_request(
     variables.client_tls_cache = state.client_tls_cache.clone();
 
     let post_action_env = env.clone();
-    let mut processed = process_request(http, server, &mut request, env, &mut variables, 0).await;
+    let mut processed = if invalid_host {
+        let outcome = configured_error_page(
+            http,
+            server,
+            &request,
+            error_response(400),
+            &server.context,
+            &mut variables,
+            0,
+        )
+        .await;
+        Processed {
+            response: outcome.response,
+            context: outcome.context,
+            tunnel: false,
+        }
+    } else {
+        process_request(http, server, &mut request, env, &mut variables, 0).await
+    };
     let processed_logger = variables.error_logger_for(&processed.context);
     variables.set_variable_warning_context(&processed.context, processed_logger);
     let max_body = processed.context.client_max_body_size;

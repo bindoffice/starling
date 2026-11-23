@@ -28,6 +28,9 @@ pub(super) struct Variables {
     pub(super) is_request_port: String,
     pub(super) scheme: String,
     pub(super) https: String,
+    pub(super) connection: String,
+    pub(super) connection_requests: String,
+    pub(super) connection_time: String,
     pub(super) ssl_protocol: String,
     pub(super) ssl_cipher: String,
     pub(super) ssl_server_name: String,
@@ -209,6 +212,9 @@ impl Variables {
             is_request_port: request_port.map(|_| ":").unwrap_or_default().into(),
             scheme: "http".into(),
             https: String::new(),
+            connection: String::new(),
+            connection_requests: String::new(),
+            connection_time: String::new(),
             ssl_protocol: String::new(),
             ssl_cipher: String::new(),
             ssl_server_name: String::new(),
@@ -247,9 +253,9 @@ impl Variables {
                 .unwrap_or_default()
                 .to_string(),
             content_type: request
-                .header("content-type")
-                .unwrap_or_default()
-                .to_string(),
+                .headers("content-type")
+                .collect::<Vec<_>>()
+                .join(", "),
             request_body: String::from_utf8_lossy(&request.body).into_owned(),
             request_body_file: String::new(),
             request_body_file_guard: None,
@@ -329,12 +335,7 @@ impl Variables {
 }
 
 pub(super) fn server_name_value(name: &ServerName) -> String {
-    match name {
-        ServerName::Exact(value)
-        | ServerName::LeadingWildcard(value)
-        | ServerName::TrailingWildcard(value) => value.clone(),
-        ServerName::Regex(regex) => regex.as_str().to_string(),
-    }
+    name.display().to_string()
 }
 
 mod captures;
@@ -346,7 +347,7 @@ mod proxy_protocol;
 pub(super) use captures::{expand_captures, expand_captures_in_args, set_regex_captures};
 pub(super) use eval::{
     binary_address_bytes, eval_variables, eval_variables_bytes, eval_variables_with_stack,
-    variable_value,
+    variable_value, variable_value_for_log,
 };
 pub(super) use headers::response_header_value;
 pub(super) use maps::{

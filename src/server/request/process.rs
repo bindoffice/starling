@@ -50,6 +50,9 @@ async fn process_request_inner(
             tunnel: false,
         };
     }
+    if request.method == "TRACE" {
+        return response_with_context(server.context.clone(), error_response(405));
+    }
     if request.method == "CONNECT" {
         if request.version != "HTTP/1.1" || !server_allows_connect(server) {
             return response_with_context(server.context.clone(), error_response(405));

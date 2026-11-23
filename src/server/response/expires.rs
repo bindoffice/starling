@@ -74,6 +74,7 @@ fn resolve_value(value: &ExpiresValue, variables: &Variables) -> Option<ExpiresV
 
 fn set_fixed(response: &mut Response, expires: &str, cache_control: &str) {
     response.set_header("Expires", expires);
+    response.remove_header("Cache-Control");
     response.set_header("Cache-Control", cache_control);
 }
 
@@ -82,6 +83,7 @@ fn set_expiration(response: &mut Response, timestamp: i64, max_age: i64) {
         return;
     };
     response.set_header("Expires", httpdate::fmt_http_date(time));
+    response.remove_header("Cache-Control");
     if max_age < 0 {
         response.set_header("Cache-Control", "no-cache");
     } else {

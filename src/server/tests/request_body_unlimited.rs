@@ -15,6 +15,7 @@ async fn http1_body_task_treats_zero_limit_as_unlimited() {
         content_length: Some(4),
         chunked: false,
         expect_continue: false,
+        invalid_host: false,
     };
     let task = Http1BodyTask::spawn(BufReader::new(read_half), &head, Duration::from_secs(1), 0)
         .expect("content-length body task");

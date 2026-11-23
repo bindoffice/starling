@@ -175,6 +175,7 @@ pub struct RequestHead {
     pub content_length: Option<u64>,
     pub chunked: bool,
     pub expect_continue: bool,
+    pub invalid_host: bool,
 }
 
 mod rate;

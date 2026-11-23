@@ -60,14 +60,7 @@ pub(in crate::server) fn select_stream_server<'a>(
         .filter(|server| server_listens_route(server, route))
     {
         for name in &server.names {
-            let specificity = match name {
-                ServerName::LeadingWildcard(value) | ServerName::TrailingWildcard(value)
-                    if name.matches(host) =>
-                {
-                    value.len()
-                }
-                _ => 0,
-            };
+            let specificity = name.wildcard_specificity(host).unwrap_or(0);
             if specificity > 0 && wildcard_match.is_none_or(|(_, previous)| specificity > previous)
             {
                 wildcard_match = Some((server, specificity));
@@ -84,7 +77,7 @@ pub(in crate::server) fn select_stream_server<'a>(
         if server
             .names
             .iter()
-            .any(|name| matches!(name, ServerName::Regex(regex) if regex.is_match(host)))
+            .any(|name| name.regex().is_some_and(|regex| regex.is_match(host)))
         {
             return Some(server);
         }
