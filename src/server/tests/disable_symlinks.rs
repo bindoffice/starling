@@ -147,6 +147,53 @@ async fn if_not_owner_allows_same_owner_symlinks() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn file_conditions_honor_disable_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let (prefix, config) = test_config(
+        r#"
+            worker_processes 1;
+            events { worker_connections 64; }
+            http {
+                server {
+                    listen 127.0.0.1:18538;
+                    root data;
+                    disable_symlinks on;
+                    location / {
+                        if (-f $request_filename) {
+                            return 204;
+                        }
+                    }
+                }
+            }
+        "#,
+        &[],
+    );
+    std::fs::create_dir_all(prefix.join("data")).unwrap();
+    std::fs::write(prefix.join("data/target.txt"), b"target").unwrap();
+    symlink("target.txt", prefix.join("data/link.txt")).unwrap();
+
+    let regular = request_body(
+        &config,
+        "GET /target.txt HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(
+        regular.starts_with("HTTP/1.1 204 No Content\r\n"),
+        "{regular}"
+    );
+
+    let linked = request_body(
+        &config,
+        "GET /link.txt HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(linked.starts_with("HTTP/1.1 403 Forbidden\r\n"), "{linked}");
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn applies_to_try_files_and_index_candidates() {
     use std::os::unix::fs::symlink;
 
@@ -163,6 +210,7 @@ async fn applies_to_try_files_and_index_candidates() {
                     location / {
                         try_files $uri =404;
                     }
+                    location /dir/ { }
                 }
             }
         "#,

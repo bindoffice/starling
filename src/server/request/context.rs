@@ -49,7 +49,7 @@ pub(in crate::server) fn request_server_context<'a>(
     Some(select_server(
         http,
         &active_group,
-        request.host_without_port(),
+        &request.host_without_port(),
     ))
 }
 
@@ -340,8 +340,10 @@ pub(in crate::server) struct RequestEnv {
     pub(in crate::server) uri: String,
     pub(in crate::server) args: Option<String>,
     pub(in crate::server) unparsed_uri: Option<String>,
+    pub(in crate::server) valid_location: bool,
     pub(in crate::server) internal: bool,
     pub(in crate::server) bypass_try_files: bool,
+    pub(in crate::server) add_uri_to_alias: bool,
     pub(in crate::server) limits_checked: bool,
     pub(in crate::server) auth_request_checked: bool,
     pub(in crate::server) mirror_checked: bool,
@@ -366,11 +368,9 @@ pub(in crate::server) fn refresh_variables(
     variables.uwsgi_script_name = env.uri.clone();
     variables.scgi_script_name = env.uri.clone();
     variables.args = env.args.clone().unwrap_or_default();
-    variables.document_root = context
-        .alias
-        .clone()
-        .unwrap_or_else(|| context.root.clone());
-    variables.request_filename = map_request_path(context, location, &env.uri);
+    variables.document_root = document_root_path(context, variables);
+    variables.request_filename =
+        map_request_path(context, location, &env.uri, env.add_uri_to_alias, variables);
     let referer = variables
         .headers
         .iter()

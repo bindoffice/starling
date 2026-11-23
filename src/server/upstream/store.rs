@@ -185,7 +185,13 @@ fn store_path(
 ) -> Option<PathBuf> {
     match store {
         StoreConfig::Off => None,
-        StoreConfig::On => Some(map_request_path(context, location, &env.uri)),
+        StoreConfig::On => Some(map_request_path(
+            context,
+            location,
+            &env.uri,
+            env.add_uri_to_alias,
+            variables,
+        )),
         StoreConfig::Path(template) => {
             let value = eval_variables(template, variables);
             if value.is_empty() {

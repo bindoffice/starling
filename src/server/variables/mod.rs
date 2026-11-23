@@ -343,7 +343,7 @@ mod headers;
 mod maps;
 mod proxy_protocol;
 
-pub(super) use captures::{expand_captures, set_regex_captures};
+pub(super) use captures::{expand_captures, expand_captures_in_args, set_regex_captures};
 pub(super) use eval::{
     binary_address_bytes, eval_variables, eval_variables_bytes, eval_variables_with_stack,
     variable_value,

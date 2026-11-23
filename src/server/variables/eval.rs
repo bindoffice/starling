@@ -144,6 +144,8 @@ pub(in crate::server) fn variable_value(
         "request_body_file" => variables.request_body_file.clone(),
         "request_length" => variables.request_length.clone(),
         "request_time" => format!("{:.3}", variables.started.elapsed().as_secs_f64()),
+        "date_local" => crate::server::response::default_date(false),
+        "date_gmt" => crate::server::response::default_date(true),
         "upstream_status" => variables.upstream_status.clone(),
         "upstream_cache_status" => variables.upstream_cache_status.clone(),
         "upstream_response_time" => variables.upstream_response_time.clone(),
@@ -204,6 +206,9 @@ pub(in crate::server) fn variable_value(
                 .unwrap_or_default()
         }
         name if name.starts_with("http_") => {
+            if let Some(value) = variables.custom.get(name) {
+                return value.clone();
+            }
             let header_name = name["http_".len()..].replace('_', "-");
             variables
                 .headers

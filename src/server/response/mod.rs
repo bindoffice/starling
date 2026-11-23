@@ -31,7 +31,13 @@ pub(super) async fn serve_static(
         return Some(response);
     }
 
-    let path = map_request_path(context, selected_location, &env.uri);
+    let path = map_request_path(
+        context,
+        selected_location,
+        &env.uri,
+        env.add_uri_to_alias,
+        variables,
+    );
     if !env.uri.ends_with('/') {
         match gzip_static_candidate(request, &path, context, variables).await {
             GzipStaticCandidate::Served(response) => return Some(*response),
@@ -42,10 +48,18 @@ pub(super) async fn serve_static(
     if let Err(status) = check_path_access(&path, context, variables).await {
         return Some(error_response(status));
     }
-    let metadata = tokio::fs::metadata(&path).await.ok()?;
+    let metadata = match tokio::fs::metadata(&path).await {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            if error.kind() == io::ErrorKind::NotFound {
+                log_static_not_found(&path, context, variables);
+            }
+            return None;
+        }
+    };
     if metadata.is_dir() {
         if !env.uri.ends_with('/') {
-            let mut location = format!("{}/", request.path_and_query().0);
+            let mut location = format!("{}/", env.uri);
             if let Some(args) = &env.args {
                 location.push('?');
                 location.push_str(args);

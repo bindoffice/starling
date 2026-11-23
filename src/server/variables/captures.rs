@@ -6,6 +6,23 @@ pub(in crate::server) fn expand_captures(
     captures: &Captures<'_>,
     variables: &Variables,
 ) -> String {
+    expand_captures_with_escaping(template, captures, variables, false)
+}
+
+pub(in crate::server) fn expand_captures_in_args(
+    template: &str,
+    captures: &Captures<'_>,
+    variables: &Variables,
+) -> String {
+    expand_captures_with_escaping(template, captures, variables, true)
+}
+
+fn expand_captures_with_escaping(
+    template: &str,
+    captures: &Captures<'_>,
+    variables: &Variables,
+    escape_captures: bool,
+) -> String {
     let mut output = String::new();
     let bytes = template.as_bytes();
     let mut index = 0;
@@ -13,11 +30,10 @@ pub(in crate::server) fn expand_captures(
         if bytes[index] == b'$' {
             if index + 1 < bytes.len() && bytes[index + 1].is_ascii_digit() {
                 let capture_index = (bytes[index + 1] - b'0') as usize;
-                output.push_str(
-                    captures
-                        .get(capture_index)
-                        .map(|value| value.as_str())
-                        .unwrap_or(""),
+                push_capture(
+                    &mut output,
+                    captures.get(capture_index).map(|value| value.as_str()),
+                    escape_captures,
                 );
                 index += 2;
                 continue;
@@ -32,17 +48,16 @@ pub(in crate::server) fn expand_captures(
                 let name = &template[start..end];
                 if name.len() == 1 && name.as_bytes()[0].is_ascii_digit() {
                     let capture_index = (name.as_bytes()[0] - b'0') as usize;
-                    output.push_str(
-                        captures
-                            .get(capture_index)
-                            .map(|value| value.as_str())
-                            .unwrap_or(""),
+                    push_capture(
+                        &mut output,
+                        captures.get(capture_index).map(|value| value.as_str()),
+                        escape_captures,
                     );
                     index = end + 1;
                     continue;
                 }
                 if let Some(value) = captures.name(name) {
-                    output.push_str(value.as_str());
+                    push_capture(&mut output, Some(value.as_str()), escape_captures);
                     index = end + 1;
                     continue;
                 }
@@ -61,6 +76,24 @@ pub(in crate::server) fn expand_captures(
         }
     }
     output
+}
+
+fn push_capture(output: &mut String, value: Option<&str>, escaped: bool) {
+    let value = value.unwrap_or_default();
+    if escaped {
+        const ARG_ESCAPE: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
+            .add(b' ')
+            .add(b'"')
+            .add(b'#')
+            .add(b'%')
+            .add(b'&')
+            .add(b'+')
+            .add(b'=')
+            .add(b'?');
+        output.push_str(&percent_encoding::utf8_percent_encode(value, ARG_ESCAPE).to_string());
+    } else {
+        output.push_str(value);
+    }
 }
 
 pub(in crate::server) fn set_regex_captures(

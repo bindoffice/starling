@@ -1,9 +1,11 @@
 use super::*;
 
 mod content;
+mod index;
 mod named;
 mod prepare;
 
+use index::{IndexDecision, resolve_index};
 pub(in crate::server) use named::process_named_location;
 use prepare::{PrepareOutcome, prepare_request};
 
@@ -39,7 +41,7 @@ async fn process_request_inner(
     variables: &mut Variables,
     depth: usize,
     run_server_rewrite: bool,
-    uri_changes: usize,
+    mut uri_changes: usize,
 ) -> Processed {
     if depth > MAX_URI_CHANGES + 1 {
         return Processed {
@@ -95,6 +97,43 @@ async fn process_request_inner(
     }
 
     start_mirror_requests(http, server, request, &mut env, &context, variables, depth);
+
+    match resolve_index(&env, &context, location, variables).await {
+        IndexDecision::None => {}
+        IndexDecision::Response(response) => {
+            return Processed {
+                response,
+                context: *context,
+                tunnel: false,
+            };
+        }
+        IndexDecision::Redirect(uri) => {
+            if !consume_uri_change(&mut uri_changes) {
+                return Processed {
+                    response: error_response(500),
+                    context: *context,
+                    tunnel: false,
+                };
+            }
+            env.uri = uri;
+            env.unparsed_uri = None;
+            env.valid_location = true;
+            env.internal = true;
+            env.bypass_try_files = true;
+            variables.uri = env.uri.clone();
+            return Box::pin(process_request_inner(
+                http,
+                server,
+                request,
+                env,
+                variables,
+                depth + 1,
+                false,
+                uri_changes,
+            ))
+            .await;
+        }
+    }
 
     if context.stub_status {
         return Processed {

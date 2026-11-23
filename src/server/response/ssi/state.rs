@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-const DEFAULT_TIME_FORMAT: &str = "%A, %d-%b-%Y %H:%M:%S %Z";
+pub(super) const DEFAULT_TIME_FORMAT: &str = "%A, %d-%b-%Y %H:%M:%S %Z";
 const DEFAULT_ERROR: &str = "[an error occurred while processing the directive]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

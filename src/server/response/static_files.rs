@@ -99,18 +99,59 @@ pub(in crate::server) fn map_request_path(
     context: &EffectiveConfig,
     location: Option<&LocationConfig>,
     uri: &str,
+    add_uri_to_alias: bool,
+    variables: &Variables,
 ) -> PathBuf {
     if let Some(alias) = &context.alias {
-        let suffix = match location.map(|location| &location.matcher) {
-            Some(LocationMatcher::Prefix(path)) | Some(LocationMatcher::PrefixNoRegex(path)) => {
-                uri.strip_prefix(path).unwrap_or_default()
-            }
-            Some(LocationMatcher::Regex(_)) => "",
-            _ => "",
+        let alias = PathBuf::from(eval_variables(alias.to_string_lossy().as_ref(), variables));
+        if matches!(context.alias_uri_prefix.as_deref(), Some("")) {
+            return if add_uri_to_alias {
+                alias.join(uri.trim_start_matches('/'))
+            } else {
+                alias
+            };
+        }
+        let suffix = match context.alias_uri_prefix.as_deref() {
+            Some(prefix) => uri.strip_prefix(prefix).unwrap_or_default(),
+            None => match location.map(|location| &location.matcher) {
+                Some(LocationMatcher::Prefix(path))
+                | Some(LocationMatcher::PrefixNoRegex(path)) => {
+                    uri.strip_prefix(path).unwrap_or_default()
+                }
+                Some(LocationMatcher::Regex(_)) => uri.trim_start_matches('/'),
+                _ => "",
+            },
         };
         return alias.join(suffix.trim_start_matches('/'));
     }
     context.root.join(uri.trim_start_matches('/'))
+}
+
+pub(in crate::server) fn document_root_path(
+    context: &EffectiveConfig,
+    variables: &Variables,
+) -> PathBuf {
+    context
+        .alias
+        .as_ref()
+        .map(|alias| PathBuf::from(eval_variables(alias.to_string_lossy().as_ref(), variables)))
+        .unwrap_or_else(|| context.root.clone())
+}
+
+pub(super) fn log_static_not_found(path: &Path, context: &EffectiveConfig, variables: &Variables) {
+    if !context.log_not_found {
+        return;
+    }
+    let Some(logger) = variables.error_logger_for(context) else {
+        return;
+    };
+    logger.log(
+        LogLevel::Error,
+        format!(
+            "open() \"{}\" failed (2: No such file or directory)",
+            path.display()
+        ),
+    );
 }
 
 pub(in crate::server) fn content_type(path: &Path, context: &EffectiveConfig) -> String {
@@ -155,7 +196,7 @@ pub(in crate::server) const HTTP_MIME_TYPES: &[(&str, &str)] = &[
 ];
 
 pub(in crate::server) enum TryFilesResult {
-    Found(String),
+    Found { uri: String, is_dir: bool },
     FallbackStatus(u16),
     FallbackUri(String),
     Named(String),

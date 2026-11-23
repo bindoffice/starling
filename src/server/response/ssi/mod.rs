@@ -9,6 +9,10 @@ mod text;
 use eval::Runtime;
 use state::State;
 
+pub(in crate::server) fn default_date(gmt: bool) -> String {
+    text::format_timestamp(state::DEFAULT_TIME_FORMAT, gmt)
+}
+
 pub(in crate::server) async fn apply_ssi(
     http: &HttpConfig,
     server: &ServerConfig,

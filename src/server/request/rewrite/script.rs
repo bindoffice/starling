@@ -39,7 +39,7 @@ pub(in crate::server) fn apply_conditional(
     request: &Request,
     location: Option<&LocationConfig>,
 ) -> RewriteOutcome {
-    if !condition_matches(&conditional.condition, variables) {
+    if !condition_matches(&conditional.condition, context, variables) {
         return RewriteOutcome::None;
     }
     apply_conditional_config(conditional, context);
@@ -129,14 +129,18 @@ fn execute_actions_inner(
                     rule.value.as_deref(),
                     variables,
                     request,
+                    context,
                 )));
             }
             RewriteAction::Break => {
+                if *uri_changed {
+                    env.valid_location = false;
+                }
                 *uri_changed = false;
                 return RewriteOutcome::Break;
             }
             RewriteAction::If(conditional) => {
-                if !condition_matches(&conditional.condition, variables) {
+                if !condition_matches(&conditional.condition, context, variables) {
                     continue;
                 }
                 apply_conditional_config(conditional, context);

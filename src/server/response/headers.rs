@@ -14,7 +14,17 @@ pub(in crate::server) fn apply_response_headers(
     );
     for header in &context.add_headers {
         if status_allows || header.always {
-            response.add_header(&header.name, eval_variables(&header.value, variables));
+            let value = eval_variables(&header.value, variables);
+            let name = header.name.to_ascii_lowercase();
+            if value.is_empty() {
+                if matches!(name.as_str(), "etag" | "last-modified") {
+                    response.remove_header(&header.name);
+                }
+            } else if matches!(name.as_str(), "etag" | "last-modified") {
+                response.set_header(&header.name, value);
+            } else {
+                response.add_header(&header.name, value);
+            }
             variables.sent_headers.clone_from(&response.headers);
         }
     }
@@ -45,8 +55,8 @@ pub(in crate::server) fn apply_redirect_location(
         .first()
         .map(server_name_value)
         .filter(|name| !name.is_empty());
-    let request_host =
-        (!request.host_without_port().is_empty()).then(|| request.host_without_port().to_string());
+    let request_host = request.host_without_port();
+    let request_host = (!request_host.is_empty()).then(|| request_host.into_owned());
     let host = if context.server_name_in_redirect {
         configured_name.or(request_host)
     } else {

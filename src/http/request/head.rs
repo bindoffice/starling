@@ -47,16 +47,11 @@ impl RequestHead {
                 InvalidRequestHeader::Raw if !ignore_invalid_headers => {
                     return Err(invalid_data("invalid header"));
                 }
-                InvalidRequestHeader::Underscore(_)
-                    if !ignore_invalid_headers && !underscores_in_headers =>
-                {
-                    return Err(invalid_data("invalid header name"));
-                }
                 _ => {}
             }
         }
 
-        if !underscores_in_headers {
+        if ignore_invalid_headers && !underscores_in_headers {
             let invalid_indices: HashSet<usize> = self
                 .invalid_headers
                 .iter()
@@ -122,10 +117,15 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
     }
     let valid_target = if method == "CONNECT" {
         parse_connect_authority(target).is_some()
+    } else if let Some(authority) = absolute_target_authority(target) {
+        valid_host(authority)
     } else {
-        target.starts_with('/') || target.starts_with("http://") || target.starts_with("https://")
+        target.starts_with('/')
     };
-    if !method.bytes().all(is_token_byte) || !valid_target {
+    if !method.bytes().all(is_token_byte)
+        || !valid_target
+        || target.bytes().any(|byte| byte.is_ascii_control())
+    {
         return Err(invalid_data("invalid request line"));
     }
 

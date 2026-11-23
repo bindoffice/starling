@@ -5,6 +5,7 @@ pub(super) async fn handle(
     env: &RequestEnv,
     context: &EffectiveConfig,
     location: Option<&LocationConfig>,
+    variables: &Variables,
 ) -> Response {
     if path::request_has_body(request) {
         return error::status(415);
@@ -15,7 +16,7 @@ pub(super) async fn handle(
         return error::status(409);
     }
 
-    let path = path::source_path(context, location, &env.uri);
+    let path = path::source_path(context, location, &env.uri, env.add_uri_to_alias, variables);
     let metadata = match tokio::fs::symlink_metadata(&path).await {
         Ok(metadata) => metadata,
         Err(error) => {

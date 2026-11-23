@@ -16,21 +16,25 @@ pub(super) fn source_path(
     context: &EffectiveConfig,
     location: Option<&LocationConfig>,
     uri: &str,
+    add_uri_to_alias: bool,
+    variables: &Variables,
 ) -> PathBuf {
-    map_request_path(context, location, uri)
+    map_request_path(context, location, uri, add_uri_to_alias, variables)
 }
 
 pub(super) fn parse_destination(
     request: &Request,
     context: &EffectiveConfig,
     location: Option<&LocationConfig>,
+    add_uri_to_alias: bool,
+    variables: &Variables,
 ) -> Result<Destination, u16> {
     let value = request.header("destination").ok_or(400_u16)?;
     let raw_path = destination_path(value, request).ok_or(400_u16)?;
     let raw_path = raw_path.split(['?', '#']).next().unwrap_or(raw_path);
     let uri = normalize_uri(raw_path).ok_or(400_u16)?;
     validate_alias_prefix(&uri, location, context)?;
-    let path = source_path(context, location, &uri);
+    let path = source_path(context, location, &uri, add_uri_to_alias, variables);
     Ok(Destination { uri, path })
 }
 
@@ -90,6 +94,7 @@ fn destination_path<'a>(value: &'a str, request: &Request) -> Option<&'a str> {
     let (_, rest) = value.split_once("://")?;
     let (authority, _) = rest.split_once('/')?;
     let host = request.host_without_port();
+    let host = host.as_ref();
     if !authority.eq_ignore_ascii_case(host)
         && !authority.get(host.len()..).is_some_and(|suffix| {
             authority[..host.len()].eq_ignore_ascii_case(host) && suffix.starts_with(':')

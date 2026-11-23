@@ -6,6 +6,7 @@ impl EffectiveConfig {
             prefix: prefix.to_path_buf(),
             root: prefix.join("html"),
             alias: None,
+            alias_uri_prefix: None,
             disable_symlinks: DisableSymlinksConfig::default(),
             early_hints: EarlyHintsConfig::default(),
             index: vec!["index.html".into()],

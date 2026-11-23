@@ -22,7 +22,7 @@ pub(super) fn apply_rule(
     }
     let captures = captures?;
     set_regex_captures(variables, &rule.regex, &captures);
-    let replacement = expand_captures(&rule.replacement, &captures, variables);
+    let replacement = expand_replacement(&rule.replacement, &captures, variables);
     let redirect_status = match rule.flag {
         RewriteFlag::Permanent => Some(301),
         RewriteFlag::Redirect => Some(302),
@@ -44,9 +44,14 @@ pub(super) fn apply_rule(
             Some(RewriteOutcome::Last)
         }
         RewriteFlag::Break => {
+            let old_uri = env.uri.clone();
+            let old_args = env.args.clone();
             update_uri(env, &replacement);
             log_rewritten_data(env, variables);
             *uri_changed = false;
+            if env.uri != old_uri || env.args != old_args {
+                env.valid_location = false;
+            }
             Some(RewriteOutcome::Break)
         }
         RewriteFlag::None => {
@@ -56,6 +61,21 @@ pub(super) fn apply_rule(
             None
         }
         RewriteFlag::Redirect | RewriteFlag::Permanent => unreachable!(),
+    }
+}
+
+fn expand_replacement(
+    replacement: &str,
+    captures: &crate::config::Captures<'_>,
+    variables: &Variables,
+) -> String {
+    match replacement.split_once('?') {
+        Some((path, args)) => format!(
+            "{}?{}",
+            expand_captures(path, captures, variables),
+            expand_captures_in_args(args, captures, variables)
+        ),
+        None => expand_captures(replacement, captures, variables),
     }
 }
 
@@ -108,6 +128,7 @@ fn update_uri(env: &mut RequestEnv, replacement: &str) {
 
 fn rewrite_redirect(status: u16, replacement: &str, original_args: &Option<String>) -> Response {
     let (location, args) = rewrite_destination(replacement, original_args);
+    let location = unescape_redirect_path(&location);
     let location = append_args(location, args);
     let body = format!(
         "<html><body>Redirecting to <a href=\"{replacement}\">{replacement}</a></body></html>"
@@ -115,6 +136,53 @@ fn rewrite_redirect(status: u16, replacement: &str, original_args: &Option<Strin
     let mut response = Response::html(status, body);
     response.set_header("Location", location);
     response
+}
+
+fn unescape_redirect_path(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            output.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        if index + 2 >= bytes.len() {
+            index += 1;
+            continue;
+        }
+        let Some(high) = hex_value(bytes[index + 1]) else {
+            index += 1;
+            continue;
+        };
+        let Some(low) = hex_value(bytes[index + 2]) else {
+            index += 1;
+            continue;
+        };
+        let decoded = (high << 4) | low;
+        if decoded == b'?' {
+            output.push(decoded);
+            output.extend_from_slice(&bytes[index + 3..]);
+            break;
+        }
+        if decoded > b'%' && decoded < 0x7f {
+            output.push(decoded);
+        } else {
+            output.extend_from_slice(&bytes[index..index + 3]);
+        }
+        index += 3;
+    }
+    String::from_utf8_lossy(&output).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 pub(in crate::server) fn rewrite_destination(
@@ -131,10 +199,16 @@ pub(in crate::server) fn rewrite_destination(
         };
     }
     match replacement.split_once('?') {
-        Some((path, args)) => (
-            path.to_string(),
-            (!args.is_empty()).then(|| args.to_string()),
-        ),
+        Some((path, args)) => {
+            let args = match original_args.as_deref() {
+                Some(original) if !original.is_empty() && !args.is_empty() => {
+                    Some(format!("{args}&{original}"))
+                }
+                Some(original) if !original.is_empty() => Some(original.to_string()),
+                _ => (!args.is_empty()).then(|| args.to_string()),
+            };
+            (path.to_string(), args)
+        }
         None => (replacement.to_string(), original_args.clone()),
     }
 }
@@ -143,7 +217,7 @@ pub(in crate::server) fn append_args(mut target: String, args: Option<String>) -
     if let Some(args) = args
         && !args.is_empty()
     {
-        target.push('?');
+        target.push(if target.contains('?') { '&' } else { '?' });
         target.push_str(&args);
     }
     target
@@ -154,6 +228,7 @@ pub(in crate::server) fn apply_return(
     value: Option<&str>,
     variables: &Variables,
     request: &Request,
+    context: &EffectiveConfig,
 ) -> Response {
     let value = value.map(|value| eval_variables(value, variables));
     if matches!(status, 301 | 302 | 303 | 307 | 308) {
@@ -172,12 +247,22 @@ pub(in crate::server) fn apply_return(
     if status == 204 || status == 304 {
         return Response::empty(status);
     }
+    if status >= 400 && value.is_none() {
+        return error_response(status);
+    }
     let body = value.unwrap_or_default();
     if request.method.eq_ignore_ascii_case("HEAD") {
         let mut response = Response::new(status);
-        response.set_header("Content-Type", "text/plain");
+        response.set_header(
+            "Content-Type",
+            content_type(Path::new(request.path_and_query().0), context),
+        );
         response.set_header("Content-Length", body.len().to_string());
         return response;
     }
-    Response::bytes(status, "text/plain", body.into_bytes())
+    Response::bytes(
+        status,
+        &content_type(Path::new(request.path_and_query().0), context),
+        body.into_bytes(),
+    )
 }

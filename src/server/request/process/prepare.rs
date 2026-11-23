@@ -24,6 +24,7 @@ pub(super) async fn prepare_request(
 ) -> PrepareOutcome {
     let mut connection_guard = None;
     loop {
+        env.add_uri_to_alias = false;
         let mut server_context = Box::new(server.context.clone());
         let server_logger = variables.error_logger_for(&server_context);
         variables.set_variable_warning_context(&server_context, server_logger.clone());
@@ -58,7 +59,16 @@ pub(super) async fn prepare_request(
                 server_logger,
             ) {
                 RewriteOutcome::Response(response) => {
-                    return response_outcome(*server_context, *response);
+                    return rewrite_response_outcome(
+                        http,
+                        server,
+                        request,
+                        *response,
+                        *server_context,
+                        variables,
+                        depth,
+                    )
+                    .await;
                 }
                 RewriteOutcome::Last => {
                     if !consume_uri_change(&mut uri_changes) {
@@ -71,6 +81,11 @@ pub(super) async fn prepare_request(
         }
 
         let location = resolve_location(&server.locations, &env.uri);
+        if let Some((context, response)) =
+            location_auto_redirect(&server.locations, &env.uri, env.args.as_deref())
+        {
+            return response_outcome(context, response);
+        }
         set_location_captures(location, &env, variables);
         let mut context = Box::new(
             location
@@ -130,7 +145,10 @@ pub(super) async fn prepare_request(
         };
         match outcome {
             RewriteOutcome::Response(response) => {
-                return response_outcome(*context, *response);
+                return rewrite_response_outcome(
+                    http, server, request, *response, *context, variables, depth,
+                )
+                .await;
             }
             RewriteOutcome::Last => {
                 if !consume_uri_change(&mut uri_changes) {
@@ -153,10 +171,12 @@ pub(super) async fn prepare_request(
             && let Some(try_files) = &context.try_files
         {
             match resolve_try_files(try_files, &context, location, &env, variables).await {
-                TryFilesResult::Found(uri) => {
+                TryFilesResult::Found { uri, is_dir } => {
                     env.uri = uri;
                     env.unparsed_uri = None;
                     env.bypass_try_files = true;
+                    env.add_uri_to_alias =
+                        !is_dir && matches!(context.alias_uri_prefix.as_deref(), Some(""));
                 }
                 TryFilesResult::FallbackStatus(status) => {
                     let outcome = configured_error_page(
@@ -337,6 +357,58 @@ fn response_outcome(context: EffectiveConfig, response: Response) -> PrepareOutc
     PrepareOutcome::Response(Processed {
         response,
         context,
+        tunnel: false,
+    })
+}
+
+fn location_auto_redirect(
+    locations: &[LocationConfig],
+    uri: &str,
+    args: Option<&str>,
+) -> Option<(EffectiveConfig, Response)> {
+    for location in locations {
+        if let LocationMatcher::Prefix(prefix) | LocationMatcher::PrefixNoRegex(prefix) =
+            &location.matcher
+            && prefix.strip_suffix('/') == Some(uri)
+            && location_context_redirects_to_slash(&location.context)
+        {
+            let mut response = Response::empty(301);
+            response.set_header(
+                "Location",
+                append_args(format!("{uri}/"), args.map(str::to_string)),
+            );
+            return Some((location.context.clone(), response));
+        }
+        if let Some(redirect) = location_auto_redirect(&location.nested, uri, args) {
+            return Some(redirect);
+        }
+    }
+    None
+}
+
+fn location_context_redirects_to_slash(context: &EffectiveConfig) -> bool {
+    context.proxy_pass.is_some()
+        || context.fastcgi_pass.is_some()
+        || context.uwsgi_pass.is_some()
+        || context.scgi_pass.is_some()
+        || context.grpc.pass.is_some()
+        || context.memcached_pass.is_some()
+}
+
+async fn rewrite_response_outcome(
+    http: &HttpConfig,
+    server: &ServerConfig,
+    request: &Request,
+    response: Response,
+    context: EffectiveConfig,
+    variables: &mut Variables,
+    depth: usize,
+) -> PrepareOutcome {
+    let outcome =
+        configured_error_page(http, server, request, response, &context, variables, depth).await;
+    PrepareOutcome::Response(Processed {
+        response: outcome.response,
+        context: outcome.context,
         tunnel: false,
     })
 }

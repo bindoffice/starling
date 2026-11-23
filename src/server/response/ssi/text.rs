@@ -78,6 +78,26 @@ pub(super) fn lookup_variable(name: &str, state: &State, variables: &Variables) 
     {
         return Some(value.clone());
     }
+    if let Some(argument) = name.strip_prefix("arg_")
+        && !variables.args.split('&').any(|value| {
+            value
+                .split_once('=')
+                .map_or(value, |(name, _)| name)
+                .eq_ignore_ascii_case(argument)
+        })
+    {
+        return None;
+    }
+    if let Some(header) = name.strip_prefix("http_") {
+        let header = header.replace('_', "-");
+        if !variables
+            .headers
+            .iter()
+            .any(|value| value.name.eq_ignore_ascii_case(&header))
+        {
+            return None;
+        }
+    }
     let mut stack = Vec::new();
     Some(variable_value(name, variables, &mut stack))
 }
@@ -125,7 +145,7 @@ pub(super) fn url_encode(value: &str) -> String {
     output
 }
 
-fn format_timestamp(format: &str, gmt: bool) -> String {
+pub(super) fn format_timestamp(format: &str, gmt: bool) -> String {
     if format == "%s" {
         return std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

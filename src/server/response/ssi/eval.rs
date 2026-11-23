@@ -149,13 +149,9 @@ fn echo(tag: &SsiTag, runtime: &Runtime<'_>, state: &mut State) -> Result<Vec<u8
     if state.variables.get(name).is_some_and(String::is_empty) {
         return Ok(Vec::new());
     }
-    let value = lookup_variable(name, state, runtime.variables);
-    let value = match value {
-        Some(value) if !value.is_empty() => Some(value),
-        Some(_) | None => param(tag, "default").map(str::to_string),
-    };
-    let Some(value) = value else {
-        return Ok(b"(none)".to_vec());
+    let value = match lookup_variable(name, state, runtime.variables) {
+        Some(value) => value,
+        None => param(tag, "default").map_or_else(|| "(none)".into(), str::to_string),
     };
     if value.is_empty() {
         return Ok(Vec::new());

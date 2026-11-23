@@ -135,7 +135,12 @@ fn parse_tag(input: &[u8], value_length: u64) -> Option<SsiTag> {
             cursor += character.len_utf8();
             if character == '\\' {
                 let next = input[cursor..].chars().next()?;
-                value.push(next);
+                if next == '\\' || next as u32 == u32::from(quote) {
+                    value.push(next);
+                } else {
+                    value.push('\\');
+                    value.push(next);
+                }
                 cursor += next.len_utf8();
                 continue;
             }
@@ -190,6 +195,18 @@ mod tests {
         };
         assert_eq!(tag.as_ref().unwrap().params[0].value, "a-->");
         assert_eq!(raw, br#"<!--# echo var="a-->" -->"#);
+    }
+
+    #[test]
+    fn preserves_unknown_escape_sequences_in_parameter_values() {
+        let segments = parse(br#"<!--# if expr="$value = /CAP\d+/" -->x"#, 255);
+        let Segment::Directive { tag, .. } = &segments[0] else {
+            panic!("expected directive");
+        };
+        assert_eq!(
+            tag.as_ref().unwrap().params[0].value,
+            r#"$value = /CAP\d+/"#
+        );
     }
 
     #[test]

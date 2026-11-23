@@ -83,3 +83,39 @@ async fn exposes_upstream_and_sent_response_header_variables() {
     backend.await.unwrap();
     let _ = std::fs::remove_dir_all(prefix);
 }
+
+#[tokio::test]
+async fn omits_empty_add_header_values_like_nginx() {
+    let (prefix, config) = test_config(
+        r#"
+            worker_processes 1;
+            events { worker_connections 64; }
+            http {
+                server {
+                    listen 127.0.0.1:18499;
+                    location / {
+                        add_header X-Empty $request_body;
+                        add_header X-Empty-Always $request_body always;
+                        add_header ETag original;
+                        add_header ETag "";
+                        add_header X-Present present;
+                        return 200 "ok\n";
+                    }
+                }
+            }
+        "#,
+        &[],
+    );
+
+    let response = request_body(
+        &config,
+        "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(!response.contains("X-Empty:"), "{response}");
+    assert!(!response.contains("X-Empty-Always:"), "{response}");
+    assert!(!response.contains("ETag:"), "{response}");
+    assert!(response.contains("X-Present: present\r\n"), "{response}");
+
+    let _ = std::fs::remove_dir_all(prefix);
+}

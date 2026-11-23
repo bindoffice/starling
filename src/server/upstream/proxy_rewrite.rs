@@ -430,7 +430,9 @@ pub(in crate::server) fn proxy_path(
     location: Option<&LocationConfig>,
     variables: &Variables,
 ) -> String {
-    let mut path = if let Some(uri) = &proxy.uri {
+    let mut path = if !env.valid_location {
+        utf8_percent_encode(&env.uri, PROXY_PATH_ENCODE_SET).to_string()
+    } else if let Some(uri) = &proxy.uri {
         let uri = eval_variables(uri, variables);
         if uri.contains('$') {
             uri

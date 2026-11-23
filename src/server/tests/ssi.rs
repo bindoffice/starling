@@ -137,6 +137,98 @@ async fn supports_blocks_and_include_set() {
 }
 
 #[tokio::test]
+async fn processes_return_bodies_with_rewritten_http_variables() {
+    let (prefix, config) = test_config(
+        r#"
+                worker_processes 1;
+                events { worker_connections 64; }
+                http {
+                    server {
+                        listen 127.0.0.1:18196;
+                        location = /return.html {
+                            ssi on;
+                            set $http_foo "set-value";
+                            return 200 'foo=<!--# echo var="http_foo" -->;connection=<!--# echo var="http_connection" -->';
+                        }
+                    }
+                }
+            "#,
+        &[],
+    );
+
+    let response = request_bytes(
+        &config,
+        "GET /return.html HTTP/1.1\r\nHost: localhost\r\nFoo: incoming-value\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let (headers, body) = split_http_response(&response);
+    assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"), "{headers}");
+    assert!(headers.contains("Content-Type: text/html"), "{headers}");
+    assert_eq!(
+        String::from_utf8_lossy(body),
+        "foo=set-value;connection=close"
+    );
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
+async fn distinguishes_empty_arguments_and_exposes_dates_and_regex_captures() {
+    let (prefix, config) = test_config(
+        r#"
+                worker_processes 1;
+                events { worker_connections 64; }
+                http {
+                    server {
+                        listen 127.0.0.1:18197;
+                        root html;
+                        ssi on;
+                        location = /empty.html { }
+                        location = /capture.html { }
+                        location = /date.html {
+                            add_header X-Var x${date_gmt}x;
+                            return 200;
+                        }
+                    }
+                }
+            "#,
+        &[
+            ("html/empty.html", "X<!--#echo var=\"arg_test\" -->X"),
+            (
+                "html/capture.html",
+                "x<!--#if expr=\"$arg_v = /(CAP\\d).*(CAP\\d)/\" --><!--#echo var=\"1\" -->x<!--#echo var=\"2\" --><!--#endif -->x",
+            ),
+        ],
+    );
+
+    let empty = request_bytes(
+        &config,
+        "GET /empty.html?test= HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let (_, body) = split_http_response(&empty);
+    assert_eq!(String::from_utf8_lossy(body), "XX");
+
+    let captures = request_bytes(
+        &config,
+        "GET /capture.html?v=hereCAP1andCAP2 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let (_, body) = split_http_response(&captures);
+    assert_eq!(String::from_utf8_lossy(body), "xCAP1xCAP2x");
+
+    let date = request_bytes(
+        &config,
+        "GET /date.html HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let (headers, _) = split_http_response(&date);
+    assert!(headers.contains("X-Var: x"), "{headers}");
+    assert!(headers.contains(','), "{headers}");
+    assert!(headers.contains(" GMTx"), "{headers}");
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
 async fn handles_errors_and_last_modified_policy() {
     let (prefix, config) = test_config(
         r#"

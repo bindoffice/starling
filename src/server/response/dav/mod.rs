@@ -13,6 +13,7 @@ pub(in crate::server) async fn serve_dav(
     env: &RequestEnv,
     context: &EffectiveConfig,
     location: Option<&LocationConfig>,
+    variables: &Variables,
 ) -> Option<Response> {
     let method = match request.method.as_str() {
         "PUT" => DavMethod::Put,
@@ -26,14 +27,14 @@ pub(in crate::server) async fn serve_dav(
         return None;
     }
     Some(match method {
-        DavMethod::Put => put::handle(request, env, context, location).await,
-        DavMethod::Delete => delete::handle(request, env, context, location).await,
-        DavMethod::MkCol => mkcol::handle(request, env, context, location).await,
+        DavMethod::Put => put::handle(request, env, context, location, variables).await,
+        DavMethod::Delete => delete::handle(request, env, context, location, variables).await,
+        DavMethod::MkCol => mkcol::handle(request, env, context, location, variables).await,
         DavMethod::Copy => {
-            copy_move::handle(request, env, context, location, DavMethod::Copy).await
+            copy_move::handle(request, env, context, location, variables, DavMethod::Copy).await
         }
         DavMethod::Move => {
-            copy_move::handle(request, env, context, location, DavMethod::Move).await
+            copy_move::handle(request, env, context, location, variables, DavMethod::Move).await
         }
     })
 }

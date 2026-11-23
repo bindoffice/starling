@@ -57,9 +57,9 @@ pub(in crate::server) async fn dispatch_http_request(
         .into_iter()
         .find(|candidate| candidate.address == group.address)
         .unwrap_or_else(|| group.clone());
-    let server = select_server(http, &active_group, request.host_without_port());
+    let server = select_server(http, &active_group, &request.host_without_port());
     let mut request = request.clone();
-    if !server.context.underscores_in_headers {
+    if server.context.ignore_invalid_headers && !server.context.underscores_in_headers {
         request
             .headers
             .retain(|header| !header.name.as_bytes().contains(&b'_'));
@@ -130,8 +130,10 @@ pub(in crate::server) async fn dispatch_http_request(
         uri: String::from("/"),
         args: None,
         unparsed_uri: None,
+        valid_location: true,
         internal: false,
         bypass_try_files: false,
+        add_uri_to_alias: false,
         limits_checked: false,
         auth_request_checked: false,
         mirror_checked: false,

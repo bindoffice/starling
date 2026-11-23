@@ -31,6 +31,7 @@ fn variable_expansion_supports_braces_and_headers() {
             prefix: PathBuf::new(),
             root: PathBuf::new(),
             alias: None,
+            alias_uri_prefix: None,
             disable_symlinks: crate::config::DisableSymlinksConfig::default(),
             early_hints: crate::config::EarlyHintsConfig::default(),
             index: Vec::new(),

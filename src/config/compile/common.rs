@@ -64,6 +64,7 @@ pub(super) fn apply_common_directive(
             validate_no_block(directive)?;
             context.root = resolve_path(prefix, one_arg(directive)?);
             context.alias = None;
+            context.alias_uri_prefix = None;
         }
         "alias" => {
             validate_no_block(directive)?;

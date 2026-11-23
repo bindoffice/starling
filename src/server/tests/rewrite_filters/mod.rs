@@ -1,6 +1,7 @@
 use super::support::*;
 use super::*;
 
+mod compat;
 mod gzip;
 mod if_loc_conf;
 mod logging;

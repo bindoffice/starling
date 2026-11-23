@@ -137,7 +137,6 @@ pub(super) fn compile_location(
 ) -> ConfigResult<LocationConfig> {
     let matcher = parse_location_matcher(directive)?;
     let mut context = parent.clone();
-    context.alias = None;
     context.internal = false;
     context.flv = false;
     context.return_directive = None;
@@ -184,6 +183,18 @@ pub(super) fn compile_location(
         }
     }
     finalize_scope_directives(&mut context, &mut seen);
+    if directive.children.iter().any(|child| child.name == "alias") {
+        context.alias_uri_prefix = match &matcher {
+            LocationMatcher::Exact(path)
+            | LocationMatcher::Prefix(path)
+            | LocationMatcher::PrefixNoRegex(path) => Some(path.clone()),
+            LocationMatcher::Regex(_) => Some(String::new()),
+            LocationMatcher::Named(_) => None,
+        };
+    }
+    if context.alias.is_none() {
+        context.alias_uri_prefix = None;
+    }
     validate_upstream_buffering(&context, &directive.location)?;
     validate_charset_map(&context, &directive.location)?;
     compile_rewrite_script(&rewrite_directives, &mut context, prefix, Scope::Location)?;

@@ -13,12 +13,16 @@ pub fn normalize_uri(path: &str) -> Option<String> {
 }
 
 pub fn normalize_uri_with_merge(path: &str, merge_slashes: bool) -> Option<String> {
+    if path.bytes().any(|byte| byte.is_ascii_control()) || !valid_percent_escapes(path) {
+        return None;
+    }
     let decoded = percent_encoding::percent_decode_str(path)
         .decode_utf8()
         .ok()?;
     if decoded.contains('\0') {
         return None;
     }
+    let trailing_segment = decoded.rsplit('/').next()?;
     let mut parts = Vec::new();
     for (index, part) in decoded.split('/').enumerate() {
         match part {
@@ -32,10 +36,30 @@ pub fn normalize_uri_with_merge(path: &str, merge_slashes: bool) -> Option<Strin
     }
     let mut normalized = String::from("/");
     normalized.push_str(&parts.join("/"));
-    if merge_slashes && decoded.ends_with('/') && normalized != "/" {
+    let trailing_slash = decoded.ends_with('/') || matches!(trailing_segment, "." | "..");
+    if trailing_slash && normalized != "/" && !normalized.ends_with('/') {
         normalized.push('/');
     }
     Some(normalized)
+}
+
+fn valid_percent_escapes(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len()
+                || !bytes[index + 1].is_ascii_hexdigit()
+                || !bytes[index + 2].is_ascii_hexdigit()
+            {
+                return false;
+            }
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+    true
 }
 
 pub fn split_uri(target: &str) -> (&str, Option<&str>) {

@@ -59,7 +59,7 @@ async fn applies_invalid_header_policy_from_the_selected_server() {
                     listen 127.0.0.1:18486;
                     server_name strict.test;
                     ignore_invalid_headers off;
-                    location / { return 200 "strict\n"; }
+                    location / { return 200 "bad=$http_x_bad\n"; }
                 }
             }
         "#,
@@ -79,10 +79,8 @@ async fn applies_invalid_header_policy_from_the_selected_server() {
         "GET / HTTP/1.1\r\nHost: strict.test\r\nX_Bad: rejected\r\nConnection: close\r\n\r\n",
     )
     .await;
-    assert!(
-        strict.starts_with("HTTP/1.1 400 Bad Request\r\n"),
-        "{strict}"
-    );
+    assert!(strict.starts_with("HTTP/1.1 200 OK\r\n"), "{strict}");
+    assert!(strict.ends_with("bad=rejected\n"), "{strict}");
 
     let _ = std::fs::remove_dir_all(prefix);
 }

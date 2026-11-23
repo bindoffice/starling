@@ -93,9 +93,12 @@ pub(in crate::server) async fn process_named_location(
     context.rewrite_actions = actions;
     match outcome {
         RewriteOutcome::Response(response) => {
+            let outcome =
+                configured_error_page(http, server, request, *response, &context, variables, depth)
+                    .await;
             return Some(Processed {
-                response: *response,
-                context: *context,
+                response: outcome.response,
+                context: outcome.context,
                 tunnel: false,
             });
         }
@@ -134,6 +137,44 @@ pub(in crate::server) async fn process_named_location(
         });
     }
     start_mirror_requests(http, server, request, &mut env, &context, variables, depth);
+    match resolve_index(&env, &context, Some(location), variables).await {
+        IndexDecision::None => {}
+        IndexDecision::Response(response) => {
+            return Some(Processed {
+                response,
+                context: *context,
+                tunnel: false,
+            });
+        }
+        IndexDecision::Redirect(uri) => {
+            if !consume_uri_change(&mut uri_changes) {
+                return Some(Processed {
+                    response: error_response(500),
+                    context: *context,
+                    tunnel: false,
+                });
+            }
+            env.uri = uri;
+            env.unparsed_uri = None;
+            env.valid_location = true;
+            env.internal = true;
+            env.bypass_try_files = true;
+            variables.uri = env.uri.clone();
+            return Some(
+                Box::pin(process_request_inner(
+                    http,
+                    server,
+                    request,
+                    env,
+                    variables,
+                    depth + 1,
+                    false,
+                    uri_changes,
+                ))
+                .await,
+            );
+        }
+    }
     if context.stub_status {
         return Some(Processed {
             response: stub_status_response(request, variables),

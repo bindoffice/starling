@@ -5,12 +5,19 @@ pub(super) async fn handle(
     env: &RequestEnv,
     context: &EffectiveConfig,
     location: Option<&LocationConfig>,
+    variables: &Variables,
     method: DavMethod,
 ) -> Response {
     if path::request_has_body(request) {
         return error::status(415);
     }
-    let destination = match path::parse_destination(request, context, location) {
+    let destination = match path::parse_destination(
+        request,
+        context,
+        location,
+        env.add_uri_to_alias,
+        variables,
+    ) {
         Ok(destination) => destination,
         Err(status) => return error::status(status),
     };
@@ -33,7 +40,7 @@ pub(super) async fn handle(
         Some(_) => return error::status(400),
     };
 
-    let source = path::source_path(context, location, &env.uri);
+    let source = path::source_path(context, location, &env.uri, env.add_uri_to_alias, variables);
     if path::same_or_descendant(&source, &destination.path) {
         return error::status(403);
     }

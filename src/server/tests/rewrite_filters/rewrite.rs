@@ -53,7 +53,7 @@ async fn handles_rewrite_arguments_and_captures() {
         "GET /explicit/item?x=1 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
     )
     .await;
-    assert!(explicit.ends_with("/seen/item|from=rewrite\n"));
+    assert!(explicit.ends_with("/seen/item|from=rewrite&x=1\n"));
 
     let redirect = request_body(
         &config,

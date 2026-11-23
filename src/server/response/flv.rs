@@ -13,7 +13,13 @@ pub(in crate::server) async fn serve_flv(
         return None;
     }
 
-    let path = map_request_path(context, selected_location, &env.uri);
+    let path = map_request_path(
+        context,
+        selected_location,
+        &env.uri,
+        env.add_uri_to_alias,
+        variables,
+    );
     if let Err(status) = check_path_access(&path, context, variables).await {
         return Some(error_response(status));
     }

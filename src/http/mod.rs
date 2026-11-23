@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::io;
 use std::path::PathBuf;
@@ -44,46 +45,47 @@ impl Request {
         self.header("host").unwrap_or_default()
     }
 
-    pub fn host_without_port(&self) -> &str {
+    pub fn host_without_port(&self) -> Cow<'_, str> {
         if self.method == "CONNECT"
             && let Some((host, _)) = parse_connect_authority(&self.target)
         {
-            return host;
+            return normalize_host(host);
         }
-        let host = self.host();
+        let host = self.absolute_authority().unwrap_or_else(|| self.host());
         if let Some(rest) = host.strip_prefix('[') {
-            return rest
+            let literal = rest
                 .split_once(']')
                 .map(|(address, _)| &host[..address.len() + 2])
                 .unwrap_or(host);
+            return lowercase_host(literal);
         }
-        host.split_once(':').map(|(name, _)| name).unwrap_or(host)
+        let host = host.split_once(':').map(|(name, _)| name).unwrap_or(host);
+        normalize_host(host)
     }
 
     pub fn request_port(&self) -> Option<u16> {
         if self.method == "CONNECT" {
             return parse_connect_authority(&self.target).map(|(_, port)| port);
         }
-        let target = self
-            .target
-            .strip_prefix("http://")
-            .or_else(|| self.target.strip_prefix("https://"))?;
-        let authority = target
-            .split_once('/')
-            .map_or(target, |(authority, _)| authority);
+        let authority = self.absolute_authority()?;
         parse_connect_authority(authority).map(|(_, port)| port)
     }
 
     pub fn path_and_query(&self) -> (&str, Option<&str>) {
-        let target = if self.target.starts_with("http://") || self.target.starts_with("https://") {
-            self.target
-                .find("://")
-                .and_then(|scheme_end| {
-                    self.target[scheme_end + 3..]
-                        .find('/')
-                        .map(|path| &self.target[scheme_end + 3 + path..])
-                })
-                .unwrap_or("/")
+        if let Some(rest) = absolute_target_rest(&self.target) {
+            let fragment = rest.find('#').unwrap_or(rest.len());
+            let target = &rest[..fragment];
+            let query_at = target.find('?');
+            let path_end = query_at.unwrap_or(target.len());
+            let path = target[..path_end]
+                .find('/')
+                .map(|start| &target[start..path_end])
+                .unwrap_or("/");
+            let query = query_at.map(|index| &target[index + 1..]);
+            return (path, query);
+        }
+        let target = if let Some(fragment) = self.target.find('#') {
+            &self.target[..fragment]
         } else {
             self.target.as_str()
         };
@@ -91,6 +93,10 @@ impl Request {
             Some((path, query)) => (path, Some(query)),
             None => (target, None),
         }
+    }
+
+    fn absolute_authority(&self) -> Option<&str> {
+        absolute_target_authority(&self.target)
     }
 
     pub fn has_request_body(&self) -> bool {
@@ -117,6 +123,38 @@ impl Request {
         self.body_file()
             .map(|file| file.len())
             .unwrap_or(self.body.len() as u64)
+    }
+}
+
+fn absolute_target_rest(target: &str) -> Option<&str> {
+    target
+        .get(..7)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("http://"))
+        .map(|_| &target[7..])
+        .or_else(|| {
+            target
+                .get(..8)
+                .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
+                .map(|_| &target[8..])
+        })
+}
+
+pub(in crate::http) fn absolute_target_authority(target: &str) -> Option<&str> {
+    let rest = absolute_target_rest(target)?;
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+fn normalize_host(host: &str) -> Cow<'_, str> {
+    let host = host.strip_suffix('.').unwrap_or(host);
+    lowercase_host(host)
+}
+
+fn lowercase_host(host: &str) -> Cow<'_, str> {
+    if host.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        Cow::Owned(host.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(host)
     }
 }
 

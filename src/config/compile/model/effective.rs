@@ -54,6 +54,7 @@ pub struct EffectiveConfig {
     pub prefix: PathBuf,
     pub root: PathBuf,
     pub alias: Option<PathBuf>,
+    pub alias_uri_prefix: Option<String>,
     pub disable_symlinks: DisableSymlinksConfig,
     pub early_hints: EarlyHintsConfig,
     pub index: Vec<String>,

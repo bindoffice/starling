@@ -2,6 +2,7 @@ use super::*;
 
 pub(in crate::server) fn condition_matches(
     condition: &Condition,
+    context: &EffectiveConfig,
     variables: &mut Variables,
 ) -> bool {
     match condition {
@@ -44,13 +45,16 @@ pub(in crate::server) fn condition_matches(
             path,
             negate,
         } => {
-            let path = eval_variables(path, variables);
-            let metadata = std::fs::metadata(&path);
+            let path_value = eval_variables(path, variables);
+            let path = Path::new(&path_value);
+            let metadata = check_path_access_sync(path, context, variables)
+                .ok()
+                .and_then(|()| std::fs::metadata(path).ok());
             let matches = match operation {
-                FileTest::Exists => metadata.is_ok(),
-                FileTest::File => metadata.is_ok_and(|metadata| metadata.is_file()),
-                FileTest::Directory => metadata.is_ok_and(|metadata| metadata.is_dir()),
-                FileTest::Executable => executable(&path),
+                FileTest::Exists => metadata.is_some(),
+                FileTest::File => metadata.is_some_and(|metadata| metadata.is_file()),
+                FileTest::Directory => metadata.is_some_and(|metadata| metadata.is_dir()),
+                FileTest::Executable => executable(&path_value),
             };
             if *negate { !matches } else { matches }
         }

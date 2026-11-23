@@ -129,7 +129,7 @@ pub(super) async fn serve_content(
         memcached_request(memcached_pass, http, request, context, variables).await
     } else if let Some(proxy) = &context.proxy_pass {
         proxy_request(proxy, http, request, env, location, context, variables).await
-    } else if let Some(response) = serve_dav(request, env, context, location).await {
+    } else if let Some(response) = serve_dav(request, env, context, location, variables).await {
         response
     } else {
         serve_static(request, env, context, location, variables)

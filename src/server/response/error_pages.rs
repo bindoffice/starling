@@ -8,9 +8,15 @@ pub(in crate::server) async fn resolve_try_files(
     variables: &Variables,
 ) -> TryFilesResult {
     for candidate in &try_files.candidates {
+        let test_dir = candidate.ends_with('/') && candidate.len() > 1;
+        let candidate = if test_dir {
+            &candidate[..candidate.len() - 1]
+        } else {
+            candidate.as_str()
+        };
         let candidate = eval_variables(candidate, variables);
         let uri = if candidate.starts_with('/') {
-            candidate
+            candidate.to_string()
         } else {
             let parent = env
                 .uri
@@ -20,14 +26,27 @@ pub(in crate::server) async fn resolve_try_files(
             format!("{parent}/{candidate}")
         };
         let normalized = normalize_uri(&uri).unwrap_or(uri);
-        let path = map_request_path(context, location, &normalized);
+        let path = map_request_path(
+            context,
+            location,
+            &normalized,
+            matches!(context.alias_uri_prefix.as_deref(), Some("")),
+            variables,
+        );
         if check_path_access(&path, context, variables).await.is_err() {
             continue;
         }
         if let Ok(metadata) = tokio::fs::metadata(&path).await
-            && (metadata.is_file() || metadata.is_dir())
+            && if test_dir {
+                metadata.is_dir()
+            } else {
+                metadata.is_file()
+            }
         {
-            return TryFilesResult::Found(normalized);
+            return TryFilesResult::Found {
+                uri: normalized,
+                is_dir: test_dir,
+            };
         }
     }
     let fallback = eval_variables(&try_files.fallback, variables);
@@ -73,6 +92,7 @@ pub(in crate::server) async fn configured_error_page(
         };
     }
     let auth_challenges = preserved_auth_challenges(&response);
+    let redirect_location = response.header("Location").map(str::to_string);
     // Nginx sets r->error_page before searching and keeps it request-scoped.
     if !context.recursive_error_pages {
         variables.error_page = true;
@@ -105,6 +125,11 @@ pub(in crate::server) async fn configured_error_page(
         redirected
             .response
             .add_header(&challenge.name, challenge.value);
+    }
+    if redirected.response.header("Location").is_none()
+        && let Some(location) = redirect_location
+    {
+        redirected.response.set_header("Location", location);
     }
     redirected.response.set_early_hints(early_hints);
     ErrorPageOutcome {
@@ -150,8 +175,10 @@ async fn follow_error_page(
             uri: variables.uri.clone(),
             args: None,
             unparsed_uri: None,
+            valid_location: true,
             internal: true,
             bypass_try_files: true,
+            add_uri_to_alias: false,
             limits_checked: true,
             auth_request_checked: true,
             mirror_checked: true,
@@ -193,8 +220,10 @@ async fn follow_error_page(
         uri,
         args,
         unparsed_uri: None,
+        valid_location: true,
         internal: true,
         bypass_try_files: false,
+        add_uri_to_alias: false,
         limits_checked: true,
         auth_request_checked: true,
         mirror_checked: true,
@@ -237,7 +266,8 @@ pub(in crate::server) fn apply_error_page_overwrite(
     original_status: u16,
 ) {
     response.status = match overwrite {
-        ErrorPageOverwrite::Preserve => original_status,
+        ErrorPageOverwrite::Preserve if response.status < 300 => original_status,
+        ErrorPageOverwrite::Preserve => response.status,
         ErrorPageOverwrite::Response => response.status,
         ErrorPageOverwrite::Status(status) => status,
     };
