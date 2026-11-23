@@ -67,6 +67,7 @@ pub(in crate::server) async fn apply_addition(
     combined.extend_from_slice(&after);
     response.body = ResponseBody::Bytes(combined);
     response.remove_header("Accept-Ranges");
+    response.disable_ranges();
     response.set_content_length();
     weaken_etag(response);
 }

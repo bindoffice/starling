@@ -1,15 +1,17 @@
 use super::*;
 
-pub(in crate::server) fn apply_upstream_ranges(
+pub(in crate::server) fn enable_upstream_ranges(
     response: &mut Response,
-    request: &Request,
     force_ranges: bool,
     upstream: bool,
-    max_ranges: u64,
-) -> Option<Response> {
-    if !upstream || !force_ranges || response.status != 200 {
-        return None;
+    cached: bool,
+) {
+    if !upstream || response.status != 200 {
+        return;
     }
-    let length = response.body_len();
-    apply_range(response, request, length, max_ranges)
+    if force_ranges {
+        response.enable_ranges(!cached);
+    } else if cached && response.header("Accept-Ranges").is_some() {
+        response.enable_ranges(false);
+    }
 }

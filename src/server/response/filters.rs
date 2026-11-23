@@ -56,7 +56,10 @@ pub(in crate::server) async fn maybe_gzip(
         return;
     };
     response.body = ResponseBody::Bytes(compressed);
-    response.set_content_length();
+    response.disable_ranges();
+    response.remove_header("Content-Length");
+    response.remove_header("Accept-Ranges");
+    response.expect_chunked();
     response.set_header("Content-Encoding", "gzip");
     if context.gzip_vary {
         let vary = response

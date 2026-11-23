@@ -221,15 +221,12 @@ pub(in crate::server) async fn process_named_location(
         sync_upstream_response_variables(variables, &processed.response);
         return Some(processed);
     }
-    if let Some(ranged) = apply_upstream_ranges(
+    enable_upstream_ranges(
         &mut response,
-        request,
         content.force_ranges(&context),
         content.upstream(),
-        context.max_ranges,
-    ) {
-        response = ranged;
-    }
+        cache_status_is_hit(&variables.upstream_cache_status),
+    );
     sync_upstream_response_variables(variables, &response);
     Some(Processed {
         response,

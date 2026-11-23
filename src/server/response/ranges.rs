@@ -6,6 +6,33 @@ mod parse;
 
 use parse::{ByteRange, ParsedRanges, parse_ranges};
 
+pub(in crate::server) fn apply_response_range(
+    response: &mut Response,
+    request: &Request,
+    max_ranges: u64,
+) {
+    if response.status != 200 || !response.allow_ranges || max_ranges == 0 {
+        return;
+    }
+    if response.body.is_stream() {
+        return;
+    }
+    let Some(length) = response.body.content_length() else {
+        return;
+    };
+    let range_requested = request.header("range").is_some();
+    let ranges = if response.single_range { 1 } else { max_ranges };
+    if let Some(ranged) = apply_range(response, request, length, ranges) {
+        *response = ranged;
+    }
+    if response.status == 200 {
+        if range_requested {
+            response.remove_header("Content-Range");
+        }
+        response.set_header("Accept-Ranges", "bytes");
+    }
+}
+
 pub(in crate::server) fn apply_range(
     response: &mut Response,
     request: &Request,
@@ -38,6 +65,7 @@ pub(in crate::server) fn apply_range(
 fn apply_single_range(response: &mut Response, range: ByteRange, length: u64) -> Option<Response> {
     let range_length = range.end - range.start;
     response.status = 206;
+    response.remove_header("Content-Range");
     response.set_header(
         "Content-Range",
         format!("bytes {}-{}/{length}", range.start, range.end - 1),

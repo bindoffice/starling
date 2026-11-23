@@ -35,6 +35,9 @@ pub(super) async fn store_response(
                     last_modified,
                     etag: etag.as_deref(),
                 },
+                charset: response
+                    .upstream_control()
+                    .and_then(|control| control.charset.as_deref()),
             },
         )
         .await?;

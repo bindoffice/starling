@@ -60,6 +60,10 @@ impl ProxyCachePlan {
     pub(in crate::server) fn allows_store(&self, request: &Request) -> bool {
         !self.no_store && range::allows_cache_store(request, self.max_range_offset)
     }
+
+    pub(in crate::server) fn would_store_now(&self) -> bool {
+        self.zone.would_note_use(&self.key, self.min_uses)
+    }
 }
 
 pub(in crate::server) fn proxy_cache_upstream_request(
@@ -128,13 +132,22 @@ fn proxy_response_from_cached_status(
         status: cached.status,
         headers: cached.headers,
         trailers: Vec::new(),
+        chunked_expected: false,
         body: cached.body,
         body_temp_file: None,
         upstream: None,
         builtin_error: false,
         msie_padding: false,
+        allow_ranges: false,
+        single_range: false,
     };
+    if let Some(charset) = cached.charset {
+        response.upstream_control_mut().charset = Some(charset);
+    }
     response.set_content_length();
+    if response.header("Accept-Ranges").is_some() {
+        response.enable_ranges(false);
+    }
     variables.upstream_cache_status = cache_status.into();
     variables.upstream_status = response.status.to_string();
     response
@@ -149,6 +162,12 @@ pub(in crate::server) fn proxy_cache_use_stale_on_failure(
         ProxyFailure::Timeout => config.timeout(),
         ProxyFailure::InvalidHeader => config.invalid_header(),
         ProxyFailure::RequestBody(_) => false,
+    }
+}
+
+pub(in crate::server) fn mark_cache_fill_ranges(response: &mut Response) {
+    if response.status == 200 && response.header("Accept-Ranges").is_some() {
+        response.enable_ranges(true);
     }
 }
 
@@ -199,7 +218,6 @@ fn upstream_cache_validity_parts(
         control.redirect.is_some()
             || control.limit_rate.is_some()
             || control.buffering == Some(AccelBuffering::No)
-            || control.charset.is_some()
             || !control.early_hints.is_empty()
     });
     if status == 206 || has_trailers || has_control {
@@ -256,9 +274,8 @@ pub(in crate::server) fn configured_validity(
 ) -> Option<Duration> {
     rules
         .iter()
-        .filter(|rule| rule.statuses.contains(&status))
+        .find(|rule| rule.statuses.contains(&0) || rule.statuses.contains(&status))
         .map(|rule| rule.valid)
-        .max()
 }
 
 pub(in crate::server) fn configured_cache_validity(
@@ -295,5 +312,51 @@ fn cache_proxy_host(proxy: &ProxyPassConfig, variables: &Variables) -> String {
         host
     } else {
         format!("{host}:{}", proxy.port)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn configured_validity_uses_the_first_matching_rule_and_any_fallback() {
+        let rules = vec![
+            ProxyCacheValid {
+                statuses: vec![200],
+                valid: Duration::from_secs(10),
+            },
+            ProxyCacheValid {
+                statuses: vec![0],
+                valid: Duration::from_secs(60),
+            },
+        ];
+        assert_eq!(
+            configured_validity(&rules, 200),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(
+            configured_validity(&rules, 404),
+            Some(Duration::from_secs(60))
+        );
+    }
+
+    #[test]
+    fn configured_validity_preserves_nginx_first_match_order() {
+        let rules = vec![
+            ProxyCacheValid {
+                statuses: vec![0],
+                valid: Duration::from_secs(60),
+            },
+            ProxyCacheValid {
+                statuses: vec![200],
+                valid: Duration::from_secs(10),
+            },
+        ];
+        assert_eq!(
+            configured_validity(&rules, 200),
+            Some(Duration::from_secs(60))
+        );
     }
 }

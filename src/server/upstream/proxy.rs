@@ -143,7 +143,12 @@ pub(in crate::server) async fn proxy_request(
     // A HEAD-to-GET cache fill has no downstream body reader, and a background
     // refresh has no downstream reader at all. Buffer in both cases so the
     // cache tee is not dropped with the response stream.
-    let streaming_allowed = !variables.proxy_cache_background && !cache_head_conversion;
+    let strip_cache_headers = request.header("range").is_some()
+        && cache
+            .as_ref()
+            .is_some_and(|plan| cache_store_allowed && !plan.bypass && plan.would_store_now());
+    let streaming_allowed =
+        !variables.proxy_cache_background && !cache_head_conversion && !strip_cache_headers;
     let targets = resolve_proxy_targets(proxy, http, variables, request_peer(request));
     let mut attempted = Vec::new();
     let mut last_failure = ProxyFailure::Failure;
@@ -174,6 +179,7 @@ pub(in crate::server) async fn proxy_request(
                 keepalive: keepalive.as_ref(),
                 revalidation: revalidation.as_ref(),
                 streaming_allowed,
+                strip_cache_headers,
             },
         )
         .await

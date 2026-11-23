@@ -13,11 +13,12 @@ pub(super) fn cached_lookup_response(
 
 pub(super) async fn store_proxy_cache_response(
     plan: &ProxyCachePlan,
-    response: Response,
+    mut response: Response,
     validity: CacheValidity,
     guard: Option<CacheLockGuard>,
     context: &EffectiveConfig,
 ) -> Response {
+    mark_cache_fill_ranges(&mut response);
     if intercepts_upstream_status(
         response.status,
         context.proxy_intercept_errors,

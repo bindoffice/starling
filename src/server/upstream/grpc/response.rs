@@ -19,11 +19,14 @@ pub(in crate::server) fn finalize_grpc_response(
         status: upstream.status,
         headers: upstream.headers,
         trailers: upstream.trailers,
+        chunked_expected: false,
         body,
         body_temp_file: upstream.body_temp_file.take(),
         upstream: None,
         builtin_error: false,
         msie_padding: false,
+        allow_ranges: false,
+        single_range: false,
     };
     filter_gateway_response_headers(
         &mut response,

@@ -366,6 +366,7 @@ pub(in crate::server) async fn dispatch_http_request(
     if conditional == ConditionalResult::NotModified {
         finalize_not_modified(&mut response);
     }
+    apply_response_range(&mut response, &request, processed.context.max_ranges);
     apply_response_trailers(&mut response, &processed.context, &request, &mut variables);
     let keep_alive = should_keep_alive(
         &request,

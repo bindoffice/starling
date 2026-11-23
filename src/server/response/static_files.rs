@@ -32,8 +32,7 @@ pub(in crate::server) async fn gzip_static_candidate(
     if context.gzip_static == GzipStatic::On && !accepts_gzip {
         return GzipStaticCandidate::Declined { vary: true };
     }
-    let Ok(mut response) =
-        crate::http::file_response(compressed_path, content_type(path, context), metadata.len())
+    let Ok(mut response) = crate::http::file_response(compressed_path, content_type(path, context))
     else {
         return GzipStaticCandidate::Off;
     };
@@ -41,7 +40,7 @@ pub(in crate::server) async fn gzip_static_candidate(
     if context.gzip_static == GzipStatic::On {
         add_vary_accept_encoding(&mut response);
     }
-    match finalize_static_response(request, response, &metadata, context) {
+    match finalize_static_response(response, &metadata, context) {
         Some(response) => GzipStaticCandidate::Served(Box::new(response)),
         None => GzipStaticCandidate::Off,
     }
@@ -71,7 +70,6 @@ pub(in crate::server) fn add_vary_accept_encoding(response: &mut Response) {
 }
 
 pub(in crate::server) fn finalize_static_response(
-    request: &Request,
     mut response: Response,
     metadata: &std::fs::Metadata,
     context: &EffectiveConfig,
@@ -85,12 +83,6 @@ pub(in crate::server) fn finalize_static_response(
             .unwrap_or(0);
         let etag = format!("\"{:x}-{:x}\"", modified, metadata.len());
         response.set_header("ETag", &etag);
-    }
-    let body_length = response.body_len();
-    if let Some(range_response) =
-        apply_range(&mut response, request, body_length, context.max_ranges)
-    {
-        return Some(range_response);
     }
     Some(response)
 }

@@ -37,6 +37,13 @@ impl CacheIndex {
         min_uses <= 1
     }
 
+    pub(super) fn would_note_use(&self, hash: &str, min_uses: usize) -> bool {
+        self.entries.get(hash).map_or_else(
+            || self.can_insert() && min_uses <= 1,
+            |entry| entry.uses.saturating_add(1) as usize >= min_uses,
+        )
+    }
+
     pub(super) fn load(&mut self, hash: &str) -> bool {
         if let Some(entry) = self.entries.get_mut(hash) {
             entry.uses = entry.uses.max(1);
@@ -74,7 +81,10 @@ mod tests {
     #[test]
     fn enforces_keys_zone_capacity_and_preserves_use_counts() {
         let mut index = CacheIndex::new((CACHE_INDEX_ENTRY_BYTES * 2) as usize);
+        assert!(index.would_note_use("a", 1));
+        assert!(!index.would_note_use("a", 2));
         assert!(!index.note_use("a", 2));
+        assert!(index.would_note_use("a", 2));
         assert!(index.note_use("a", 2));
         assert!(index.load("b"));
         assert!(!index.note_use("c", 1));

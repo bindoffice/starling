@@ -41,11 +41,14 @@ pub(super) async fn finalize_proxy_response(
         status: upstream_response.status,
         headers: upstream_response.headers,
         trailers: upstream_response.trailers,
+        chunked_expected: false,
         body,
         body_temp_file,
         upstream: None,
         builtin_error: false,
         msie_padding: false,
+        allow_ranges: false,
+        single_range: false,
     };
     response.set_early_hints(early_hints);
     capture_upstream_control(&mut response, &context.proxy_ignore_headers);

@@ -116,7 +116,6 @@ pub(super) async fn serve_content(
     if preserve_on_client_abort && let Some(client_abort) = variables.client_abort.as_ref() {
         client_abort.mark_preserve();
     }
-    variables.response_from_upstream = kind.upstream();
     let mut response = if let Some(fastcgi_pass) = &context.fastcgi_pass {
         fastcgi_request(fastcgi_pass, http, request, env, context, variables).await
     } else if let Some(uwsgi_pass) = &context.uwsgi_pass {
@@ -136,6 +135,11 @@ pub(super) async fn serve_content(
             .await
             .unwrap_or_else(|| error_response(404))
     };
+    variables.response_from_upstream = kind.upstream()
+        && !matches!(
+            variables.upstream_cache_status.as_str(),
+            "HIT" | "STALE" | "UPDATING" | "REVALIDATED"
+        );
     if preserve_on_client_abort {
         response.mark_preserve_on_client_abort();
     }

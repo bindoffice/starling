@@ -192,11 +192,14 @@ fn memcached_value_response(
             value: content_type,
         }],
         trailers: Vec::new(),
+        chunked_expected: false,
         body,
         body_temp_file: None,
         upstream: None,
         builtin_error: false,
         msie_padding: false,
+        allow_ranges: false,
+        single_range: false,
     };
     if gzip {
         response.set_header("Content-Encoding", "gzip");

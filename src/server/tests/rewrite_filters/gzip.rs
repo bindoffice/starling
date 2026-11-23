@@ -82,8 +82,11 @@ async fn compresses_eligible_responses_with_gzip() {
         headers.contains("Content-Encoding: gzip\r\n"),
         "response headers:\n{headers}"
     );
+    assert!(headers.contains("Transfer-Encoding: chunked\r\n"));
+    assert!(!headers.contains("Content-Length:"));
     assert!(headers.contains("Vary: Accept-Encoding\r\n"));
-    let mut decoder = flate2::read::GzDecoder::new(&response[header_end + 4..]);
+    let body = decode_chunked(&response[header_end + 4..]);
+    let mut decoder = flate2::read::GzDecoder::new(body.as_slice());
     let mut decoded = String::new();
     std::io::Read::read_to_string(&mut decoder, &mut decoded).unwrap();
     assert_eq!(
@@ -91,6 +94,25 @@ async fn compresses_eligible_responses_with_gzip() {
         "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
     );
     let _ = std::fs::remove_dir_all(prefix);
+}
+
+fn decode_chunked(mut body: &[u8]) -> Vec<u8> {
+    let mut decoded = Vec::new();
+    loop {
+        let line_end = body
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .unwrap();
+        let size =
+            usize::from_str_radix(std::str::from_utf8(&body[..line_end]).unwrap().trim(), 16)
+                .unwrap();
+        body = &body[line_end + 2..];
+        if size == 0 {
+            return decoded;
+        }
+        decoded.extend_from_slice(&body[..size]);
+        body = &body[size + 2..];
+    }
 }
 
 #[tokio::test]

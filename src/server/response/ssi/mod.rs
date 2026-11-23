@@ -56,6 +56,7 @@ pub(in crate::server) async fn apply_ssi(
     response.body = ResponseBody::Bytes(rendered);
     response.remove_header("Content-Length");
     response.remove_header("Accept-Ranges");
+    response.disable_ranges();
     if context.ssi.last_modified {
         weaken_etag(response);
     } else {

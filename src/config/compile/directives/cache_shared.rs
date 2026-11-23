@@ -11,6 +11,9 @@ pub(super) fn parse_proxy_cache_valid(directive: &Directive) -> ConfigResult<Pro
         let statuses = statuses
             .iter()
             .map(|value| {
+                if value == "any" {
+                    return Ok(0);
+                }
                 value
                     .parse::<u16>()
                     .ok()

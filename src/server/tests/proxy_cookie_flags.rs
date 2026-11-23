@@ -158,11 +158,14 @@ fn apply_cookie_rewrites(config: &Arc<RuntimeConfig>, target: &str, cookies: &[&
             })
             .collect(),
         trailers: Vec::new(),
+        chunked_expected: false,
         body: ResponseBody::Empty,
         body_temp_file: None,
         upstream: None,
         builtin_error: false,
         msie_padding: false,
+        allow_ranges: false,
+        single_range: false,
     };
     apply_proxy_cookie_rewrites(&mut response, &location.context, &variables);
     response

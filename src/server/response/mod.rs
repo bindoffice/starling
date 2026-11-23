@@ -27,7 +27,7 @@ pub(super) async fn serve_static(
         return Some(response);
     }
 
-    if let Some(response) = serve_flv(request, env, context, selected_location, variables).await {
+    if let Some(response) = serve_flv(env, context, selected_location, variables).await {
         return Some(response);
     }
 
@@ -150,15 +150,14 @@ pub(super) async fn static_file_response(
         return Some(error_response(status));
     }
     let content_type = content_type(path, context);
-    let mut response =
-        match crate::http::file_response(path.to_path_buf(), content_type, metadata.len()) {
-            Ok(response) => response,
-            Err(_) => return Some(error_response(403)),
-        };
+    let mut response = match crate::http::file_response(path.to_path_buf(), content_type) {
+        Ok(response) => response,
+        Err(_) => return Some(error_response(403)),
+    };
     if matches!(gzip_candidate, GzipStaticCandidate::Declined { vary: true }) {
         add_vary_accept_encoding(&mut response);
     }
-    finalize_static_response(request, response, &metadata, context)
+    finalize_static_response(response, &metadata, context)
 }
 
 pub(super) enum GzipStaticCandidate {

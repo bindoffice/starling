@@ -23,6 +23,12 @@ pub(in crate::server) fn apply_response_headers(
             } else if matches!(name.as_str(), "etag" | "last-modified") {
                 response.set_header(&header.name, value);
             } else {
+                if name == "accept-ranges"
+                    && response.status == 200
+                    && value.eq_ignore_ascii_case("bytes")
+                {
+                    response.enable_ranges(false);
+                }
                 response.add_header(&header.name, value);
             }
             variables.sent_headers.clone_from(&response.headers);

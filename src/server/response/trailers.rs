@@ -12,6 +12,7 @@ pub(in crate::server) fn apply_response_trailers(
     {
         return;
     }
+    response.expect_chunked();
     variables.status = response.status;
     variables.sent_trailers.clone_from(&response.trailers);
     let always_allowed = trailer_status_allowed(response.status);

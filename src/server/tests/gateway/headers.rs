@@ -24,11 +24,14 @@ fn applies_gateway_header_defaults_hide_and_pass_rules() {
         status: 200,
         headers: headers(),
         trailers: Vec::new(),
+        chunked_expected: false,
         body: ResponseBody::Empty,
         body_temp_file: None,
         upstream: None,
         builtin_error: false,
         msie_padding: false,
+        allow_ranges: false,
+        single_range: false,
     };
     filter_gateway_response_headers(
         &mut response,
@@ -46,11 +49,14 @@ fn applies_gateway_header_defaults_hide_and_pass_rules() {
         status: 200,
         headers: headers(),
         trailers: Vec::new(),
+        chunked_expected: false,
         body: ResponseBody::Empty,
         body_temp_file: None,
         upstream: None,
         builtin_error: false,
         msie_padding: false,
+        allow_ranges: false,
+        single_range: false,
     };
     filter_gateway_response_headers(&mut response, UWSGI_DEFAULT_HIDE_HEADERS, &[], &[], &[]);
     assert_eq!(
@@ -62,11 +68,14 @@ fn applies_gateway_header_defaults_hide_and_pass_rules() {
         status: 200,
         headers: headers(),
         trailers: Vec::new(),
+        chunked_expected: false,
         body: ResponseBody::Empty,
         body_temp_file: None,
         upstream: None,
         builtin_error: false,
         msie_padding: false,
+        allow_ranges: false,
+        single_range: false,
     };
     filter_gateway_response_headers(
         &mut response,

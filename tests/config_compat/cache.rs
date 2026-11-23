@@ -16,6 +16,7 @@ fn compiles_proxy_cache_paths_scope_and_validity_rules() {
                 proxy_cache_key "$scheme:$request_uri";
                 proxy_cache_valid 200 301 10m;
                 proxy_cache_valid 404 1m;
+                proxy_cache_valid any 5m;
                 proxy_cache_min_uses 2;
                 proxy_cache_max_range_offset 4k;
                 proxy_cache_methods POST;
@@ -75,9 +76,10 @@ fn compiles_proxy_cache_paths_scope_and_validity_rules() {
     assert!(inherited.proxy_cache_methods.allows("POST"));
     assert!(!inherited.proxy_cache_methods.allows("PUT"));
     assert!(!inherited.proxy_cache_convert_head);
-    assert_eq!(inherited.proxy_cache_valid.len(), 2);
+    assert_eq!(inherited.proxy_cache_valid.len(), 3);
     assert_eq!(inherited.proxy_cache_valid[0].statuses, vec![200, 301]);
     assert_eq!(inherited.proxy_cache_valid[1].statuses, vec![404]);
+    assert_eq!(inherited.proxy_cache_valid[2].statuses, vec![0]);
     assert!(inherited.proxy_cache_lock.enabled);
     assert_eq!(inherited.proxy_cache_lock.timeout, Duration::from_secs(8));
     assert_eq!(inherited.proxy_cache_lock.age, Duration::from_secs(3));

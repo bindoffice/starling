@@ -2,10 +2,12 @@ use super::*;
 use std::io::SeekFrom;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
-const MAGIC: &[u8; 8] = b"STRLC004";
+const MAGIC: &[u8; 8] = b"STRLC005";
 const MAX_CACHE_HEADERS: u32 = 1024;
 const MAX_CACHE_HEADER_BYTES: usize = 64 * 1024;
+const MAX_CHARSET_BYTES: usize = 255;
 pub(super) const MAX_ETAG_BYTES: usize = 128;
+const FLAG_CHARSET: u16 = 1;
 const CREATED_OFFSET: u64 = 12;
 const EXPIRES_OFFSET: u64 = 20;
 const STALE_UPDATING_OFFSET: u64 = 28;
@@ -21,6 +23,7 @@ pub(super) struct CacheEntry {
     pub(super) stale: CacheStaleWindows,
     pub(super) last_modified: Option<u64>,
     pub(super) etag: Option<String>,
+    pub(super) charset: Option<String>,
     pub(super) body: ResponseBody,
 }
 
@@ -37,6 +40,7 @@ pub(super) struct CacheEntryHeader<'a> {
     pub(super) stale: CacheStaleWindows,
     pub(super) body_length: u64,
     pub(super) validators: CacheValidators<'a>,
+    pub(super) charset: Option<&'a str>,
 }
 
 pub(super) async fn is_cache_entry(path: &Path) -> io::Result<bool> {
@@ -49,10 +53,14 @@ pub(super) async fn is_cache_entry(path: &Path) -> io::Result<bool> {
     if file.read_exact(&mut magic).await.is_err() || &magic != MAGIC {
         return Ok(false);
     }
-    if file.read_u16().await.is_err()
-        || file.read_u16().await.is_err()
-        || file.read_u64().await.is_err()
-    {
+    if file.read_u16().await.is_err() {
+        return Ok(false);
+    }
+    let flags = match file.read_u16().await {
+        Ok(flags) => flags,
+        Err(_) => return Ok(false),
+    };
+    if file.read_u64().await.is_err() {
         return Ok(false);
     }
     let _expires = match file.read_u64().await {
@@ -85,6 +93,21 @@ pub(super) async fn is_cache_entry(path: &Path) -> io::Result<bool> {
         .is_err()
     {
         return Ok(false);
+    }
+    if flags & FLAG_CHARSET != 0 {
+        let charset_length = match file.read_u16().await {
+            Ok(length) if usize::from(length) <= MAX_CHARSET_BYTES => usize::from(length),
+            _ => return Ok(false),
+        };
+        if file
+            .seek(SeekFrom::Current(
+                i64::try_from(charset_length).unwrap_or(i64::MAX),
+            ))
+            .await
+            .is_err()
+        {
+            return Ok(false);
+        }
     }
     for _ in 0..header_count {
         let name_length = match file.read_u16().await {
@@ -129,7 +152,7 @@ pub(super) async fn read_entry(path: &Path) -> io::Result<Option<CacheEntry>> {
         Ok(status) => status,
         Err(_) => return Ok(None),
     };
-    let _flags = match file.read_u16().await {
+    let flags = match file.read_u16().await {
         Ok(flags) => flags,
         Err(_) => return Ok(None),
     };
@@ -178,6 +201,22 @@ pub(super) async fn read_entry(path: &Path) -> io::Result<Option<CacheEntry>> {
             Err(_) => return Ok(None),
         }
     };
+    let charset = if flags & FLAG_CHARSET != 0 {
+        let length = match file.read_u16().await {
+            Ok(length) if usize::from(length) <= MAX_CHARSET_BYTES => usize::from(length),
+            _ => return Ok(None),
+        };
+        let mut charset = vec![0_u8; length];
+        if file.read_exact(&mut charset).await.is_err() {
+            return Ok(None);
+        }
+        match String::from_utf8(charset) {
+            Ok(charset) if !charset.is_empty() => Some(charset),
+            _ => return Ok(None),
+        }
+    } else {
+        None
+    };
 
     let mut headers = Vec::with_capacity(header_count as usize);
     let mut header_bytes = 0_usize;
@@ -224,6 +263,7 @@ pub(super) async fn read_entry(path: &Path) -> io::Result<Option<CacheEntry>> {
         stale: CacheStaleWindows::from_millis(stale_updating, stale_error),
         last_modified,
         etag,
+        charset,
         body: ResponseBody::File {
             file,
             offset: body_offset,
@@ -244,10 +284,11 @@ pub(super) async fn write_header(
         stale,
         body_length,
         validators,
+        charset,
     } = header;
     output.write_all(MAGIC).await?;
     output.write_u16(status).await?;
-    output.write_u16(0).await?;
+    output.write_u16(u16::from(charset.is_some())).await?;
     output.write_u64(created).await?;
     output.write_u64(expires).await?;
     output
@@ -275,6 +316,16 @@ pub(super) async fn write_header(
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "too many response headers"))?;
     output.write_u32(header_count).await?;
     output.write_all(etag.as_bytes()).await?;
+    if let Some(charset) = charset {
+        let charset_length = u16::try_from(charset.len())
+            .ok()
+            .filter(|length| usize::from(*length) <= MAX_CHARSET_BYTES)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "charset too long for cache")
+            })?;
+        output.write_u16(charset_length).await?;
+        output.write_all(charset.as_bytes()).await?;
+    }
     let mut header_bytes = 0_usize;
     for header in headers {
         let name_length = u16::try_from(header.name.len()).map_err(|_| {

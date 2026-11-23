@@ -66,11 +66,14 @@ fn rewrites_proxy_cookie_domains_paths_and_regexes() {
         status: 200,
         headers: headers(),
         trailers: Vec::new(),
+        chunked_expected: false,
         body: ResponseBody::Empty,
         body_temp_file: None,
         upstream: None,
         builtin_error: false,
         msie_padding: false,
+        allow_ranges: false,
+        single_range: false,
     };
     apply_proxy_cookie_rewrites(&mut response, &server.locations[0].context, &variables);
     assert_eq!(
@@ -90,11 +93,14 @@ fn rewrites_proxy_cookie_domains_paths_and_regexes() {
         status: 200,
         headers: headers(),
         trailers: Vec::new(),
+        chunked_expected: false,
         body: ResponseBody::Empty,
         body_temp_file: None,
         upstream: None,
         builtin_error: false,
         msie_padding: false,
+        allow_ranges: false,
+        single_range: false,
     };
     apply_proxy_cookie_rewrites(&mut untouched, &server.locations[1].context, &variables);
     assert_eq!(

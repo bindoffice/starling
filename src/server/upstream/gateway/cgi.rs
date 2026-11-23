@@ -157,11 +157,14 @@ impl CgiHead {
             status: self.status,
             headers: self.headers,
             trailers: Vec::new(),
+            chunked_expected: false,
             body,
             body_temp_file,
             upstream: None,
             builtin_error: false,
             msie_padding: false,
+            allow_ranges: false,
+            single_range: false,
         };
         response.set_content_length();
         Ok(response)

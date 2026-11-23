@@ -183,21 +183,22 @@ async fn process_request_inner(
         return processed;
     }
 
-    if let Some(ranged) = apply_upstream_ranges(
+    enable_upstream_ranges(
         &mut response,
-        request,
         content.force_ranges(&context),
         content.upstream(),
-        context.max_ranges,
-    ) {
-        response = ranged;
-    }
+        cache_status_is_hit(&variables.upstream_cache_status),
+    );
     sync_upstream_response_variables(variables, &response);
     Processed {
         response,
         context: *context,
         tunnel: false,
     }
+}
+
+fn cache_status_is_hit(status: &str) -> bool {
+    matches!(status, "HIT" | "STALE" | "UPDATING" | "REVALIDATED")
 }
 
 fn server_allows_connect(server: &ServerConfig) -> bool {

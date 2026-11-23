@@ -10,7 +10,7 @@ async fn caches_ranges_below_the_configured_offset() {
     let backend = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let request = read_request(&mut stream).await;
-        assert!(request.contains("Range: bytes=3-\r\n"), "{request}");
+        assert!(!request.contains("Range:"), "{request}");
         write_response(&mut stream, "cached").await;
         if tokio::time::timeout(Duration::from_millis(500), listener.accept())
             .await

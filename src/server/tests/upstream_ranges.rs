@@ -82,6 +82,63 @@ async fn forces_single_byte_ranges_for_buffered_proxy_responses() {
 }
 
 #[tokio::test]
+async fn add_header_accept_ranges_enables_range_filtering() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let backend_address = listener.local_addr().unwrap();
+    let backend = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+        }
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 10\r\n\
+                  Connection: close\r\n\r\n0123456789",
+            )
+            .await
+            .unwrap();
+    });
+    let source = format!(
+        r#"
+            events {{ worker_connections 64; }}
+            http {{
+                server {{
+                    listen 127.0.0.1:18638;
+                    location / {{
+                        proxy_pass http://{backend_address};
+                        add_header Accept-Ranges bytes;
+                    }}
+                }}
+            }}
+        "#
+    );
+    let (prefix, config) = test_config(&source, &[]);
+
+    let ranged = request_body(
+        &config,
+        "GET / HTTP/1.1\r\nHost: localhost\r\nRange: bytes=2-5\r\n\
+         Connection: close\r\n\r\n",
+    )
+    .await;
+    assert!(
+        ranged.starts_with("HTTP/1.1 206 Partial Content\r\n"),
+        "{ranged}"
+    );
+    assert!(ranged.contains("Accept-Ranges: bytes\r\n"), "{ranged}");
+    assert!(
+        ranged.contains("Content-Range: bytes 2-5/10\r\n"),
+        "{ranged}"
+    );
+    assert!(ranged.ends_with("2345"), "{ranged}");
+
+    backend.await.unwrap();
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
 async fn applies_if_range_errors_and_head_to_forced_proxy_ranges() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend_address = listener.local_addr().unwrap();
@@ -150,23 +207,8 @@ async fn applies_if_range_errors_and_head_to_forced_proxy_ranges() {
     );
 
     let multiple = request_body(&config, &request("GET", "Range: bytes=0-1,3-4\r\n")).await;
-    assert!(
-        multiple.starts_with("HTTP/1.1 206 Partial Content\r\n"),
-        "{multiple}"
-    );
-    assert!(
-        multiple.contains("Content-Type: multipart/byteranges; boundary="),
-        "{multiple}"
-    );
-    assert!(
-        multiple.contains("Content-Range: bytes 0-1/10\r\n\r\n01"),
-        "{multiple}"
-    );
-    assert!(
-        multiple.contains("Content-Range: bytes 3-4/10\r\n\r\n34"),
-        "{multiple}"
-    );
-    assert!(multiple.ends_with("--\r\n"), "{multiple}");
+    assert!(multiple.starts_with("HTTP/1.1 200 OK\r\n"), "{multiple}");
+    assert!(multiple.ends_with("0123456789"), "{multiple}");
 
     let uppercase_unit = request_body(&config, &request("GET", "Range: BYTES=3-6\r\n")).await;
     assert!(

@@ -131,7 +131,8 @@ pub(crate) fn response_uses_chunked_encoding(
         && !request_method.eq_ignore_ascii_case("HEAD")
         && response.status >= 200
         && !matches!(response.status, 204 | 304)
-        && (!response.trailers.is_empty()
+        && (response.chunked_expected
+            || !response.trailers.is_empty()
             || response.body.content_length().is_none()
             || response.body.stream_may_have_trailers())
 }

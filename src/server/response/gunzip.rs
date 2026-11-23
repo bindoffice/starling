@@ -43,6 +43,7 @@ pub(in crate::server) async fn maybe_gunzip(
 
     response.remove_header("Content-Encoding");
     response.remove_header("Accept-Ranges");
+    response.disable_ranges();
     weaken_etag(response);
     response.body = ResponseBody::Bytes(decoded);
     response.set_content_length();

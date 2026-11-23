@@ -19,6 +19,7 @@ pub struct Response {
     pub status: u16,
     pub headers: Vec<Header>,
     pub trailers: Vec<Header>,
+    pub(crate) chunked_expected: bool,
     pub body: ResponseBody,
     // Keeps the backing temp path alive until the response body has been sent.
     #[allow(dead_code)]
@@ -26,6 +27,8 @@ pub struct Response {
     pub upstream: Option<Box<UpstreamControl>>,
     pub(crate) builtin_error: bool,
     pub(crate) msie_padding: bool,
+    pub(crate) allow_ranges: bool,
+    pub(crate) single_range: bool,
 }
 
 #[derive(Default)]
@@ -63,11 +66,14 @@ impl Response {
             status,
             headers: Vec::new(),
             trailers: Vec::new(),
+            chunked_expected: false,
             body: ResponseBody::Empty,
             body_temp_file: None,
             upstream: None,
             builtin_error: false,
             msie_padding: false,
+            allow_ranges: false,
+            single_range: false,
         }
     }
 
@@ -79,11 +85,14 @@ impl Response {
                 value: content_type.into(),
             }],
             trailers: Vec::new(),
+            chunked_expected: false,
             body: ResponseBody::Bytes(body.into()),
             body_temp_file: None,
             upstream: None,
             builtin_error: false,
             msie_padding: false,
+            allow_ranges: false,
+            single_range: false,
         };
         response.set_content_length();
         response
@@ -125,6 +134,20 @@ impl Response {
     pub fn remove_header(&mut self, name: &str) {
         self.headers
             .retain(|header| !header.name.eq_ignore_ascii_case(name));
+    }
+
+    pub(crate) fn enable_ranges(&mut self, single_range: bool) {
+        self.allow_ranges = true;
+        self.single_range = single_range;
+    }
+
+    pub(crate) fn disable_ranges(&mut self) {
+        self.allow_ranges = false;
+        self.single_range = false;
+    }
+
+    pub(crate) fn expect_chunked(&mut self) {
+        self.chunked_expected = true;
     }
 
     pub fn upstream_control(&self) -> Option<&UpstreamControl> {

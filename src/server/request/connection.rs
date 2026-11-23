@@ -127,6 +127,8 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 timed_out = err.kind() == io::ErrorKind::TimedOut;
                 let status = if err.kind() == io::ErrorKind::TimedOut {
                     408
+                } else if err.kind() == io::ErrorKind::Unsupported {
+                    501
                 } else if err.to_string().contains("request line too long") {
                     414
                 } else if err.to_string().contains("unsupported HTTP version") {
@@ -398,6 +400,10 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
         }
         close_config = outcome.close;
         let keep_alive = outcome.keep_alive && !shutdown_requested(&shutdown);
+        if !keep_alive {
+            outcome.keep_alive = false;
+            outcome.keepalive_header = None;
+        }
         match write_dispatch_response(&mut write_half, &mut outcome, &request, control.as_ref())
             .await
         {

@@ -1,9 +1,24 @@
 use super::*;
+use std::io::Read as _;
 use std::net::Ipv6Addr;
 
-pub fn file_response(path: PathBuf, content_type: String, length: u64) -> io::Result<Response> {
-    let file = std::fs::File::open(&path)?;
-    let modified = file.metadata()?.modified().ok();
+pub fn file_response(path: PathBuf, content_type: String) -> io::Result<Response> {
+    const SMALL_FILE_MEMORY_LIMIT: u64 = 64 * 1024;
+
+    let mut file = std::fs::File::open(&path)?;
+    let metadata = file.metadata()?;
+    let modified = metadata.modified().ok();
+    let body = if metadata.len() <= SMALL_FILE_MEMORY_LIMIT {
+        let mut body = Vec::with_capacity(metadata.len() as usize);
+        file.read_to_end(&mut body)?;
+        ResponseBody::Bytes(body)
+    } else {
+        ResponseBody::File {
+            file: File::from_std(file),
+            offset: 0,
+            length: metadata.len(),
+        }
+    };
     let mut response = Response {
         status: 200,
         headers: vec![
@@ -13,24 +28,20 @@ pub fn file_response(path: PathBuf, content_type: String, length: u64) -> io::Re
             },
             Header {
                 name: "Content-Length".into(),
-                value: length.to_string(),
-            },
-            Header {
-                name: "Accept-Ranges".into(),
-                value: "bytes".into(),
+                value: body.len().to_string(),
             },
         ],
         trailers: Vec::new(),
-        body: ResponseBody::File {
-            file: File::from_std(file),
-            offset: 0,
-            length,
-        },
+        chunked_expected: false,
+        body,
         body_temp_file: None,
         upstream: None,
         builtin_error: false,
         msie_padding: false,
+        allow_ranges: false,
+        single_range: false,
     };
+    response.enable_ranges(false);
     if let Some(modified) = modified {
         response.add_header("Last-Modified", httpdate::fmt_http_date(modified));
     }
@@ -169,4 +180,8 @@ pub(in crate::http) fn valid_port(value: &str) -> bool {
 
 pub(in crate::http) fn invalid_data(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+pub(in crate::http) fn unsupported(message: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::Unsupported, message)
 }

@@ -25,4 +25,5 @@ pub(in crate::server) struct ProxyAttemptTarget<'a> {
     pub(super) keepalive: Option<&'a UpstreamKeepaliveContext>,
     pub(super) revalidation: Option<&'a CacheRevalidation>,
     pub(super) streaming_allowed: bool,
+    pub(super) strip_cache_headers: bool,
 }

@@ -7,6 +7,33 @@ use tokio::io::BufReader;
 
 static NEXT_BUFFER_TEMP: AtomicU64 = AtomicU64::new(1);
 
+#[test]
+fn loads_small_static_files_into_memory_and_streams_large_files() {
+    let id = NEXT_BUFFER_TEMP.fetch_add(1, Ordering::Relaxed);
+    let temp_dir = std::env::temp_dir().join(format!(
+        "starling-http-file-response-{}-{id}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let small_path = temp_dir.join("small");
+    std::fs::write(&small_path, b"Hello, World!\n").unwrap();
+    let small = file_response(small_path, "text/plain".into()).unwrap();
+    assert!(matches!(
+        small.body,
+        ResponseBody::Bytes(ref body) if body == b"Hello, World!\n"
+    ));
+    assert_eq!(small.header("content-length"), Some("14"));
+
+    let large_path = temp_dir.join("large");
+    std::fs::write(&large_path, vec![b'x'; 64 * 1024 + 1]).unwrap();
+    let large = file_response(large_path, "application/octet-stream".into()).unwrap();
+    assert!(matches!(large.body, ResponseBody::File { .. }));
+    assert_eq!(large.header("content-length"), Some("65537"));
+
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
 #[tokio::test]
 
 async fn parses_request_and_content_length() {
@@ -401,6 +428,23 @@ async fn rejects_malformed_request_headers() {
         assert!(
             request.invalid_host,
             "input should carry an invalid Host: {input:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn classifies_unknown_transfer_encodings_as_not_implemented() {
+    for value in ["identity", "chunked, identity"] {
+        let input =
+            format!("GET / HTTP/1.1\r\nHost: example.test\r\nTransfer-Encoding: {value}\r\n\r\n");
+        let mut reader = BufReader::new(input.as_bytes());
+
+        let error = read_request_head(&mut reader).await.unwrap_err();
+
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::Unsupported,
+            "unsupported Transfer-Encoding should map to 501: {value:?}"
         );
     }
 }

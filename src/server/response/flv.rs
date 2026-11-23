@@ -3,7 +3,6 @@ use super::*;
 const FLV_HEADER: &[u8; 13] = b"FLV\x01\x05\0\0\0\x09\0\0\0\0";
 
 pub(in crate::server) async fn serve_flv(
-    request: &Request,
     env: &RequestEnv,
     context: &EffectiveConfig,
     selected_location: Option<&LocationConfig>,
@@ -37,32 +36,43 @@ pub(in crate::server) async fn serve_flv(
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|start| *start < size)
         .unwrap_or(0);
-    let mut response =
-        match crate::http::file_response(path.clone(), content_type(&path, context), size) {
-            Ok(response) => response,
-            Err(_) => return Some(error_response(403)),
-        };
+    let mut response = match crate::http::file_response(path.clone(), content_type(&path, context))
+    {
+        Ok(response) => response,
+        Err(_) => return Some(error_response(403)),
+    };
 
     if start > 0 {
-        let ResponseBody::File {
-            file,
-            offset: _,
-            length: _,
-        } = response.body
-        else {
-            return Some(error_response(500));
-        };
-        response.body = ResponseBody::FileWithPrefix {
-            prefix: FLV_HEADER.to_vec(),
-            file,
-            offset: start,
-            length: size - start,
+        response.body = match response.body {
+            ResponseBody::Bytes(body) => {
+                let Ok(start) = usize::try_from(start) else {
+                    return Some(error_response(500));
+                };
+                let Some(suffix) = body.get(start..) else {
+                    return Some(error_response(500));
+                };
+                let mut ranged = Vec::with_capacity(FLV_HEADER.len() + suffix.len());
+                ranged.extend_from_slice(FLV_HEADER);
+                ranged.extend_from_slice(suffix);
+                ResponseBody::Bytes(ranged)
+            }
+            ResponseBody::File {
+                file,
+                offset: _,
+                length: _,
+            } => ResponseBody::FileWithPrefix {
+                prefix: FLV_HEADER.to_vec(),
+                file,
+                offset: start,
+                length: size - start,
+            },
+            _ => return Some(error_response(500)),
         };
         response.set_content_length();
     }
 
     Some(
-        finalize_static_response(request, response, &metadata, context)
+        finalize_static_response(response, &metadata, context)
             .unwrap_or_else(|| error_response(416)),
     )
 }

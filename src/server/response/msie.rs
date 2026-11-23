@@ -39,6 +39,7 @@ fn apply_msie_refresh(response: &mut Response, location: &str) {
     response.msie_padding = false;
     response.remove_header("Location");
     response.remove_header("Accept-Ranges");
+    response.disable_ranges();
     response.remove_header("Last-Modified");
     response.remove_header("ETag");
     response.set_header("Content-Type", "text/html");

@@ -15,6 +15,7 @@ pub(super) async fn proxy_attempt(
         keepalive,
         revalidation,
         streaming_allowed,
+        strip_cache_headers,
     } = target;
     let mut upstream_variables = variables.clone();
     upstream_variables.proxy_host =
@@ -37,6 +38,11 @@ pub(super) async fn proxy_attempt(
         build_proxy_request(proxy, request, env, location, context, &upstream_variables);
     if let Some(revalidation) = revalidation {
         revalidation.apply(&mut outgoing);
+    }
+    if strip_cache_headers {
+        outgoing.headers.retain(|(name, _)| {
+            !name.eq_ignore_ascii_case("range") && !name.eq_ignore_ascii_case("if-range")
+        });
     }
     let limit_rate = complex_size(context.proxy_limit_rate.as_deref(), &upstream_variables);
     let attempt_started = Instant::now();

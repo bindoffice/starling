@@ -28,6 +28,9 @@ pub(super) fn attach_tee(
     let status = response.status;
     let headers = response.headers.clone();
     let (last_modified, etag) = validators(&response);
+    let charset = response
+        .upstream_control()
+        .and_then(|control| control.charset.clone());
     let expected_length = stream.length();
     let prepare = async move {
         tokio::fs::create_dir_all(&parent).await?;
@@ -52,6 +55,7 @@ pub(super) fn attach_tee(
                         last_modified,
                         etag: etag.as_deref(),
                     },
+                    charset: charset.as_deref(),
                 },
             )
             .await?;

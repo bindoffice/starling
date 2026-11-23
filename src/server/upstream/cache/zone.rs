@@ -29,6 +29,7 @@ pub(in crate::server) struct CachedResponse {
     pub(in crate::server) stale_windows: CacheStaleWindows,
     pub(in crate::server) last_modified: Option<u64>,
     pub(in crate::server) etag: Option<String>,
+    pub(in crate::server) charset: Option<String>,
     pub(in crate::server) body: ResponseBody,
 }
 
@@ -96,6 +97,7 @@ impl ProxyCacheZone {
             stale_windows: entry.stale,
             last_modified: entry.last_modified,
             etag: entry.etag,
+            charset: entry.charset,
             body: entry.body,
         };
         Ok(if expired {
@@ -138,6 +140,14 @@ impl ProxyCacheZone {
             .lock()
             .expect("proxy cache index lock")
             .note_use(&hash, min_uses)
+    }
+
+    pub(in crate::server) fn would_note_use(&self, cache_key: &str, min_uses: usize) -> bool {
+        let hash = key::cache_key_hash(cache_key);
+        self.index
+            .lock()
+            .expect("proxy cache index lock")
+            .would_note_use(&hash, min_uses)
     }
 
     pub(in crate::server) fn store_error(

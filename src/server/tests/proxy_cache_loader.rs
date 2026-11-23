@@ -74,6 +74,97 @@ async fn loads_valid_entries_and_removes_invalid_files() {
 }
 
 #[tokio::test]
+async fn cached_accel_charset_survives_restart_and_replays_the_original_body() {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping cache charset test: binding TCP sockets is not permitted");
+            return;
+        }
+        Err(error) => panic!("bind upstream: {error}"),
+    };
+    let upstream = listener.local_addr().unwrap();
+    let backend = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_request(&mut stream).await;
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=koi8-r\r\n\
+                  Content-Length: 2\r\nX-Accel-Charset: utf-8\r\nConnection: close\r\n\r\n\
+                  \xc1\x9c",
+            )
+            .await
+            .unwrap();
+    });
+    let (prefix, config) = test_config(
+        &format!(
+            r#"
+                worker_processes 1;
+                events {{ worker_connections 64; }}
+                http {{
+                    charset_map koi8-r utf-8 {{
+                        C1 D0B0;
+                        9C C2B0;
+                    }}
+                    proxy_cache_path cache keys_zone=proxy_cache:1m loader_sleep=0ms;
+                    server {{
+                        listen 127.0.0.1:18637;
+                        add_header X-Cache-Status $upstream_cache_status always;
+                        location / {{
+                            proxy_pass http://{upstream};
+                            proxy_cache proxy_cache;
+                            proxy_cache_valid 200 1m;
+                        }}
+                    }}
+                }}
+            "#
+        ),
+        &[],
+    );
+    let state = test_state(&config);
+    let first = request_bytes_with_state(
+        &config,
+        state,
+        "GET /item HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let (first_headers, first_body) = split_http_response(&first);
+    assert!(
+        first_headers.contains("X-Cache-Status: MISS\r\n"),
+        "{first_headers}"
+    );
+    assert!(
+        first_headers.contains("Content-Type: text/plain; charset=utf-8\r\n"),
+        "{first_headers}"
+    );
+    assert_eq!(first_body, [0xd0, 0xb0, 0xc2, 0xb0]);
+
+    backend.await.unwrap();
+    let restarted = test_state(&config);
+    let stats = restarted.proxy_cache.load().await.unwrap();
+    assert_eq!(stats.loaded, 1, "{stats:?}");
+
+    let cached = request_bytes_with_state(
+        &config,
+        restarted,
+        "GET /item HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let (cached_headers, cached_body) = split_http_response(&cached);
+    assert!(
+        cached_headers.contains("X-Cache-Status: HIT\r\n"),
+        "{cached_headers}"
+    );
+    assert!(
+        cached_headers.contains("Content-Type: text/plain; charset=utf-8\r\n"),
+        "{cached_headers}"
+    );
+    assert_eq!(cached_body, [0xd0, 0xb0, 0xc2, 0xb0]);
+
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
 async fn removes_stale_starling_temporaries_but_preserves_active_and_unrelated_files() {
     let (prefix, config) = test_config(
         r#"

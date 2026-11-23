@@ -204,15 +204,10 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
             if version == "HTTP/1.0" {
                 return Err(invalid_data("Transfer-Encoding is not allowed in HTTP/1.0"));
             }
-            let codings: Vec<_> = header
-                .value
-                .split(',')
-                .map(|value| value.trim().to_ascii_lowercase())
-                .collect();
-            if codings.as_slice() == ["chunked"] {
+            if header.value.eq_ignore_ascii_case("chunked") {
                 chunked = true;
             } else {
-                return Err(invalid_data("unsupported transfer encoding"));
+                return Err(unsupported("unsupported transfer encoding"));
             }
         } else if header.name.eq_ignore_ascii_case("connection") {
             connection_values.push(header.value.to_ascii_lowercase());

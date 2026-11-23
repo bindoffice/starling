@@ -129,6 +129,7 @@ pub(in crate::server) async fn scgi_request(
                     ) {
                         plan.zone.store_error(&plan.key, response.status, &valid);
                     } else {
+                        mark_cache_fill_ranges(&mut response);
                         response = plan
                             .zone
                             .store_or_tee(&plan.key, response, &valid, cache_lock_guard.take())
