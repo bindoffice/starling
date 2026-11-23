@@ -88,7 +88,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 }
             }
         }
-        let snapshot = state.config_snapshot().await;
+        let snapshot = state.config_snapshot();
         let config = &snapshot.config;
         let default_context = connection_server_context(config, &group);
         close_config = default_context

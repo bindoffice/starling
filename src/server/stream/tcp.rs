@@ -47,7 +47,7 @@ pub(in crate::server) async fn handle_stream_connection_boxed(
     state: SharedState,
     passes: &mut usize,
 ) {
-    let config = state.config.read().await.clone();
+    let config = state.current_config();
     let Some(stream) = config.stream.as_ref() else {
         return;
     };

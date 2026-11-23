@@ -19,7 +19,7 @@ async fn concurrent_snapshots_keep_config_and_generation_atomic_during_reloads()
         let mut stop = stop_rx.clone();
         readers.push(tokio::spawn(async move {
             while !*stop.borrow() {
-                let snapshot = state.config_snapshot().await;
+                let snapshot = state.config_snapshot();
                 let marker = snapshot.config.http.as_ref().unwrap().servers[0]
                     .context
                     .client_max_body_size;
@@ -39,7 +39,7 @@ async fn concurrent_snapshots_keep_config_and_generation_atomic_during_reloads()
         let marker = FIRST_MARKER + revision;
         std::fs::write(&config_path, source(marker)).unwrap();
         reload(&state, &config_path, &prefix).await;
-        let snapshot = state.config_snapshot().await;
+        let snapshot = state.config_snapshot();
         assert_eq!(snapshot.upstream_keepalive_generation, revision);
         assert_eq!(
             config_marker(&snapshot.config),

@@ -249,7 +249,7 @@ pub(in crate::server) async fn handle_http_connection_with_shutdown<S>(
     if group.ssl {
         if let Some(control) = &control {
             let enabled = {
-                let config = state.config.read().await;
+                let config = state.current_config();
                 connection_server_context(&config, &group)
                     .map(|server| server.context.tcp_nodelay)
                     .unwrap_or(true)

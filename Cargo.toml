@@ -10,6 +10,7 @@ name = "starling"
 path = "src/main.rs"
 
 [dependencies]
+arc-swap = "1.9"
 base64 = "0.22"
 bytes = "1"
 crc32fast = "1.5"

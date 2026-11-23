@@ -29,7 +29,7 @@ pub(super) async fn handle_h2<S>(
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     let settings = {
-        let config = state.config.read().await.clone();
+        let config = state.current_config();
         settings_for_connection(&config, &group, &addresses)
     };
     let limits = settings.limits;
@@ -148,7 +148,7 @@ pub(super) async fn handle_h2_request(
             .map_err(io::Error::other)?;
     }
 
-    let snapshot = state.config_snapshot().await;
+    let snapshot = state.config_snapshot();
     let config = &snapshot.config;
     let header_count = parts.headers.len() as u64;
     let mut request = request_from_h2_parts(

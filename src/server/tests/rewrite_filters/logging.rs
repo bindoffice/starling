@@ -94,7 +94,7 @@ async fn applies_rewrite_log_and_uninitialized_variable_warning_at_runtime() {
             local_addr: "127.0.0.1:18391".into(),
             keep_alive: false,
         };
-        let snapshot = state.config_snapshot().await;
+        let snapshot = state.config_snapshot();
         let action = dispatch_http_request(
             snapshot,
             &group,

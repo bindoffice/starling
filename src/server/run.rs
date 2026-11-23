@@ -18,8 +18,12 @@ pub async fn run(config: RuntimeConfig, logger: Arc<Logger>) -> io::Result<()> {
     let http_error_loggers = build_http_error_loggers(&config)?;
     let stream_loggers = build_stream_loggers(&config)?;
     let proxy_cache = Arc::new(ProxyCacheRegistry::new(config.http.as_ref()));
+    let upstream_keepalive = Arc::new(UpstreamKeepalivePool::default());
     let state = SharedState {
-        config: Arc::new(RwLock::new(config)),
+        config: Arc::new(ArcSwap::from_pointee(RuntimeSnapshot {
+            config,
+            upstream_keepalive_generation: upstream_keepalive.generation(),
+        })),
         tls_configs: Arc::new(RwLock::new(tls_configs)),
         stream_tls_configs: Arc::new(RwLock::new(stream_tls_configs)),
         logger,
@@ -27,12 +31,12 @@ pub async fn run(config: RuntimeConfig, logger: Arc<Logger>) -> io::Result<()> {
         stream_loggers: Arc::new(RwLock::new(stream_loggers)),
         limits: Arc::new(Mutex::new(LimitState::default())),
         stats: Arc::new(ConnectionStats::default()),
-        upstream_keepalive: Arc::new(UpstreamKeepalivePool::default()),
+        upstream_keepalive,
         proxy_cache,
         client_tls_cache: Arc::new(ClientTlsConfigCache::default()),
     };
     let stream_routes = {
-        let config = state.config.read().await.clone();
+        let config = state.current_config();
         build_stream_routes(&config)
     };
     let mut unix_socket_paths = UnixSocketCleanup::default();
@@ -271,7 +275,7 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
             return;
         }
     };
-    let old = state.config.read().await.clone();
+    let old = state.current_config();
     if listener_signature(&old) != listener_signature(&new_config) {
         state.logger.log(
             LogLevel::Error,
@@ -333,13 +337,15 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
     *state.stream_tls_configs.write().await = stream_tls_configs;
     *state.http_error_loggers.write().await = http_error_loggers;
     *state.stream_loggers.write().await = stream_loggers;
-    let mut config_slot = state.config.write().await;
     state.upstream_keepalive.clear().await;
     state.proxy_cache.reload(new_config.http.as_ref());
     state.client_tls_cache.clear();
     let warnings = new_config.warnings.clone();
-    *config_slot = new_config;
-    drop(config_slot);
+    let generation = state.upstream_keepalive.generation();
+    state.config.store(Arc::new(RuntimeSnapshot {
+        config: new_config,
+        upstream_keepalive_generation: generation,
+    }));
     for warning in warnings {
         state.logger.log(LogLevel::Warn, warning.to_string());
     }

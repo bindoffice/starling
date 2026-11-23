@@ -19,7 +19,7 @@ pub(in crate::server) async fn handle_plaintext_http_connection<S>(
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     let timeout = {
-        let config = state.config.read().await;
+        let config = state.current_config();
         connection_server_context(&config, &group)
             .map(|server| server.context.client_header_timeout)
             .unwrap_or_else(|| Duration::from_secs(60))

@@ -23,7 +23,7 @@ async fn pool_keys_keep_the_generation_captured_when_the_request_started() {
         &[],
     );
     let state = test_state(&config);
-    let snapshot = state.config_snapshot().await;
+    let snapshot = state.config_snapshot();
     let request_config = snapshot.config.clone();
     let generation = snapshot.upstream_keepalive_generation;
     let server = &request_config.http.as_ref().unwrap().servers[0];
@@ -47,11 +47,11 @@ async fn pool_keys_keep_the_generation_captured_when_the_request_started() {
     let local: SocketAddr = "127.0.0.1:18181".parse().unwrap();
     let mut variables = Variables::new(&request, "localhost", server, &local, &remote);
     let pool = state.upstream_keepalive.clone();
-    {
-        let mut config_slot = state.config.write().await;
-        pool.clear().await;
-        *config_slot = request_config.clone();
-    }
+    pool.clear().await;
+    state.config.store(Arc::new(RuntimeSnapshot {
+        config: request_config.clone(),
+        upstream_keepalive_generation: pool.generation(),
+    }));
 
     variables.upstream_keepalive = pool.clone();
     variables.upstream_keepalive_generation = generation;

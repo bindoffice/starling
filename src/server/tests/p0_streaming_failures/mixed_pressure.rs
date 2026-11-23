@@ -179,7 +179,6 @@ async fn reset_drops_a_reused_pool_connection_before_reload_opens_a_new_one() {
     assert_eq!(
         state
             .config_snapshot()
-            .await
             .config
             .http
             .as_ref()

@@ -130,7 +130,10 @@ pub(super) fn test_state(config: &Arc<RuntimeConfig>) -> SharedState {
     let http_error_loggers = build_http_error_loggers(config).expect("HTTP error loggers");
     let stream_loggers = build_stream_loggers(config).expect("stream error loggers");
     SharedState {
-        config: Arc::new(RwLock::new(config.clone())),
+        config: Arc::new(ArcSwap::from_pointee(RuntimeSnapshot {
+            config: config.clone(),
+            upstream_keepalive_generation: 0,
+        })),
         tls_configs: Arc::new(RwLock::new(HashMap::new())),
         stream_tls_configs: Arc::new(RwLock::new(HashMap::new())),
         logger,

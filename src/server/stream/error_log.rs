@@ -37,7 +37,7 @@ pub(in crate::server) async fn stream_route_logger(
     route: &StreamRoute,
 ) -> Arc<Logger> {
     let server_id = {
-        let config = state.config.read().await;
+        let config = state.current_config();
         config
             .stream
             .as_ref()

@@ -66,7 +66,7 @@ async fn reload_during_a_slow_spill_keeps_the_original_temp_root_until_cancel_cl
     )
     .unwrap();
     reload(&state, &config_path, &prefix).await;
-    let snapshot = state.config_snapshot().await;
+    let snapshot = state.config_snapshot();
     assert_eq!(
         snapshot.config.http.as_ref().unwrap().servers[0]
             .context

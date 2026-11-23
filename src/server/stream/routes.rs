@@ -210,9 +210,7 @@ pub(in crate::server) async fn handle_stream_accepted_with_passes<S>(
 
 async fn stream_proxy_protocol_timeout(route: &StreamRoute, state: &SharedState) -> Duration {
     state
-        .config
-        .read()
-        .await
+        .current_config()
         .stream
         .as_ref()
         .and_then(|stream| stream_server_for_route(stream, route))
@@ -222,9 +220,7 @@ async fn stream_proxy_protocol_timeout(route: &StreamRoute, state: &SharedState)
 
 async fn stream_route_tcp_nodelay(state: &SharedState, route: &StreamRoute) -> bool {
     state
-        .config
-        .read()
-        .await
+        .current_config()
         .stream
         .as_ref()
         .and_then(|stream| stream_server_for_route(stream, route))

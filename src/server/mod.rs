@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use arc_swap::ArcSwap;
 use base64::Engine as _;
 use bytes::Bytes;
 use h2::RecvStream;
@@ -165,7 +166,7 @@ pub(in crate::server) fn requested_shutdown_mode(
 
 #[derive(Clone)]
 pub struct SharedState {
-    config: Arc<RwLock<Arc<RuntimeConfig>>>,
+    config: Arc<ArcSwap<RuntimeSnapshot>>,
     tls_configs: Arc<RwLock<HashMap<ListenAddress, Arc<HttpTlsConfigs>>>>,
     stream_tls_configs: Arc<RwLock<HashMap<ListenAddress, Arc<StreamTlsConfigs>>>>,
     logger: Arc<Logger>,
@@ -178,20 +179,24 @@ pub struct SharedState {
     client_tls_cache: Arc<ClientTlsConfigCache>,
 }
 
+#[derive(Clone)]
 pub(in crate::server) struct RuntimeSnapshot {
     pub(in crate::server) config: Arc<RuntimeConfig>,
     pub(in crate::server) upstream_keepalive_generation: u64,
 }
 
 impl SharedState {
-    /// Pair a request config with its keepalive generation. Reload holds the
-    /// config write lock while advancing the generation and swapping config.
-    pub(in crate::server) async fn config_snapshot(&self) -> RuntimeSnapshot {
-        let config = self.config.read().await;
+    /// Pair a request config with its keepalive generation in one atomic load.
+    pub(in crate::server) fn config_snapshot(&self) -> RuntimeSnapshot {
+        let snapshot = self.config.load();
         RuntimeSnapshot {
-            config: config.clone(),
-            upstream_keepalive_generation: self.upstream_keepalive.generation(),
+            config: snapshot.config.clone(),
+            upstream_keepalive_generation: snapshot.upstream_keepalive_generation,
         }
+    }
+
+    pub(in crate::server) fn current_config(&self) -> Arc<RuntimeConfig> {
+        self.config.load().config.clone()
     }
 }
 

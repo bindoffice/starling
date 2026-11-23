@@ -121,7 +121,7 @@ pub(in crate::server) async fn handle_stream_udp_session(
     state: SharedState,
     mut shutdown: watch::Receiver<ShutdownMode>,
 ) {
-    let config = state.config.read().await.clone();
+    let config = state.current_config();
     let Some(stream) = config.stream.as_ref() else {
         return;
     };

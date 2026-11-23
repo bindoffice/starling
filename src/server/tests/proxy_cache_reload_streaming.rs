@@ -57,7 +57,7 @@ async fn reload_during_cache_and_store_streaming_preserves_the_inflight_fill() {
 
     wait_for_path(&prefix.join("html/streamed"), Some(b"firstsecond")).await;
     wait_for_durable_files(&prefix.join("cache")).await;
-    let snapshot = state.config_snapshot().await;
+    let snapshot = state.config_snapshot();
     let cached = request_body_with_state(
         &snapshot.config,
         state,

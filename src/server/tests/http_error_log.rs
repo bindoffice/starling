@@ -45,7 +45,7 @@ async fn selects_the_inherited_or_overridden_http_error_logger() {
             local_addr: "127.0.0.1:18362".into(),
             keep_alive: false,
         };
-        let snapshot = state.config_snapshot().await;
+        let snapshot = state.config_snapshot();
         let action = dispatch_http_request(
             snapshot,
             &group,

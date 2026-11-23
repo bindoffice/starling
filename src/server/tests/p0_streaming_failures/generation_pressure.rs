@@ -83,7 +83,6 @@ async fn reload_discards_a_completed_old_generation_pool_connection() {
     assert_eq!(
         state
             .config_snapshot()
-            .await
             .config
             .http
             .as_ref()

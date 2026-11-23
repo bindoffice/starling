@@ -32,7 +32,7 @@ pub(in crate::server) async fn pass_stream(
         address.clone()
     } else {
         let value = eval_stream_log_variables(&pass.target, log);
-        let prefix = state.config.read().await.prefix.clone();
+        let prefix = state.current_config().prefix.clone();
         match parse_stream_pass_target(&value, &prefix) {
             Ok(address) => address,
             Err(err) => {
@@ -52,7 +52,7 @@ pub(in crate::server) async fn pass_stream(
     }
 
     let route = {
-        let config = state.config.read().await;
+        let config = state.current_config();
         config
             .stream
             .as_ref()
