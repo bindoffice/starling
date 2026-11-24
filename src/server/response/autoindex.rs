@@ -57,20 +57,21 @@ async fn read_entries(path: &Path) -> io::Result<Vec<Entry>> {
         if name.starts_with('.') {
             continue;
         }
-        let (kind, modified, size) = match entry.metadata().await {
-            Ok(metadata) => (
-                if metadata.is_dir() {
-                    EntryKind::Directory
-                } else if metadata.is_file() {
-                    EntryKind::File
-                } else {
-                    EntryKind::Other
-                },
-                metadata.modified().unwrap_or(UNIX_EPOCH),
-                metadata.len(),
-            ),
-            Err(_) => (EntryKind::Other, UNIX_EPOCH, 0),
+        let metadata = match entry_metadata(&entry).await? {
+            Some(metadata) => metadata,
+            None => continue,
         };
+        let (kind, modified, size) = (
+            if metadata.is_dir() {
+                EntryKind::Directory
+            } else if metadata.is_file() {
+                EntryKind::File
+            } else {
+                EntryKind::Other
+            },
+            metadata.modified().unwrap_or(UNIX_EPOCH),
+            metadata.len(),
+        );
         entries.push(Entry {
             name,
             kind,
@@ -86,6 +87,23 @@ async fn read_entries(path: &Path) -> io::Result<Vec<Entry>> {
             .then_with(|| left.name.cmp(&right.name))
     });
     Ok(entries)
+}
+
+async fn entry_metadata(entry: &tokio::fs::DirEntry) -> io::Result<Option<std::fs::Metadata>> {
+    let path = entry.path();
+    match tokio::fs::metadata(&path).await {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound
+                || error.raw_os_error() == Some(libc::ELOOP) =>
+        {
+            // Nginx follows links while building autoindex entries. Broken and
+            // looping links fall back to link metadata and are shown as "other".
+            tokio::fs::symlink_metadata(path).await.map(Some)
+        }
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn jsonp_callback(request: &Request) -> Result<Option<String>, ()> {

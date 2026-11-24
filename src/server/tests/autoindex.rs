@@ -105,3 +105,73 @@ async fn renders_html_json_jsonp_and_xml_autoindexes() {
 
     let _ = std::fs::remove_dir_all(prefix);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn follows_symlinks_for_autoindex_types_and_metadata() {
+    use std::os::unix::fs::symlink;
+
+    let (prefix, config) = test_config(
+        r#"
+            worker_processes 1;
+            events { worker_connections 64; }
+            http {
+                server {
+                    listen 127.0.0.1:18162;
+                    root html;
+                    autoindex on;
+                    location /json/ { autoindex_format json; }
+                    location /xml/ { autoindex_format xml; }
+                }
+            }
+        "#,
+        &[("html/file.txt", "0123456789"), ("html/dir/keep", "x")],
+    );
+    for format in ["json", "xml"] {
+        let directory = prefix.join("html").join(format);
+        std::fs::create_dir_all(&directory).unwrap();
+        symlink(prefix.join("html/file.txt"), directory.join("file-link")).unwrap();
+        symlink(prefix.join("html/dir"), directory.join("dir-link")).unwrap();
+        symlink(prefix.join("html/missing"), directory.join("broken-link")).unwrap();
+    }
+    symlink(prefix.join("html/file.txt"), prefix.join("html/file-link")).unwrap();
+    symlink(prefix.join("html/dir"), prefix.join("html/dir-link")).unwrap();
+
+    let response = request_body(
+        &config,
+        "GET /json/ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let (_, body) = split_http_response(response.as_bytes());
+    let body = std::str::from_utf8(body).unwrap();
+    assert!(body.contains("{ \"name\":\"file-link\", \"type\":\"file\", \"mtime\":\""));
+    assert!(body.contains(", \"size\":10 }"));
+    assert!(body.contains("{ \"name\":\"dir-link\", \"type\":\"directory\", \"mtime\":\""));
+    assert!(body.contains("{ \"name\":\"broken-link\", \"type\":\"other\", \"mtime\":\""));
+
+    let response = request_body(
+        &config,
+        "GET /xml/ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let (_, body) = split_http_response(response.as_bytes());
+    let body = std::str::from_utf8(body).unwrap();
+    assert!(body.contains("<file "));
+    assert!(body.contains(" size=\"10\">file-link</file>"));
+    assert!(body.contains("<directory "));
+    assert!(body.contains(">dir-link</directory>"));
+    assert!(body.contains("<other "));
+    assert!(body.contains(">broken-link</other>"));
+
+    let response = request_body(
+        &config,
+        "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let (_, body) = split_http_response(response.as_bytes());
+    let body = std::str::from_utf8(body).unwrap();
+    assert!(body.contains("href=\"dir-link/\""));
+    assert!(!body.contains("href=\"dir-link\""));
+
+    let _ = std::fs::remove_dir_all(prefix);
+}
