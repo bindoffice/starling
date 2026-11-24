@@ -1,6 +1,23 @@
 use super::*;
 use crate::server::stream::handle_stream_accepted;
 
+pub(super) fn run_with_worker_stack(
+    future: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    std::thread::Builder::new()
+        .stack_size(crate::runtime::WORKER_THREAD_STACK_SIZE)
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(future);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 pub(super) async fn stream_response(config: &Arc<RuntimeConfig>, client_input: &[u8]) -> Vec<u8> {
     let route = build_stream_routes(config)[0].clone();
     let local = route.address.clone();

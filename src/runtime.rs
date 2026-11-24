@@ -12,7 +12,9 @@ use crate::{SERVER_SOFTWARE, STARLING_VERSION};
 
 const CONFIGURE_ARGUMENTS: &str = "--with-http_starling_module --with-http_v2_module";
 
-pub(crate) const WORKER_THREAD_STACK_SIZE: usize = 4 * 1024 * 1024;
+// Match the usual Linux/Nginx worker stack. Nested internal redirects,
+// auth_request subrequests, and error-page handling can exceed 4 MiB.
+pub(crate) const WORKER_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct Cli {

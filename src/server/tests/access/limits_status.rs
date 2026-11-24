@@ -53,10 +53,11 @@ async fn applies_satisfy_any_and_all_access_semantics() {
     let _ = std::fs::remove_dir_all(prefix);
 }
 
-#[tokio::test]
-async fn authorizes_requests_with_auth_request_subrequests() {
-    let (prefix, config) = test_config(
-        r#"
+#[test]
+fn authorizes_requests_with_auth_request_subrequests() {
+    run_with_worker_stack(async {
+        let (prefix, config) = test_config(
+            r#"
                 worker_processes 1;
                 events { worker_connections 64; }
                 http {
@@ -75,27 +76,28 @@ async fn authorizes_requests_with_auth_request_subrequests() {
                     }
                 }
             "#,
-        &[],
-    );
-    let allowed = request_body(
-        &config,
-        "GET /private/?allow=yes HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-    )
-    .await;
-    assert!(
-        allowed.starts_with("HTTP/1.1 200 OK\r\n") && allowed.ends_with("204\n"),
-        "unexpected auth_request allow response:\n{allowed}"
-    );
-    let denied = request_body(
-        &config,
-        "GET /private/?allow=no HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-    )
-    .await;
-    assert!(
-        denied.starts_with("HTTP/1.1 401 Unauthorized\r\n"),
-        "unexpected auth_request deny response:\n{denied}"
-    );
-    let _ = std::fs::remove_dir_all(prefix);
+            &[],
+        );
+        let allowed = request_body(
+            &config,
+            "GET /private/?allow=yes HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(
+            allowed.starts_with("HTTP/1.1 200 OK\r\n") && allowed.ends_with("204\n"),
+            "unexpected auth_request allow response:\n{allowed}"
+        );
+        let denied = request_body(
+            &config,
+            "GET /private/?allow=no HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(
+            denied.starts_with("HTTP/1.1 401 Unauthorized\r\n"),
+            "unexpected auth_request deny response:\n{denied}"
+        );
+        let _ = std::fs::remove_dir_all(prefix);
+    });
 }
 
 #[tokio::test]

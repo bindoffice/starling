@@ -2,7 +2,7 @@ use super::support::*;
 
 #[test]
 fn follows_recursive_error_pages_only_when_enabled() {
-    run_with_server_stack(async {
+    run_with_worker_stack(async {
         let (prefix, config) = test_config(
             r#"
             worker_processes 1;
@@ -59,21 +59,6 @@ fn follows_recursive_error_pages_only_when_enabled() {
         assert!(enabled.ends_with("redirected page\n"));
         let _ = std::fs::remove_dir_all(prefix);
     });
-}
-
-fn run_with_server_stack(future: impl std::future::Future<Output = ()> + Send + 'static) {
-    std::thread::Builder::new()
-        .stack_size(crate::runtime::WORKER_THREAD_STACK_SIZE)
-        .spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(future);
-        })
-        .unwrap()
-        .join()
-        .unwrap();
 }
 
 #[tokio::test]
