@@ -74,6 +74,7 @@ pub(in crate::server) async fn dispatch_http_request(
     let RuntimeSnapshot {
         config,
         listener_groups,
+        http_error_loggers,
         upstream_keepalive_generation,
     } = snapshot;
     let Some(http) = config.http.as_ref() else {
@@ -145,7 +146,7 @@ pub(in crate::server) async fn dispatch_http_request(
     }
     variables.error_logs = Some(RequestErrorLogs::new(
         state.logger.clone(),
-        state.http_error_loggers.read().await.clone(),
+        http_error_loggers.clone(),
     ));
     variables.client_abort = client_abort;
     if let Some(tls) = &connection.tls {
@@ -223,7 +224,8 @@ pub(in crate::server) async fn dispatch_http_request(
                 variables.uri.clear();
                 variables.args.clear();
                 variables.status = 400;
-                let error_logger = http_logger_for_context(state, &server.context).await;
+                let error_logger =
+                    http_logger_for_context(state, &http_error_loggers, &server.context);
                 let response = error_response(400);
                 log_access(http, &server.context, &variables);
                 return Some(DispatchAction::Response(DispatchOutcome {
@@ -316,13 +318,17 @@ pub(in crate::server) async fn dispatch_http_request(
         variables.body_bytes_sent = 0;
         let tunnel = match build_tunnel_dispatch(http, &processed.context, &mut variables) {
             Ok(mut tunnel) => {
-                tunnel.error_logger =
-                    Some(http_logger_for_context(state, &processed.context).await);
+                tunnel.error_logger = Some(http_logger_for_context(
+                    state,
+                    &http_error_loggers,
+                    &processed.context,
+                ));
                 tunnel.connection_guard = connection_guard.take();
                 tunnel
             }
             Err(response) => {
-                let error_logger = http_logger_for_context(state, &processed.context).await;
+                let error_logger =
+                    http_logger_for_context(state, &http_error_loggers, &processed.context);
                 return Some(DispatchAction::Response(DispatchOutcome {
                     response: *response,
                     error_logger,
@@ -373,7 +379,7 @@ pub(in crate::server) async fn dispatch_http_request(
                 variables: variables.clone(),
             })
         });
-        let error_logger = http_logger_for_context(state, &processed.context).await;
+        let error_logger = http_logger_for_context(state, &http_error_loggers, &processed.context);
         return Some(DispatchAction::Response(DispatchOutcome {
             response,
             error_logger,
@@ -525,7 +531,7 @@ pub(in crate::server) async fn dispatch_http_request(
         0,
     );
 
-    let error_logger = http_logger_for_context(state, &processed.context).await;
+    let error_logger = http_logger_for_context(state, &http_error_loggers, &processed.context);
     Some(DispatchAction::Response(DispatchOutcome {
         response,
         error_logger,

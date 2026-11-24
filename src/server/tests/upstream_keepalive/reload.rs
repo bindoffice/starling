@@ -51,6 +51,7 @@ async fn pool_keys_keep_the_generation_captured_when_the_request_started() {
     state.config.store(Arc::new(RuntimeSnapshot {
         config: request_config.clone(),
         listener_groups: build_listener_groups(&request_config).into(),
+        http_error_loggers: build_http_error_loggers(&request_config).unwrap(),
         upstream_keepalive_generation: pool.generation(),
     }));
 

@@ -171,7 +171,6 @@ pub struct SharedState {
     tls_configs: Arc<RwLock<HashMap<ListenAddress, Arc<HttpTlsConfigs>>>>,
     stream_tls_configs: Arc<RwLock<HashMap<ListenAddress, Arc<StreamTlsConfigs>>>>,
     logger: Arc<Logger>,
-    http_error_loggers: Arc<RwLock<HttpErrorLoggers>>,
     stream_loggers: Arc<RwLock<HashMap<usize, Arc<Logger>>>>,
     limits: Arc<Mutex<LimitState>>,
     stats: Arc<ConnectionStats>,
@@ -184,6 +183,7 @@ pub struct SharedState {
 pub(in crate::server) struct RuntimeSnapshot {
     pub(in crate::server) config: Arc<RuntimeConfig>,
     pub(in crate::server) listener_groups: Arc<[ListenerGroup]>,
+    pub(in crate::server) http_error_loggers: HttpErrorLoggers,
     pub(in crate::server) upstream_keepalive_generation: u64,
 }
 
@@ -194,6 +194,7 @@ impl SharedState {
         RuntimeSnapshot {
             config: snapshot.config.clone(),
             listener_groups: snapshot.listener_groups.clone(),
+            http_error_loggers: snapshot.http_error_loggers.clone(),
             upstream_keepalive_generation: snapshot.upstream_keepalive_generation,
         }
     }

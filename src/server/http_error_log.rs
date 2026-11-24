@@ -41,24 +41,22 @@ fn collect_location_error_logs(
     }
 }
 
-pub(in crate::server) async fn http_logger_for_context(
+pub(in crate::server) fn http_logger_for_context(
     state: &SharedState,
+    http_error_loggers: &HttpErrorLoggers,
     context: &EffectiveConfig,
 ) -> Arc<Logger> {
     if context.error_logs.is_empty() {
         return state.logger.clone();
     }
-    state
-        .http_error_loggers
-        .read()
-        .await
+    http_error_loggers
         .get(&context.error_logs)
         .cloned()
         .unwrap_or_else(|| state.logger.clone())
 }
 
-pub(in crate::server) async fn reopen_http_error_loggers(state: &SharedState) {
-    for logger in state.http_error_loggers.read().await.values() {
+pub(in crate::server) fn reopen_http_error_loggers(state: &SharedState) {
+    for logger in state.config.load().http_error_loggers.values() {
         logger.reopen();
     }
 }

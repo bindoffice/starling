@@ -56,13 +56,13 @@ async fn completes_tls_handshake_and_serves_https() {
         config: Arc::new(ArcSwap::from_pointee(RuntimeSnapshot {
             config: config.clone(),
             listener_groups: build_listener_groups(&config).into(),
+            http_error_loggers,
             upstream_keepalive_generation: 0,
         })),
         reload: Arc::new(reload),
         tls_configs: Arc::new(RwLock::new(HashMap::new())),
         stream_tls_configs: Arc::new(RwLock::new(HashMap::new())),
         logger,
-        http_error_loggers: Arc::new(RwLock::new(http_error_loggers)),
         stream_loggers: Arc::new(RwLock::new(
             build_stream_loggers(&config).expect("stream error loggers"),
         )),

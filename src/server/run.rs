@@ -25,13 +25,13 @@ pub async fn run(config: RuntimeConfig, logger: Arc<Logger>) -> io::Result<()> {
         config: Arc::new(ArcSwap::from_pointee(RuntimeSnapshot {
             config,
             listener_groups,
+            http_error_loggers,
             upstream_keepalive_generation: upstream_keepalive.generation(),
         })),
         reload: Arc::new(reload_tx),
         tls_configs: Arc::new(RwLock::new(tls_configs)),
         stream_tls_configs: Arc::new(RwLock::new(stream_tls_configs)),
         logger,
-        http_error_loggers: Arc::new(RwLock::new(http_error_loggers)),
         stream_loggers: Arc::new(RwLock::new(stream_loggers)),
         limits: Arc::new(Mutex::new(LimitState::default())),
         stats: Arc::new(ConnectionStats::default()),
@@ -203,7 +203,7 @@ pub async fn run(config: RuntimeConfig, logger: Arc<Logger>) -> io::Result<()> {
                 _ = user1.recv() => {
                     reopen_access_logs();
                     state.logger.reopen();
-                    reopen_http_error_loggers(&state).await;
+                    reopen_http_error_loggers(&state);
                     reopen_stream_loggers(&state).await;
                     state.logger.log(LogLevel::Notice, "reopening logs");
                 }
@@ -339,7 +339,6 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
     reopen_access_logs();
     *state.tls_configs.write().await = tls_configs;
     *state.stream_tls_configs.write().await = stream_tls_configs;
-    *state.http_error_loggers.write().await = http_error_loggers;
     *state.stream_loggers.write().await = stream_loggers;
     state.upstream_keepalive.clear().await;
     state.proxy_cache.reload(new_config.http.as_ref());
@@ -349,6 +348,7 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
     state.config.store(Arc::new(RuntimeSnapshot {
         config: new_config,
         listener_groups: groups.into(),
+        http_error_loggers,
         upstream_keepalive_generation: generation,
     }));
     state.notify_reload();
