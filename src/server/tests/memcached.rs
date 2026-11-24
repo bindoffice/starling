@@ -2,6 +2,7 @@ use super::support::*;
 use super::*;
 use tokio::io::AsyncBufReadExt;
 
+mod ranges_filters;
 mod streaming;
 
 #[tokio::test]
