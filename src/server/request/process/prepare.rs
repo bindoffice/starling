@@ -200,10 +200,7 @@ pub(super) async fn prepare_request(
                     });
                 }
                 TryFilesResult::FallbackUri(uri) => {
-                    env.uri = normalize_uri(&uri).unwrap_or_else(|| uri.clone());
-                    env.unparsed_uri = None;
-                    env.internal = true;
-                    env.bypass_try_files = false;
+                    apply_try_files_fallback_uri(&mut env, &uri);
                     if !consume_uri_change(&mut uri_changes) {
                         return error_outcome(*context);
                     }

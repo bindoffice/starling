@@ -11,6 +11,19 @@ use prepare::{PrepareOutcome, prepare_request};
 
 pub(in crate::server) const MAX_URI_CHANGES: usize = 10;
 
+pub(super) fn apply_try_files_fallback_uri(env: &mut RequestEnv, target: &str) {
+    let (path, args) = match target.split_once('?') {
+        Some((path, args)) => (path, Some(args.to_string())),
+        None => (target, None),
+    };
+    env.uri = normalize_uri(path).unwrap_or_else(|| path.to_string());
+    env.args = args;
+    env.unparsed_uri = None;
+    env.internal = true;
+    env.bypass_try_files = false;
+    env.add_uri_to_alias = false;
+}
+
 pub(in crate::server) async fn process_request(
     http: &HttpConfig,
     server: &ServerConfig,
