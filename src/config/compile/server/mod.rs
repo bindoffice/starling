@@ -36,15 +36,17 @@ pub(super) fn compile_server(
     for child in &directive.children {
         match child.name.as_str() {
             "listen" => {
-                let listen = parse_listen(child, prefix)?;
-                if listen.udp {
-                    return Err(ConfigError::at(
-                        child.location.clone(),
-                        "UDP listen sockets are not supported in http context",
-                    ));
+                let parsed = parse_listen(child, prefix)?;
+                for listen in parsed {
+                    if listen.udp {
+                        return Err(ConfigError::at(
+                            child.location.clone(),
+                            "UDP listen sockets are not supported in http context",
+                        ));
+                    }
+                    validate_listen_conflicts(&listen, &listens, &child.location)?;
+                    listens.push(listen);
                 }
-                validate_listen_conflicts(&listen, &listens, &child.location)?;
-                listens.push(listen);
             }
             "server_name" => {
                 validate_no_block(child)?;

@@ -67,10 +67,12 @@ pub(super) fn compile_stream_server(
         match child.name.as_str() {
             "listen" => {
                 validate_no_block(child)?;
-                let listen = parse_listen(child, prefix)?;
-                validate_stream_listen_options(&listen, &child.location)?;
-                validate_listen_conflicts(&listen, &listens, &child.location)?;
-                listens.push(listen);
+                let parsed = parse_listen(child, prefix)?;
+                for listen in parsed {
+                    validate_stream_listen_options(&listen, &child.location)?;
+                    validate_listen_conflicts(&listen, &listens, &child.location)?;
+                    listens.push(listen);
+                }
             }
             "server_name" => {
                 validate_no_block(child)?;

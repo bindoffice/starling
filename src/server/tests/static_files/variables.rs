@@ -20,6 +20,7 @@ async fn evaluates_map_variables() {
                         hostnames;
                         example.com exact;
                         *.example.org wildcard;
+                        .dot.example.org special-wildcard;
                         default other;
                     }
                     map $arg_code $label {
@@ -44,6 +45,16 @@ async fn evaluates_map_variables() {
     assert!(
         mapped.ends_with("mapped|active|wildcard|code-42\n"),
         "unexpected response:\n{mapped}"
+    );
+
+    let special_wildcard = request_body(
+        &config,
+        "GET /?code=a42 HTTP/1.1\r\nHost: www.dot.example.org.\r\nX-Mode: special\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(
+        special_wildcard.ends_with("mapped|active|special-wildcard|code-42\n"),
+        "unexpected response:\n{special_wildcard}"
     );
 
     let defaults = request_body(

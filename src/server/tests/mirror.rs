@@ -229,11 +229,12 @@ fn compiles_mirror_inheritance_and_off() {
                 events { worker_connections 64; }
                 http {
                     mirror /http;
+                    log_subrequest on;
                     server {
                         listen 127.0.0.1:18172;
                         mirror /first;
                         mirror /second;
-                        location /inherit/ { }
+                        location /inherit/ { log_subrequest off; }
                         location /off/ { mirror off; }
                     }
                 }
@@ -245,6 +246,8 @@ fn compiles_mirror_inheritance_and_off() {
     assert_eq!(server.locations[0].context.mirrors, ["/first", "/second"]);
     assert!(server.locations[1].context.mirrors.is_empty());
     assert!(server.context.mirror_request_body);
+    assert!(server.context.log_subrequest);
+    assert!(!server.locations[0].context.log_subrequest);
 
     let duplicate = test_config_error(
         r#"

@@ -209,8 +209,11 @@ impl<'a> HttpCompileState<'a> {
             "limit_conn_dry_run" => {
                 self.context.limit_conn_dry_run = parse_flag(child, "limit_conn_dry_run")?;
             }
-            "limit_req_log_level" | "limit_conn_log_level" => {
-                parse_limit_log_level(child, &child.name)?;
+            "limit_req_log_level" => {
+                self.context.limit_req_log_level = parse_limit_log_level(child, &child.name)?;
+            }
+            "limit_conn_log_level" => {
+                self.context.limit_conn_log_level = parse_limit_log_level(child, &child.name)?;
             }
             "log_format" => compile_log_format(child, &mut self.log_formats, true)?,
             "open_log_file_cache" => {

@@ -194,6 +194,7 @@ pub(super) fn apply_common_directive(
         "gunzip" => context.gunzip = parse_flag(directive, "gunzip")?,
         "sendfile" => context.sendfile = parse_flag(directive, "sendfile")?,
         "log_not_found" => context.log_not_found = parse_flag(directive, "log_not_found")?,
+        "log_subrequest" => context.log_subrequest = parse_flag(directive, "log_subrequest")?,
         "proxy_connect_timeout" => {
             validate_no_block(directive)?;
             context.proxy_connect_timeout =

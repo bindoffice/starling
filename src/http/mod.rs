@@ -53,7 +53,7 @@ impl Request {
         if self.method == "CONNECT" {
             return parse_connect_authority(&self.target).map(|(_, port)| port);
         }
-        let authority = self.absolute_authority()?;
+        let authority = self.absolute_authority().or_else(|| self.header("host"))?;
         parse_connect_authority(authority).map(|(_, port)| port)
     }
 

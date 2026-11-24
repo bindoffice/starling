@@ -260,7 +260,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             keep_alive: head.keep_alive,
         };
 
-        let client_abort = ClientAbortState::default();
+        let client_abort = ClientAbortState::with_socket(control.clone());
         let dispatch = dispatch_http_request(
             snapshot,
             &group,

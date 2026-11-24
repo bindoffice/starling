@@ -15,6 +15,7 @@ fn compiles_map_variables_and_rejects_duplicate_defaults() {
                     default other;
                     example.com exact;
                     *.example.org wildcard;
+                    .dot.example.org special-wildcard;
                 }
                 server {
                     listen 127.0.0.1:18091;
@@ -35,7 +36,8 @@ fn compiles_map_variables_and_rejects_duplicate_defaults() {
         map.exact.get("example.com").map(String::as_str),
         Some("exact")
     );
-    assert_eq!(map.leading_wildcards[0].0, ".example.org");
+    assert_eq!(map.leading_wildcards[0].0, ".dot.example.org");
+    assert_eq!(map.leading_wildcards[1].0, ".example.org");
 
     fs::write(
         &config_path,

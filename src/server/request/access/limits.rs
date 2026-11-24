@@ -100,7 +100,12 @@ pub(in crate::server) fn acquire_connection_limits(
     context: &EffectiveConfig,
     variables: &mut Variables,
 ) -> Result<ConnectionLimitGuard, u16> {
-    let mut guard = ConnectionLimitGuard::new(variables.limits.clone());
+    let socket = variables
+        .client_abort
+        .as_ref()
+        .and_then(ClientAbortState::socket);
+    let mut guard = ConnectionLimitGuard::new(variables.limits.clone(), socket);
+    let logger = variables.error_logger_for(context);
     let mut applied = false;
     let mut dry_run_rejected = false;
     for limit in &context.limit_conns {
@@ -119,6 +124,20 @@ pub(in crate::server) fn acquire_connection_limits(
             }
             Ok(false) => {
                 variables.limit_conn_status = "REJECTED".into();
+                if let Some(logger) = &logger {
+                    logger.log(
+                        context.limit_conn_log_level,
+                        format!(
+                            "limiting connections{} by zone \"{}\"",
+                            if context.limit_conn_dry_run {
+                                ", dry run,"
+                            } else {
+                                ""
+                            },
+                            limit.zone
+                        ),
+                    );
+                }
                 return Err(context.limit_conn_status);
             }
             Err(()) => return Err(500),
@@ -130,6 +149,9 @@ pub(in crate::server) fn acquire_connection_limits(
         } else {
             "PASSED".into()
         };
+        if let Some(client_abort) = variables.client_abort.as_ref() {
+            client_abort.set_connection_limit(guard.handle());
+        }
     }
     Ok(guard)
 }

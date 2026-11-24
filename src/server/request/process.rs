@@ -174,6 +174,7 @@ async fn process_request_inner(
             env.valid_location = true;
             env.internal = true;
             env.bypass_try_files = true;
+            env.mirror_checked = false;
             variables.uri = env.uri.clone();
             return Box::pin(process_request_inner(
                 http,

@@ -82,6 +82,8 @@ pub(in crate::config::compile) fn compile_map(directive: &Directive) -> ConfigRe
         if map.hostnames && normalized.starts_with("*.") {
             map.leading_wildcards
                 .push((normalized[1..].to_string(), value));
+        } else if map.hostnames && normalized.starts_with('.') && normalized.len() > 1 {
+            map.leading_wildcards.push((normalized, value));
         } else if map.hostnames && normalized.ends_with(".*") {
             map.trailing_wildcards
                 .push((normalized[..normalized.len() - 1].to_string(), value));

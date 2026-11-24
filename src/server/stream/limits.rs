@@ -7,7 +7,7 @@ pub(in crate::server) fn acquire_stream_connection_limits(
     state: &SharedState,
     log: &mut StreamLogContext,
 ) -> Result<ConnectionLimitGuard, ()> {
-    let mut guard = ConnectionLimitGuard::new(state.limits.clone());
+    let mut guard = ConnectionLimitGuard::new(state.limits.clone(), None);
     let mut applied = false;
     for limit in &server.limit_conns {
         let key = eval_stream_log_variables_bytes(&limit.key, log);

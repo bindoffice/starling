@@ -101,6 +101,73 @@ fn applies_listen_socket_options_to_stream_and_defaults() {
     let _ = fs::remove_dir_all(prefix);
 }
 
+#[test]
+fn expands_ipv4_and_ipv6_listen_port_ranges() {
+    let prefix = temp_prefix();
+    fs::create_dir_all(&prefix).unwrap();
+    let config_path = prefix.join("nginx.conf");
+    fs::write(
+        &config_path,
+        r#"
+            events {}
+            http {
+                server {
+                    listen 127.0.0.1:18310-18312 reuseport;
+                    listen [::1]:18310-18312;
+                }
+            }
+            stream {
+                server {
+                    listen 127.0.0.1:18313-18314;
+                    return ok;
+                }
+            }
+        "#,
+    )
+    .unwrap();
+    let document = ConfigLoader::new(prefix.clone())
+        .load(&config_path)
+        .unwrap();
+    let config = compile(document, prefix.clone(), config_path).unwrap();
+    let listens = &config.http.as_ref().unwrap().servers[0].listens;
+    assert_eq!(listens.len(), 6);
+    assert_eq!(
+        listens
+            .iter()
+            .take(3)
+            .map(|listen| listen.address.to_string())
+            .collect::<Vec<_>>(),
+        ["127.0.0.1:18310", "127.0.0.1:18311", "127.0.0.1:18312"]
+    );
+    assert!(
+        listens
+            .iter()
+            .take(3)
+            .all(|listen| { listen.socket_options.reuseport && listen.socket_options_set })
+    );
+    assert_eq!(
+        listens
+            .iter()
+            .skip(3)
+            .map(|listen| listen.address.to_string())
+            .collect::<Vec<_>>(),
+        ["[::1]:18310", "[::1]:18311", "[::1]:18312"]
+    );
+    assert_eq!(config.stream.as_ref().unwrap().servers[0].listens.len(), 2);
+
+    for range in ["18312-18310", "0-1", "65535-65536"] {
+        let error = compile_error(
+            &format!("events {{}} http {{ server {{ listen 127.0.0.1:{range}; }} }}"),
+            &compile_prefix(),
+        );
+        assert!(
+            error.contains("invalid port") || error.contains("invalid port range"),
+            "unexpected error for {range}: {error}"
+        );
+    }
+    let _ = fs::remove_dir_all(prefix);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn compiles_multipath_listener_on_linux() {

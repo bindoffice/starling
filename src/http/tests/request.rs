@@ -43,7 +43,7 @@ async fn parses_connect_authority_with_a_required_port() {
 }
 
 #[tokio::test]
-async fn exposes_request_line_ports_without_using_the_host_header() {
+async fn exposes_request_ports_from_absolute_targets_or_the_host_header() {
     let absolute = b"GET http://example.test:8080/hello HTTP/1.1\r\nHost: proxy.test\r\n\r\n";
     let mut reader = BufReader::new(&absolute[..]);
     let request = read_request(
@@ -61,6 +61,20 @@ async fn exposes_request_line_ports_without_using_the_host_header() {
 
     let origin = b"GET /hello HTTP/1.1\r\nHost: example.test:8080\r\n\r\n";
     let mut reader = BufReader::new(&origin[..]);
+    let request = read_request(
+        &mut reader,
+        "127.0.0.1:1234".into(),
+        "127.0.0.1:80".into(),
+        Duration::from_secs(1),
+        1024,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(request.request_port(), Some(8080));
+
+    let precedence = b"GET http://example.test/ HTTP/1.1\r\nHost: proxy.test:9000\r\n\r\n";
+    let mut reader = BufReader::new(&precedence[..]);
     let request = read_request(
         &mut reader,
         "127.0.0.1:1234".into(),

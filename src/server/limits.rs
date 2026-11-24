@@ -1,9 +1,13 @@
 use super::*;
+use std::sync::atomic::AtomicBool;
+
+type LimitKey = (String, Vec<u8>);
+type GuardEntry = (LimitKey, Arc<ConnectionOwner>);
 
 #[derive(Default)]
 pub(in crate::server) struct LimitState {
-    pub(super) requests: HashMap<(String, Vec<u8>), RequestBucket>,
-    pub(super) connections: HashMap<(String, Vec<u8>), u64>,
+    pub(super) requests: HashMap<LimitKey, RequestBucket>,
+    pub(super) connections: HashMap<LimitKey, Vec<Arc<ConnectionOwner>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -13,15 +17,56 @@ pub(super) struct RequestBucket {
 }
 
 pub(in crate::server) struct ConnectionLimitGuard {
+    inner: Arc<Mutex<ConnectionLimitGuardState>>,
+}
+
+struct ConnectionLimitGuardState {
     state: Arc<Mutex<LimitState>>,
-    keys: Vec<(String, Vec<u8>)>,
+    socket: Option<ClientSocketControl>,
+    entries: Vec<GuardEntry>,
+}
+
+pub(super) struct ConnectionOwner {
+    released: AtomicBool,
+    socket: Option<ClientSocketControl>,
+}
+
+impl ConnectionOwner {
+    fn closed(&self) -> bool {
+        self.socket
+            .as_ref()
+            .is_some_and(ClientSocketControl::close_detected)
+    }
+}
+
+#[derive(Clone)]
+pub(in crate::server) struct ConnectionLimitGuardHandle {
+    inner: Arc<Mutex<ConnectionLimitGuardState>>,
+}
+
+impl std::fmt::Debug for ConnectionLimitGuardHandle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ConnectionLimitGuardHandle")
+    }
 }
 
 impl ConnectionLimitGuard {
-    pub(in crate::server) fn new(state: Arc<Mutex<LimitState>>) -> Self {
+    pub(in crate::server) fn new(
+        state: Arc<Mutex<LimitState>>,
+        socket: Option<ClientSocketControl>,
+    ) -> Self {
         Self {
-            state,
-            keys: Vec::new(),
+            inner: Arc::new(Mutex::new(ConnectionLimitGuardState {
+                state,
+                socket,
+                entries: Vec::new(),
+            })),
+        }
+    }
+
+    pub(in crate::server) fn handle(&self) -> ConnectionLimitGuardHandle {
+        ConnectionLimitGuardHandle {
+            inner: self.inner.clone(),
         }
     }
 
@@ -33,24 +78,43 @@ impl ConnectionLimitGuard {
         key: &[u8],
         connections: u64,
     ) -> Result<bool, ()> {
-        let mut state = self.state.lock().map_err(|_| ())?;
+        let mut inner = self.inner.lock().map_err(|_| ())?;
+        let mut state = inner.state.lock().map_err(|_| ())?;
         let state_key = (zone.to_string(), key.to_vec());
-        let count = state.connections.get(&state_key).copied().unwrap_or(0);
-        if count >= connections {
+        let owners = state.connections.entry(state_key.clone()).or_default();
+        owners.retain(|owner| {
+            if owner.released.load(Ordering::Acquire) {
+                return false;
+            }
+            if owner.closed() {
+                owner.released.store(true, Ordering::Release);
+                return false;
+            }
+            true
+        });
+        if owners.len() as u64 >= connections {
             return Ok(false);
         }
-        state.connections.insert(state_key.clone(), count + 1);
+        let owner = Arc::new(ConnectionOwner {
+            released: AtomicBool::new(false),
+            socket: inner.socket.clone(),
+        });
+        owners.push(owner.clone());
         drop(state);
-        self.keys.push(state_key);
+        inner.entries.push((state_key, owner));
         Ok(true)
     }
 
-    pub(in crate::server) fn release_all(&mut self) {
-        let Ok(mut state) = self.state.lock() else {
-            self.keys.clear();
+    pub(in crate::server) fn release_all(&self) {
+        let Ok(mut inner) = self.inner.lock() else {
             return;
         };
-        release_keys(&mut state, &mut self.keys);
+        let state = inner.state.clone();
+        let Ok(mut state) = state.lock() else {
+            inner.entries.clear();
+            return;
+        };
+        release_entries(&mut state, &mut inner.entries);
     }
 }
 
@@ -60,13 +124,30 @@ impl Drop for ConnectionLimitGuard {
     }
 }
 
-fn release_keys(state: &mut LimitState, keys: &mut Vec<(String, Vec<u8>)>) {
-    for key in keys.drain(..) {
-        let Some(count) = state.connections.get_mut(&key) else {
+impl ConnectionLimitGuardHandle {
+    pub(in crate::server) fn release_all(&self) {
+        let Ok(mut inner) = self.inner.lock() else {
+            return;
+        };
+        let state = inner.state.clone();
+        let Ok(mut state) = state.lock() else {
+            inner.entries.clear();
+            return;
+        };
+        release_entries(&mut state, &mut inner.entries);
+    }
+}
+
+fn release_entries(state: &mut LimitState, entries: &mut Vec<GuardEntry>) {
+    for (key, owner) in entries.drain(..) {
+        if owner.released.swap(true, Ordering::AcqRel) {
+            continue;
+        }
+        let Some(owners) = state.connections.get_mut(&key) else {
             continue;
         };
-        *count = count.saturating_sub(1);
-        if *count == 0 {
+        owners.retain(|candidate| !Arc::ptr_eq(candidate, &owner));
+        if owners.is_empty() {
             state.connections.remove(&key);
         }
     }

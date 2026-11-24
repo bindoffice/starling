@@ -70,11 +70,14 @@ fn compiles_limit_zones_and_inherited_limits() {
                 limit_conn connections 4;
                 limit_req_status 429;
                 limit_conn_status 503;
+                limit_req_log_level warn;
+                limit_conn_log_level notice;
                 server {
                     listen 127.0.0.1:18111;
                     location /strict/ {
                         limit_req zone=requests burst=1 nodelay;
                         limit_conn connections 1;
+                        limit_conn_log_level info;
                         return 204;
                     }
                     location / { return 204; }
@@ -96,9 +99,15 @@ fn compiles_limit_zones_and_inherited_limits() {
     assert_eq!(server.context.limit_reqs[0].delay, 2);
     assert_eq!(server.context.limit_conns[0].connections, 4);
     assert_eq!(server.context.limit_req_status, 429);
+    assert_eq!(server.context.limit_req_log_level, LogLevel::Warn);
+    assert_eq!(server.context.limit_conn_log_level, LogLevel::Notice);
     assert_eq!(server.locations[0].context.limit_reqs[0].burst, 1);
     assert!(server.locations[0].context.limit_reqs[0].nodelay);
     assert_eq!(server.locations[0].context.limit_conns[0].connections, 1);
+    assert_eq!(
+        server.locations[0].context.limit_conn_log_level,
+        LogLevel::Info
+    );
     assert_eq!(server.locations[1].context.limit_reqs[0].burst, 5);
 
     let invalid = [

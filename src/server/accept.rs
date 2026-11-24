@@ -59,6 +59,9 @@ pub(in crate::server) async fn accept_loop(
                             )
                             .await;
                         });
+                        // Keep accept from starving already accepted connections when
+                        // the listener remains continuously readable.
+                        tokio::task::yield_now().await;
                     }
                     Err(err) => {
                         state.logger.log(LogLevel::Error, format!("accept() failed: {err}"));
@@ -140,6 +143,7 @@ pub(in crate::server) async fn accept_unix_loop(
                             )
                             .await;
                         });
+                        tokio::task::yield_now().await;
                     }
                     Err(err) => {
                         state.logger.log(LogLevel::Error, format!("accept() failed: {err}"));

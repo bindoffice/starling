@@ -3,7 +3,7 @@ use super::*;
 pub(in crate::config::compile) fn parse_listen(
     directive: &Directive,
     prefix: &Path,
-) -> ConfigResult<ListenConfig> {
+) -> ConfigResult<Vec<ListenConfig>> {
     if directive.args.is_empty() {
         return Err(ConfigError::at(
             directive.location.clone(),
@@ -11,7 +11,7 @@ pub(in crate::config::compile) fn parse_listen(
         ));
     }
     let value = &directive.args[0];
-    let address = if let Some(path) = value.strip_prefix("unix:") {
+    let addresses = if let Some(path) = value.strip_prefix("unix:") {
         if path.is_empty() {
             return Err(ConfigError::at(
                 directive.location.clone(),
@@ -25,12 +25,15 @@ pub(in crate::config::compile) fn parse_listen(
                 "UNIX domain listen path is too long",
             ));
         }
-        ListenAddress::Unix(path)
+        vec![ListenAddress::Unix(path)]
     } else {
-        ListenAddress::Inet(parse_listen_address(value, &directive.location)?)
+        parse_listen_addresses(value, &directive.location)?
+            .into_iter()
+            .map(ListenAddress::Inet)
+            .collect()
     };
     let mut listen = ListenConfig {
-        address,
+        address: addresses[0].clone(),
         ssl: false,
         http2: false,
         udp: false,
@@ -136,7 +139,13 @@ pub(in crate::config::compile) fn parse_listen(
             }
         }
     }
-    Ok(listen)
+    Ok(addresses
+        .into_iter()
+        .map(|address| ListenConfig {
+            address,
+            ..listen.clone()
+        })
+        .collect())
 }
 
 pub(in crate::config::compile) fn validate_stream_listen_options(
@@ -361,6 +370,41 @@ pub(super) fn parse_listen_address(
             ConfigError::at(location.clone(), format!("host not found in \"{value}\""))
         })?;
     Ok(resolved)
+}
+
+fn parse_listen_addresses(value: &str, location: &SourceLocation) -> ConfigResult<Vec<SocketAddr>> {
+    let Some((host, ports)) = value
+        .rsplit_once(':')
+        .or_else(|| (!value.contains(':')).then_some(("", value)))
+    else {
+        return Ok(vec![parse_listen_address(value, location)?]);
+    };
+    if !ports.contains('-') {
+        return Ok(vec![parse_listen_address(value, location)?]);
+    }
+    let (start, end) = ports.split_once('-').ok_or_else(|| {
+        ConfigError::at(
+            location.clone(),
+            format!("invalid port range in listen address: {ports}"),
+        )
+    })?;
+    let start = parse_port(start, location)?;
+    let end = parse_port(end, location)?;
+    if start == 0 || start > end {
+        return Err(ConfigError::at(
+            location.clone(),
+            format!("invalid port range in listen address: {ports}"),
+        ));
+    }
+    let seed = if host.is_empty() {
+        start.to_string()
+    } else {
+        format!("{host}:{start}")
+    };
+    let seed = parse_listen_address(&seed, location)?;
+    Ok((start..=end)
+        .map(|port| SocketAddr::new(seed.ip(), port))
+        .collect())
 }
 
 pub(in crate::config::compile) fn parse_port(

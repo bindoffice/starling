@@ -84,8 +84,11 @@ pub(super) fn try_apply_access_directive(
         "limit_conn_dry_run" => {
             context.limit_conn_dry_run = parse_flag(directive, "limit_conn_dry_run")?;
         }
-        "limit_req_log_level" | "limit_conn_log_level" => {
-            parse_limit_log_level(directive, &directive.name)?;
+        "limit_req_log_level" => {
+            context.limit_req_log_level = parse_limit_log_level(directive, &directive.name)?;
+        }
+        "limit_conn_log_level" => {
+            context.limit_conn_log_level = parse_limit_log_level(directive, &directive.name)?;
         }
         "stub_status" => {
             validate_no_block(directive)?;

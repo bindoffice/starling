@@ -204,6 +204,68 @@ fn tracks_connection_limit_guards() {
 }
 
 #[tokio::test]
+async fn releases_a_connection_limit_owner_after_its_client_closes() {
+    let (prefix, config) = test_config(
+        r#"
+                worker_processes 1;
+                events { worker_connections 64; }
+                http {
+                    limit_conn_zone $binary_remote_addr zone=perip:10m;
+                    limit_conn perip 1;
+                    server {
+                        listen 127.0.0.1:18120;
+                        location / { return 204; }
+                    }
+                }
+            "#,
+        &[],
+    );
+    let server = &config.http.as_ref().unwrap().servers[0];
+    let context = &server.locations[0].context;
+    let request = Request {
+        method: "GET".into(),
+        target: "/".into(),
+        version: "HTTP/1.1".into(),
+        headers: vec![Header {
+            name: "Host".into(),
+            value: "localhost".into(),
+        }],
+        body_stream: None,
+        body: Vec::new(),
+        remote_addr: "127.0.0.1:45678".into(),
+        local_addr: "127.0.0.1:18120".into(),
+        keep_alive: false,
+    };
+    let remote: SocketAddr = "127.0.0.1:45678".parse().unwrap();
+    let local: SocketAddr = "127.0.0.1:18120".parse().unwrap();
+    let limits = Arc::new(Mutex::new(LimitState::default()));
+    let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+        Err(error) => panic!("bind connection limit client: {error}"),
+    };
+    let client = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (accepted, _) = listener.accept().await.unwrap();
+    let (_accepted, control) = ClientSocketControl::attach_tcp(accepted).unwrap();
+
+    let mut first = Variables::new(&request, "localhost", server, &local, &remote);
+    first.limits = limits.clone();
+    first.client_abort = Some(ClientAbortState::with_socket(control));
+    let first_guard = acquire_connection_limits(context, &mut first).expect("first connection");
+
+    drop(client);
+    tokio::task::yield_now().await;
+
+    let mut second = Variables::new(&request, "localhost", server, &local, &remote);
+    second.limits = limits;
+    assert!(acquire_connection_limits(context, &mut second).is_ok());
+    drop(first_guard);
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
 async fn keeps_connection_limit_guard_alive_after_request_processing() {
     let (prefix, config) = test_config(
         r#"

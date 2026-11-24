@@ -9,7 +9,6 @@ pub(in crate::config::compile) fn try_apply_compat_directive(
         | "tcp_nopush"
         | "gzip_buffers"
         | "gunzip_buffers"
-        | "log_subrequest"
         | "open_file_cache"
         | "open_file_cache_valid"
         | "open_file_cache_min_uses"
