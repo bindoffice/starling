@@ -132,6 +132,11 @@ pub(in crate::server) fn request_length(request: &Request) -> u64 {
 }
 
 pub(in crate::server) fn hostname() -> String {
+    static HOSTNAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HOSTNAME.get_or_init(compute_hostname).clone()
+}
+
+fn compute_hostname() -> String {
     std::env::var("HOSTNAME")
         .ok()
         .filter(|value| !value.is_empty())

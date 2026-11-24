@@ -193,6 +193,7 @@ impl Variables {
         remote: &R,
     ) -> Self {
         let request_port = request.request_port();
+        let (path, query) = request.path_and_query();
         Self {
             method: request.method.clone(),
             request_target: request.target.clone(),
@@ -248,12 +249,12 @@ impl Variables {
             proxy_protocol_server_addr: String::new(),
             proxy_protocol_server_port: String::new(),
             proxy_protocol_tlvs: None,
-            uri: request.path_and_query().0.to_string(),
-            fastcgi_script_name: request.path_and_query().0.to_string(),
+            uri: path.to_string(),
+            fastcgi_script_name: path.to_string(),
             fastcgi_path_info: String::new(),
-            uwsgi_script_name: request.path_and_query().0.to_string(),
-            scgi_script_name: request.path_and_query().0.to_string(),
-            args: request.path_and_query().1.unwrap_or_default().to_string(),
+            uwsgi_script_name: path.to_string(),
+            scgi_script_name: path.to_string(),
+            args: query.unwrap_or_default().to_string(),
             status: 0,
             bytes_sent: 0,
             body_bytes_sent: 0,
