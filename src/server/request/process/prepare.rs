@@ -57,7 +57,7 @@ pub(super) async fn prepare_request(
             }
             set_buffered_request_body_variable(request, variables);
         }
-        if run_server_rewrite {
+        if run_server_rewrite && !server_context.rewrite_actions.is_empty() {
             match run_script(
                 &mut server_context,
                 &mut env,
@@ -180,7 +180,9 @@ pub(super) async fn prepare_request(
         {
             return response_outcome(context.clone(), error_response(403));
         }
-        refresh_variables(&env, location, variables, &context);
+        if has_rewrite_script {
+            refresh_variables(&env, location, variables, &context);
+        }
 
         if !env.bypass_try_files
             && let Some(try_files) = &context.try_files
@@ -350,6 +352,9 @@ fn run_script(
     location: Option<&LocationConfig>,
     logger: Option<Arc<Logger>>,
 ) -> RewriteOutcome {
+    if context.rewrite_actions.is_empty() {
+        return RewriteOutcome::None;
+    }
     let context = Arc::make_mut(context);
     let actions = std::mem::take(&mut context.rewrite_actions);
     let outcome =
