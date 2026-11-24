@@ -35,7 +35,11 @@ pub(crate) fn prepare_response_headers(response: &mut Response, tokens: ServerTo
 }
 
 pub(crate) fn error_page_body(status: u16, tokens: ServerTokens) -> String {
-    let reason = reason_phrase(status);
+    let reason = if status == 302 {
+        "Found"
+    } else {
+        reason_phrase(status)
+    };
     format!(
         "<html>\r\n<head><title>{status} {reason}</title></head>\r\n\
          <body>\r\n<center><h1>{status} {reason}</h1></center>\r\n\

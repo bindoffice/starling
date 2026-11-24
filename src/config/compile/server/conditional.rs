@@ -41,6 +41,7 @@ pub(super) fn compile_conditional(
     let mut config = ConditionalConfig {
         condition,
         actions: Vec::new(),
+        explicit_content_handler: None,
         ssi: parent.ssi.clone(),
         return_directive: None,
         rewrites: Vec::new(),
@@ -120,6 +121,7 @@ pub(super) fn compile_conditional(
                 seen_proxy_pass = true;
                 validate_no_block(child)?;
                 config.proxy_pass = Some(parse_proxy_pass(child)?);
+                config.explicit_content_handler = Some(ContentHandlerKind::Proxy);
                 config.grpc_pass = None;
                 config.fastcgi_pass = None;
                 config.uwsgi_pass = None;
@@ -138,6 +140,7 @@ pub(super) fn compile_conditional(
                 seen_grpc_pass = true;
                 validate_no_block(child)?;
                 config.grpc_pass = Some(parse_grpc_pass(child)?);
+                config.explicit_content_handler = Some(ContentHandlerKind::Grpc);
                 config.proxy_pass = None;
                 config.fastcgi_pass = None;
                 config.uwsgi_pass = None;
@@ -156,6 +159,7 @@ pub(super) fn compile_conditional(
                 seen_fastcgi_pass = true;
                 validate_no_block(child)?;
                 config.fastcgi_pass = Some(parse_fastcgi_pass(child)?);
+                config.explicit_content_handler = Some(ContentHandlerKind::FastCgi);
                 config.proxy_pass = None;
                 config.grpc_pass = None;
                 config.uwsgi_pass = None;
@@ -174,6 +178,7 @@ pub(super) fn compile_conditional(
                 seen_uwsgi_pass = true;
                 validate_no_block(child)?;
                 config.uwsgi_pass = Some(parse_uwsgi_pass(child)?);
+                config.explicit_content_handler = Some(ContentHandlerKind::Uwsgi);
                 config.proxy_pass = None;
                 config.grpc_pass = None;
                 config.fastcgi_pass = None;
@@ -192,6 +197,7 @@ pub(super) fn compile_conditional(
                 seen_scgi_pass = true;
                 validate_no_block(child)?;
                 config.scgi_pass = Some(parse_scgi_pass(child)?);
+                config.explicit_content_handler = Some(ContentHandlerKind::Scgi);
                 config.proxy_pass = None;
                 config.grpc_pass = None;
                 config.fastcgi_pass = None;
@@ -212,6 +218,7 @@ pub(super) fn compile_conditional(
                 config.memcached_pass = Some(MemcachedPassConfig {
                     raw: parse_gateway_pass(child, "memcached")?,
                 });
+                config.explicit_content_handler = Some(ContentHandlerKind::Memcached);
                 config.proxy_pass = None;
                 config.grpc_pass = None;
                 config.fastcgi_pass = None;
@@ -229,6 +236,7 @@ pub(super) fn compile_conditional(
                 }
                 seen_tunnel_pass = true;
                 config.tunnel_pass = Some(parse_tunnel_pass(child)?);
+                config.explicit_content_handler = Some(ContentHandlerKind::Tunnel);
                 config.proxy_pass = None;
                 config.grpc_pass = None;
                 config.fastcgi_pass = None;
@@ -413,7 +421,8 @@ pub(super) fn compile_conditional(
     config.access_log = access_log;
     config.error_pages = error_pages;
     validate_charset_values(&config.charset, &parent.charset_maps, &directive.location)?;
-    if let Some(proxy) = &config.proxy_pass
+    if seen_proxy_pass
+        && let Some(proxy) = &config.proxy_pass
         && proxy.uri.is_some()
         && !proxy.raw.contains('$')
     {

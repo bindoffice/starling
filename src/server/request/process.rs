@@ -119,7 +119,16 @@ async fn process_request_inner(
     let mut context = Box::new(prepared.context);
     let location = resolve_location(&server.locations, &env.uri);
 
-    if let Some((response, tunnel)) = tunnel_request_outcome(request, &context) {
+    let tunnel_outcome = if variables.content_handler == Some(ContentHandlerKind::Tunnel) {
+        if context.tunnel.pass.is_some() {
+            tunnel_request_outcome(request, &context)
+        } else {
+            Some((error_response(500), false))
+        }
+    } else {
+        None
+    };
+    if let Some((response, tunnel)) = tunnel_outcome {
         return Processed {
             response,
             context: *context,

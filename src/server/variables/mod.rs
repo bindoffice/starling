@@ -122,6 +122,7 @@ pub(super) struct Variables {
     pub(super) rewrite_logger: Option<Arc<Logger>>,
     pub(super) rewrite_log: bool,
     pub(super) uninitialized_variable_warn: bool,
+    pub(super) content_handler: Option<ContentHandlerKind>,
 }
 
 #[derive(Clone)]
@@ -317,6 +318,7 @@ impl Variables {
             rewrite_logger: None,
             rewrite_log: false,
             uninitialized_variable_warn: false,
+            content_handler: None,
         }
     }
 
@@ -354,7 +356,9 @@ mod headers;
 mod maps;
 mod proxy_protocol;
 
-pub(super) use captures::{expand_captures, expand_captures_in_args, set_regex_captures};
+pub(super) use captures::{
+    clear_regex_captures, expand_captures, expand_captures_in_args, set_regex_captures,
+};
 pub(super) use eval::{
     binary_address_bytes, eval_variables, eval_variables_bytes, eval_variables_with_stack,
     variable_bytes_for_log, variable_value,

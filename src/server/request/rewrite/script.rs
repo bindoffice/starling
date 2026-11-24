@@ -43,6 +43,10 @@ pub(in crate::server) fn apply_conditional(
         return RewriteOutcome::None;
     }
     apply_conditional_config(conditional, context);
+    refresh_variables(env, location, variables, context);
+    variables.content_handler = conditional
+        .explicit_content_handler
+        .or(variables.content_handler);
     let mut uri_changed = false;
     let outcome = execute_actions(
         &conditional.actions,
@@ -144,6 +148,10 @@ fn execute_actions_inner(
                     continue;
                 }
                 apply_conditional_config(conditional, context);
+                refresh_variables(env, location, variables, context);
+                variables.content_handler = conditional
+                    .explicit_content_handler
+                    .or(variables.content_handler);
                 match execute_actions(
                     &conditional.actions,
                     env,

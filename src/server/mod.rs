@@ -37,19 +37,19 @@ use tokio_rustls::{LazyConfigAcceptor, TlsConnector};
 use crate::auth::{find_user_password, parse_authorization_header, verify_password};
 use crate::config::{
     AccessLogDestination, AccessLogPath, AccessLogTarget, AccessRule, AutoindexFormat,
-    ClientCertificateVerify, Condition, ConditionalConfig, DavMethod, DisableSymlinksMode,
-    EffectiveConfig, ErrorPage, ErrorPageOverwrite, ExpiresOffset, ExpiresValue, FastCgiPassConfig,
-    FileTest, GeoVariable, GrpcPassConfig, GzipDisableConfig, GzipProxiedConfig, GzipStatic,
-    Http2Limits, HttpConfig, IfModifiedSince, LimitExcept, LimitReqLimit, LingeringClose,
-    ListenAddress, ListenKeepalive, ListenSocketOptions, LocationConfig, LocationMatcher,
-    LogEscapeMode, LogLevel, MapVariable, MemcachedPassConfig, NextUpstreamConfig,
-    OpenLogFileCacheConfig, ProxyCookieFlagsRule, ProxyPassConfig, ProxyRedirectConfig,
-    ProxyRedirectRule, RewriteAction, RewriteFlag, RuntimeConfig, STREAM_PROXY_RESPONSES_UNLIMITED,
-    ScgiPassConfig, ServerConfig, ServerName, ServerTokens, SetVariable, SplitClientsVariable,
-    StoreConfig, StreamHandler, TlsCipherConfig, TlsCipherSuite, TlsProtocols,
-    UpstreamAttemptTiming, UpstreamConfig, UpstreamKeepaliveConfig, UpstreamPeerGuard,
-    UpstreamServer, UserIdConfig, UserIdEnable, UserIdExpires, UwsgiPassConfig, match_location,
-    normalize_uri, normalize_uri_with_merge, parse_size_value,
+    ClientCertificateVerify, Condition, ConditionalConfig, ContentHandlerKind, DavMethod,
+    DisableSymlinksMode, EffectiveConfig, ErrorPage, ErrorPageOverwrite, ExpiresOffset,
+    ExpiresValue, FastCgiPassConfig, FileTest, GeoVariable, GrpcPassConfig, GzipDisableConfig,
+    GzipProxiedConfig, GzipStatic, Http2Limits, HttpConfig, IfModifiedSince, LimitExcept,
+    LimitReqLimit, LingeringClose, ListenAddress, ListenKeepalive, ListenSocketOptions,
+    LocationConfig, LocationMatcher, LogEscapeMode, LogLevel, MapVariable, MemcachedPassConfig,
+    NextUpstreamConfig, OpenLogFileCacheConfig, ProxyCookieFlagsRule, ProxyPassConfig,
+    ProxyRedirectConfig, ProxyRedirectRule, RewriteAction, RewriteFlag, RuntimeConfig,
+    STREAM_PROXY_RESPONSES_UNLIMITED, ScgiPassConfig, ServerConfig, ServerName, ServerTokens,
+    SetVariable, SplitClientsVariable, StoreConfig, StreamHandler, TlsCipherConfig, TlsCipherSuite,
+    TlsProtocols, UpstreamAttemptTiming, UpstreamConfig, UpstreamKeepaliveConfig,
+    UpstreamPeerGuard, UpstreamServer, UserIdConfig, UserIdEnable, UserIdExpires, UwsgiPassConfig,
+    match_location, normalize_uri, normalize_uri_with_merge, parse_size_value,
 };
 #[cfg(test)]
 use crate::http::read_upstream_response_timed_with_rate;

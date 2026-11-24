@@ -133,6 +133,42 @@ fn compiles_limit_except_proxy_and_auth_overrides() {
 }
 
 #[test]
+fn allows_dynamic_proxy_uri_inside_limit_except() {
+    let prefix = temp_prefix();
+    fs::create_dir_all(&prefix).unwrap();
+    let config_path = prefix.join("nginx.conf");
+    fs::write(
+        &config_path,
+        r#"
+            events {}
+            http {
+                server {
+                    listen 127.0.0.1:18163;
+                    location / {
+                        limit_except POST {
+                            proxy_pass http://127.0.0.1:19001/$uri;
+                        }
+                    }
+                }
+            }
+        "#,
+    )
+    .unwrap();
+    let document = ConfigLoader::new(prefix.clone())
+        .load(&config_path)
+        .unwrap();
+    let config = compile(document, prefix.clone(), config_path).unwrap();
+    let proxy = config.http.as_ref().unwrap().servers[0].locations[0]
+        .context
+        .limit_except
+        .as_ref()
+        .and_then(|limit_except| limit_except.proxy_pass.as_ref())
+        .unwrap();
+    assert_eq!(proxy.uri.as_deref(), Some("/$uri"));
+    let _ = fs::remove_dir_all(prefix);
+}
+
+#[test]
 fn compiles_auth_request_and_rejects_invalid_set_arguments() {
     let prefix = temp_prefix();
     fs::create_dir_all(&prefix).unwrap();

@@ -342,6 +342,30 @@ pub(in crate::server) struct RequestEnv {
     pub(in crate::server) mirror_checked: bool,
 }
 
+pub(in crate::server) fn content_handler_for_context(
+    context: &EffectiveConfig,
+) -> Option<ContentHandlerKind> {
+    if context.fastcgi_pass.is_some() {
+        Some(ContentHandlerKind::FastCgi)
+    } else if context.uwsgi_pass.is_some() {
+        Some(ContentHandlerKind::Uwsgi)
+    } else if context.scgi_pass.is_some() {
+        Some(ContentHandlerKind::Scgi)
+    } else if context.grpc.pass.is_some() {
+        Some(ContentHandlerKind::Grpc)
+    } else if context.memcached_pass.is_some() {
+        Some(ContentHandlerKind::Memcached)
+    } else if context.proxy_pass.is_some() {
+        Some(ContentHandlerKind::Proxy)
+    } else {
+        context
+            .tunnel
+            .pass
+            .is_some()
+            .then_some(ContentHandlerKind::Tunnel)
+    }
+}
+
 pub(in crate::server) struct Processed {
     pub(in crate::server) response: Response,
     pub(in crate::server) context: EffectiveConfig,

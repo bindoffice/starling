@@ -41,6 +41,7 @@ pub struct TryFiles {
 pub struct ConditionalConfig {
     pub condition: Condition,
     pub actions: Vec<RewriteAction>,
+    pub explicit_content_handler: Option<ContentHandlerKind>,
     pub ssi: SsiConfig,
     pub return_directive: Option<ReturnConfig>,
     pub rewrites: Vec<RewriteRule>,
@@ -70,6 +71,17 @@ pub struct ConditionalConfig {
     pub sets: Vec<SetVariable>,
     pub rewrite_log: bool,
     pub uninitialized_variable_warn: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentHandlerKind {
+    FastCgi,
+    Uwsgi,
+    Scgi,
+    Grpc,
+    Memcached,
+    Proxy,
+    Tunnel,
 }
 
 #[derive(Debug, Clone)]

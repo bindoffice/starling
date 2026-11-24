@@ -292,6 +292,141 @@ async fn handles_error_page_status_and_internal_method() {
 }
 
 #[tokio::test]
+async fn matched_if_keeps_the_selected_content_handler() {
+    let (prefix, config) = test_config(
+        r#"
+                worker_processes 1;
+                events { worker_connections 64; }
+                http {
+                    server {
+                        listen 127.0.0.1:18461;
+                        location /proxy-inside-if {
+                            set $true 1;
+                            if ($true) {
+                                proxy_pass http://127.0.0.1:19020;
+                            }
+                            if ($true) {
+                            }
+                        }
+                    }
+                }
+            "#,
+        &[],
+    );
+    let response = request_body(
+        &config,
+        "GET /proxy-inside-if HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(
+        response.starts_with("HTTP/1.1 500 Internal Server Error\r\n"),
+        "{response}"
+    );
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
+async fn failed_regex_matches_clear_numeric_captures() {
+    let (prefix, config) = test_config(
+        r#"
+                worker_processes 1;
+                events { worker_connections 64; }
+                http {
+                    server {
+                        listen 127.0.0.1:18462;
+                        location /stale-rewrite {
+                            rewrite ^(.*)$ $1;
+                            rewrite ^/never$ /second;
+                            return 200 "$1\n";
+                        }
+                        location /stale-if {
+                            if ($arg_a ~ ^(yes)(ok)$) {
+                                set $mark "$1-$2";
+                            }
+                            if ($arg_b ~ ^(no)(pe)$) {
+                            }
+                            return 200 "$1|$mark\n";
+                        }
+                        location /negated {
+                            if ($arg_c !~ ^(neg)(ated)$) {
+                                return 204;
+                            }
+                            return 200 "$1|$2\n";
+                        }
+                    }
+                }
+            "#,
+        &[],
+    );
+    let rewrite = request_body(
+        &config,
+        "GET /stale-rewrite/abc HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(rewrite.ends_with("\r\n\r\n\n"), "{rewrite}");
+
+    let no_match = request_body(
+        &config,
+        "GET /stale-if?a=yesok HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(no_match.ends_with("|yes-ok\n"), "{no_match}");
+
+    let second_match = request_body(
+        &config,
+        "GET /stale-if?a=yesok&b=nope HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(second_match.ends_with("no|yes-ok\n"), "{second_match}");
+
+    let negated = request_body(
+        &config,
+        "GET /negated?c=negated HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(negated.ends_with("neg|ated\n"), "{negated}");
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
+async fn matched_if_refreshes_path_variables_before_actions() {
+    let (prefix, config) = test_config(
+        r#"
+                worker_processes 1;
+                events { worker_connections 64; }
+                http {
+                    server {
+                        listen 127.0.0.1:18463;
+                        location /root {
+                            root html/parent;
+                            if ($arg_new) {
+                                root html/child;
+                                set $inside $document_root;
+                            }
+                            return 200 "$inside|$document_root|$request_filename\n";
+                        }
+                    }
+                }
+            "#,
+        &[],
+    );
+    let response = request_body(
+        &config,
+        "GET /root?new=1 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let root = prefix.join("html/child");
+    let expected = format!(
+        "{}|{}|{}\n",
+        root.display(),
+        root.display(),
+        root.join("root").display()
+    );
+    assert!(response.ends_with(&expected), "{response}");
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
 async fn executes_return_directives_in_named_locations() {
     let (prefix, config) = test_config(
         r#"

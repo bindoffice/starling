@@ -113,3 +113,7 @@ pub(in crate::server) fn set_regex_captures(
         }
     }
 }
+
+pub(in crate::server) fn clear_regex_captures(variables: &mut Variables) {
+    variables.captures.clear();
+}

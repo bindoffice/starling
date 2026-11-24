@@ -173,3 +173,42 @@ fn rejects_empty_rewrite_replacement() {
     assert!(error.message.contains("empty replacement"), "{error}");
     let _ = fs::remove_dir_all(prefix);
 }
+
+#[test]
+fn allows_empty_if_to_inherit_proxy_pass_with_uri() {
+    let prefix = temp_prefix();
+    fs::create_dir_all(&prefix).unwrap();
+    let config_path = prefix.join("nginx.conf");
+    fs::write(
+        &config_path,
+        r#"
+            events {}
+            http {
+                server {
+                    listen 127.0.0.1:18396;
+                    location / {
+                        proxy_pass http://127.0.0.1:8081/replacement;
+                        if ($arg_if) {
+                        }
+                    }
+                }
+            }
+        "#,
+    )
+    .unwrap();
+    let document = ConfigLoader::new(prefix.clone())
+        .load(&config_path)
+        .unwrap();
+    let config = compile(document, prefix.clone(), config_path).unwrap();
+    let conditional = &config.http.as_ref().unwrap().servers[0].locations[0]
+        .context
+        .conditionals[0];
+    assert_eq!(
+        conditional
+            .proxy_pass
+            .as_ref()
+            .and_then(|pass| pass.uri.as_deref()),
+        Some("/replacement")
+    );
+    let _ = fs::remove_dir_all(prefix);
+}

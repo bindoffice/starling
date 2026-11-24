@@ -20,7 +20,10 @@ pub(super) fn apply_rule(
             format!("\"{}\" {result} \"{}\"", rule.regex.as_str(), env.uri),
         );
     }
-    let captures = captures?;
+    let Some(captures) = captures else {
+        clear_regex_captures(variables);
+        return None;
+    };
     set_regex_captures(variables, &rule.regex, &captures);
     let replacement = expand_replacement(&rule.replacement, &captures, variables);
     let redirect_status = match rule.flag {
@@ -130,10 +133,7 @@ fn rewrite_redirect(status: u16, replacement: &str, original_args: &Option<Strin
     let (location, args) = rewrite_destination(replacement, original_args);
     let location = unescape_redirect_path(&location);
     let location = append_args(location, args);
-    let body = format!(
-        "<html><body>Redirecting to <a href=\"{replacement}\">{replacement}</a></body></html>"
-    );
-    let mut response = Response::html(status, body);
+    let mut response = error_response(status);
     response.set_header("Location", location);
     response
 }
@@ -233,14 +233,7 @@ pub(in crate::server) fn apply_return(
     let value = value.map(|value| eval_variables(value, variables));
     if matches!(status, 301 | 302 | 303 | 307 | 308) {
         let location = value.unwrap_or_default();
-        let mut response = Response::html(
-            status,
-            format!(
-                "<html>\r\n<head><title>{status} {}</title></head>\r\n<body>\r\n<center><h1>{status} {}</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n",
-                reason_phrase(status),
-                reason_phrase(status)
-            ),
-        );
+        let mut response = error_response(status);
         response.set_header("Location", location);
         return response;
     }

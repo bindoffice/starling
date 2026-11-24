@@ -12,14 +12,25 @@ pub(super) struct ContentKind {
 }
 
 impl ContentKind {
-    fn from_context(context: &EffectiveConfig) -> Self {
+    fn none() -> Self {
         Self {
-            fastcgi: context.fastcgi_pass.is_some(),
-            uwsgi: context.uwsgi_pass.is_some(),
-            scgi: context.scgi_pass.is_some(),
-            grpc: context.grpc.pass.is_some(),
-            memcached: context.memcached_pass.is_some(),
-            proxied: context.proxy_pass.is_some(),
+            fastcgi: false,
+            uwsgi: false,
+            scgi: false,
+            grpc: false,
+            memcached: false,
+            proxied: false,
+        }
+    }
+
+    fn from_handler(handler: ContentHandlerKind) -> Self {
+        Self {
+            fastcgi: handler == ContentHandlerKind::FastCgi,
+            uwsgi: handler == ContentHandlerKind::Uwsgi,
+            scgi: handler == ContentHandlerKind::Scgi,
+            grpc: handler == ContentHandlerKind::Grpc,
+            memcached: handler == ContentHandlerKind::Memcached,
+            proxied: handler == ContentHandlerKind::Proxy,
         }
     }
 
@@ -110,30 +121,70 @@ pub(super) async fn serve_content(
     context: &EffectiveConfig,
     variables: &mut Variables,
 ) -> (Response, ContentKind) {
-    let kind = ContentKind::from_context(context);
+    let handler = variables
+        .content_handler
+        .or_else(|| content_handler_for_context(context));
+    let kind = handler
+        .map(ContentKind::from_handler)
+        .unwrap_or_else(ContentKind::none);
     let preserve_on_client_abort =
         kind.ignore_client_abort(context) || kind.preserves_durable_output(request, context);
     if preserve_on_client_abort && let Some(client_abort) = variables.client_abort.as_ref() {
         client_abort.mark_preserve();
     }
-    let mut response = if let Some(fastcgi_pass) = &context.fastcgi_pass {
-        fastcgi_request(fastcgi_pass, http, request, env, context, variables).await
-    } else if let Some(uwsgi_pass) = &context.uwsgi_pass {
-        uwsgi_request(uwsgi_pass, http, request, context, variables).await
-    } else if let Some(scgi_pass) = &context.scgi_pass {
-        scgi_request(scgi_pass, http, request, context, variables).await
-    } else if let Some(grpc_pass) = &context.grpc.pass {
-        grpc_request(grpc_pass, http, request, env, context, variables).await
-    } else if let Some(memcached_pass) = &context.memcached_pass {
-        memcached_request(memcached_pass, http, request, context, variables).await
-    } else if let Some(proxy) = &context.proxy_pass {
-        proxy_request(proxy, http, request, env, location, context, variables).await
-    } else if let Some(response) = serve_dav(request, env, context, location, variables).await {
-        response
-    } else {
-        serve_static(request, env, context, location, variables)
-            .await
-            .unwrap_or_else(|| error_response(404))
+    let mut response = match handler {
+        Some(ContentHandlerKind::FastCgi) => {
+            if let Some(pass) = &context.fastcgi_pass {
+                fastcgi_request(pass, http, request, env, context, variables).await
+            } else {
+                error_response(500)
+            }
+        }
+        Some(ContentHandlerKind::Uwsgi) => {
+            if let Some(pass) = &context.uwsgi_pass {
+                uwsgi_request(pass, http, request, context, variables).await
+            } else {
+                error_response(500)
+            }
+        }
+        Some(ContentHandlerKind::Scgi) => {
+            if let Some(pass) = &context.scgi_pass {
+                scgi_request(pass, http, request, context, variables).await
+            } else {
+                error_response(500)
+            }
+        }
+        Some(ContentHandlerKind::Grpc) => {
+            if let Some(pass) = &context.grpc.pass {
+                grpc_request(pass, http, request, env, context, variables).await
+            } else {
+                error_response(500)
+            }
+        }
+        Some(ContentHandlerKind::Memcached) => {
+            if let Some(pass) = &context.memcached_pass {
+                memcached_request(pass, http, request, context, variables).await
+            } else {
+                error_response(500)
+            }
+        }
+        Some(ContentHandlerKind::Proxy) => {
+            if let Some(proxy) = &context.proxy_pass {
+                proxy_request(proxy, http, request, env, location, context, variables).await
+            } else {
+                error_response(500)
+            }
+        }
+        Some(ContentHandlerKind::Tunnel) => error_response(500),
+        None => {
+            if let Some(response) = serve_dav(request, env, context, location, variables).await {
+                response
+            } else {
+                serve_static(request, env, context, location, variables)
+                    .await
+                    .unwrap_or_else(|| error_response(404))
+            }
+        }
     };
     variables.response_from_upstream = kind.upstream()
         && !matches!(

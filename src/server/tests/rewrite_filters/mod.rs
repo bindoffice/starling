@@ -9,5 +9,6 @@ mod internal_chains;
 mod internal_matrix;
 mod logging;
 mod order;
+mod proxy_if;
 mod rewrite;
 mod sub_filter;

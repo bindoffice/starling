@@ -26,6 +26,11 @@ pub(in crate::server) fn condition_matches(
             let value = eval_variables(value, variables);
             let captures = regex.captures(&value);
             let matches = captures.is_some();
+            if let Some(captures) = captures.as_ref() {
+                set_regex_captures(variables, regex, captures);
+            } else {
+                clear_regex_captures(variables);
+            }
             if variables.rewrite_log_enabled()
                 && let Some(logger) = &variables.rewrite_logger
             {
@@ -34,9 +39,6 @@ pub(in crate::server) fn condition_matches(
                     LogLevel::Notice,
                     format!("\"{}\" {result} \"{value}\"", regex.as_str()),
                 );
-            }
-            if matches && !*negate {
-                set_regex_captures(variables, regex, captures.as_ref().unwrap());
             }
             if *negate { !matches } else { matches }
         }

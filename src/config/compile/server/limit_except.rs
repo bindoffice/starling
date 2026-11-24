@@ -60,7 +60,7 @@ pub(super) fn compile_limit_except(
             "proxy_pass" => {
                 validate_no_block(child)?;
                 let proxy = parse_proxy_pass(child)?;
-                if proxy.uri.is_some() {
+                if proxy.uri.is_some() && !proxy.raw.contains('$') {
                     return Err(ConfigError::at(
                         child.location.clone(),
                         "\"proxy_pass\" cannot have URI part inside \"limit_except\" block",

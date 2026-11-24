@@ -96,6 +96,7 @@ pub(super) async fn prepare_request(
                 .unwrap_or_else(|| (*server_context).clone()),
         );
         apply_limit_except(&mut context, request);
+        variables.content_handler = content_handler_for_context(&context);
         let context_logger = variables.error_logger_for(&context);
         variables.set_variable_warning_context(&context, context_logger.clone());
         prepare_userid_variables(&context, variables);

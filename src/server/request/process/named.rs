@@ -21,6 +21,8 @@ pub(in crate::server) async fn process_named_location(
     }
     let location = find_named_location(&server.locations, name)?;
     let mut context = Box::new(location.context.clone());
+    apply_limit_except(&mut context, request);
+    variables.content_handler = content_handler_for_context(&context);
     let context_logger = variables.error_logger_for(&context);
     variables.set_variable_warning_context(&context, context_logger.clone());
     prepare_userid_variables(&context, variables);
@@ -199,7 +201,16 @@ pub(in crate::server) async fn process_named_location(
             }
         }
     }
-    if let Some((response, tunnel)) = tunnel_request_outcome(request, &context) {
+    let tunnel_outcome = if variables.content_handler == Some(ContentHandlerKind::Tunnel) {
+        if context.tunnel.pass.is_some() {
+            tunnel_request_outcome(request, &context)
+        } else {
+            Some((error_response(500), false))
+        }
+    } else {
+        None
+    };
+    if let Some((response, tunnel)) = tunnel_outcome {
         return Some(Processed {
             response,
             context: *context,
