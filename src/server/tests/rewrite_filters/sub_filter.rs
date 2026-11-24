@@ -115,7 +115,7 @@ async fn applies_sub_filter_replacements_and_mime_rules() {
 }
 
 #[tokio::test]
-async fn applies_gzip_proxied_rules_to_upstream_responses() {
+async fn applies_gzip_proxied_rules_to_requests_with_via() {
     let upstream = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
@@ -175,12 +175,12 @@ async fn applies_gzip_proxied_rules_to_upstream_responses() {
     let (prefix, config) = test_config(&source, &[]);
     let off = request_bytes(
             &config,
-            "GET /off HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n",
+            "GET /off HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\nVia: proxy\r\nConnection: close\r\n\r\n",
         )
         .await;
     let on = request_bytes(
         &config,
-        "GET /on HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n",
+        "GET /on HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\nVia: proxy\r\nConnection: close\r\n\r\n",
     )
     .await;
     let headers = |response: &[u8]| {

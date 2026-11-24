@@ -4,16 +4,15 @@ pub(in crate::server) async fn maybe_gzip(
     response: &mut Response,
     context: &EffectiveConfig,
     request: &Request,
-    response_from_upstream: bool,
 ) {
     if !context.gzip
-        || request.method.eq_ignore_ascii_case("HEAD")
         || response.status == 206
         || response.status == 304
         || response.header("Content-Encoding").is_some()
         || !request.header("accept-encoding").is_some_and(accepts_gzip)
         || !super::gzip_rules::request_allows_gzip(context, request)
-        || response_from_upstream && !gzip_proxied_allows(&context.gzip_proxied, request, response)
+        || request.header("via").is_some()
+            && !gzip_proxied_allows(&context.gzip_proxied, request, response)
     {
         return;
     }
@@ -30,7 +29,21 @@ pub(in crate::server) async fn maybe_gzip(
             .gzip_types
             .iter()
             .any(|allowed| allowed == "*" || allowed == &content_type);
-    if !compressible || response.body_len() < context.gzip_min_length {
+    let body_length = response
+        .header("Content-Length")
+        .and_then(|value| value.parse().ok())
+        .or_else(|| response.body.content_length());
+    if !compressible || body_length.is_none_or(|length| length < context.gzip_min_length) {
+        return;
+    }
+    if request.method.eq_ignore_ascii_case("HEAD") {
+        response.disable_ranges();
+        response.remove_header("Content-Length");
+        response.remove_header("Accept-Ranges");
+        response.set_header("Content-Encoding", "gzip");
+        if context.gzip_vary {
+            append_gzip_vary(response);
+        }
         return;
     }
     let body = match std::mem::replace(&mut response.body, ResponseBody::Empty)
@@ -62,18 +75,22 @@ pub(in crate::server) async fn maybe_gzip(
     response.expect_chunked();
     response.set_header("Content-Encoding", "gzip");
     if context.gzip_vary {
-        let vary = response
-            .header("Vary")
-            .map(str::to_string)
-            .filter(|value| !value.to_ascii_lowercase().contains("accept-encoding"));
-        response.set_header(
-            "Vary",
-            vary.map_or_else(
-                || "Accept-Encoding".into(),
-                |value| format!("{value}, Accept-Encoding"),
-            ),
-        );
+        append_gzip_vary(response);
     }
+}
+
+fn append_gzip_vary(response: &mut Response) {
+    let Some(vary) = response.header("Vary").map(str::to_string) else {
+        response.set_header("Vary", "Accept-Encoding");
+        return;
+    };
+    if vary
+        .split(',')
+        .any(|value| value.trim().eq_ignore_ascii_case("accept-encoding"))
+    {
+        return;
+    }
+    response.set_header("Vary", format!("{vary}, Accept-Encoding"));
 }
 
 pub(in crate::server) fn gzip_proxied_allows(

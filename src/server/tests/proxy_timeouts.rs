@@ -71,7 +71,7 @@ async fn proxy_send_timeout_tracks_partial_write_progress_not_total_duration() {
             .unwrap();
     });
     let outgoing = proxy_request(body.to_vec());
-    let (response, _, _, _) = timed_connection_proxy_exchange(
+    let exchange = timed_connection_proxy_exchange(
         connection,
         &outgoing,
         "1.1",
@@ -82,6 +82,7 @@ async fn proxy_send_timeout_tracks_partial_write_progress_not_total_duration() {
     )
     .await
     .unwrap();
+    let response = exchange.response;
     assert_eq!(response.status, 200);
     assert_eq!(response.body.content_length(), Some(2));
     writer.await.unwrap();
@@ -107,7 +108,7 @@ async fn proxy_read_timeout_tracks_header_progress_not_total_duration() {
         }
     });
     let outgoing = proxy_request(Vec::new());
-    let (response, _, _, _) = timed_connection_proxy_exchange(
+    let exchange = timed_connection_proxy_exchange(
         connection,
         &outgoing,
         "1.1",
@@ -118,6 +119,7 @@ async fn proxy_read_timeout_tracks_header_progress_not_total_duration() {
     )
     .await
     .unwrap();
+    let response = exchange.response;
     assert_eq!(response.status, 200);
     assert_eq!(response.body.content_length(), Some(2));
     writer.await.unwrap();
@@ -144,7 +146,7 @@ async fn proxy_read_timeout_tracks_body_progress_not_total_duration() {
         }
     });
     let outgoing = proxy_request(Vec::new());
-    let (response, _, _, _) = timed_connection_proxy_exchange(
+    let exchange = timed_connection_proxy_exchange(
         connection,
         &outgoing,
         "1.1",
@@ -155,6 +157,7 @@ async fn proxy_read_timeout_tracks_body_progress_not_total_duration() {
     )
     .await
     .unwrap();
+    let response = exchange.response;
     assert_eq!(response.status, 200);
     assert_eq!(response.body.content_length(), Some(5));
     writer.await.unwrap();

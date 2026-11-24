@@ -124,5 +124,6 @@ async fn redirect_failure(
         response: outcome.response,
         context: outcome.context,
         tunnel: false,
+        upgrade: None,
     }
 }

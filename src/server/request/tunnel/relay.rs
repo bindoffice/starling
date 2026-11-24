@@ -1,5 +1,6 @@
 use super::*;
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(super) async fn write_tunnel_response<W: AsyncWrite + Unpin>(
     writer: &mut W,
@@ -26,58 +27,85 @@ pub(super) async fn write_tunnel_response<W: AsyncWrite + Unpin>(
     writer.flush().await
 }
 
-pub(super) async fn copy_bidirectional<R, W>(
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::server) struct BidirectionalCopyStats {
+    pub(in crate::server) downstream_to_upstream: u64,
+    pub(in crate::server) upstream_to_downstream: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(in crate::server) struct BidirectionalCopyTimeouts {
+    pub(in crate::server) upstream_write: Duration,
+    pub(in crate::server) upstream_read: Duration,
+    pub(in crate::server) downstream_write: Duration,
+    pub(in crate::server) buffer_size: usize,
+}
+
+pub(in crate::server) async fn copy_bidirectional<R, W, S>(
     downstream_reader: &mut R,
     downstream_writer: &mut W,
-    upstream: BoxedUpstreamIo,
-    upstream_send_timeout: Duration,
-    upstream_read_timeout: Duration,
-    downstream_send_timeout: Duration,
-    buffer_size: usize,
+    upstream: S,
+    timeouts: BidirectionalCopyTimeouts,
+    stats: &mut BidirectionalCopyStats,
 ) -> io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
 {
     let (mut upstream_reader, mut upstream_writer) = tokio::io::split(upstream);
+    let uploaded = Arc::new(AtomicU64::new(0));
+    let downloaded = Arc::new(AtomicU64::new(0));
     let upload = copy_direction(
         downstream_reader,
         &mut upstream_writer,
+        &uploaded,
         None,
-        upstream_send_timeout,
-        buffer_size,
+        timeouts.upstream_write,
+        timeouts.buffer_size,
     );
     let download = copy_direction(
         &mut upstream_reader,
         downstream_writer,
-        Some(upstream_read_timeout),
-        downstream_send_timeout,
-        buffer_size,
+        &downloaded,
+        Some(timeouts.upstream_read),
+        timeouts.downstream_write,
+        timeouts.buffer_size,
     );
     tokio::pin!(upload);
     tokio::pin!(download);
     let mut upload_done = false;
     let mut download_done = false;
-    loop {
+    let result = loop {
         if upload_done && download_done {
-            return Ok(());
+            break Ok(());
         }
         tokio::select! {
             result = &mut upload, if !upload_done => {
                 upload_done = true;
-                result?;
+                if let Err(error) = result {
+                    break Err(error);
+                }
             }
             result = &mut download, if !download_done => {
                 download_done = true;
-                result?;
+                if let Err(error) = result {
+                    break Err(error);
+                }
             }
         }
-    }
+    };
+    *stats = BidirectionalCopyStats {
+        downstream_to_upstream: uploaded.load(Ordering::Relaxed),
+        upstream_to_downstream: downloaded.load(Ordering::Relaxed),
+    };
+    result
 }
 
 async fn copy_direction<R, W>(
     reader: &mut R,
     writer: &mut W,
+    copied: &AtomicU64,
     read_timeout: Option<Duration>,
     write_timeout: Duration,
     buffer_size: usize,
@@ -96,6 +124,7 @@ where
             return Ok(());
         }
         with_timeout(Some(write_timeout), writer.write_all(&buffer[..read])).await?;
+        copied.fetch_add(read as u64, Ordering::Relaxed);
     }
 }
 
@@ -126,16 +155,21 @@ mod tests {
         let (mut upstream_client, upstream) = tokio::io::duplex(64 * 1024);
         let (mut reader, mut writer) = tokio::io::split(downstream);
         let task = tokio::spawn(async move {
+            let mut stats = BidirectionalCopyStats::default();
             copy_bidirectional(
                 &mut reader,
                 &mut writer,
                 Box::new(upstream),
-                Duration::from_secs(2),
-                Duration::from_secs(2),
-                Duration::from_secs(2),
-                4096,
+                BidirectionalCopyTimeouts {
+                    upstream_write: Duration::from_secs(2),
+                    upstream_read: Duration::from_secs(2),
+                    downstream_write: Duration::from_secs(2),
+                    buffer_size: 4096,
+                },
+                &mut stats,
             )
             .await
+            .map(|()| stats)
         });
 
         client.write_all(b"client-to-upstream").await.unwrap();
@@ -153,7 +187,14 @@ mod tests {
         client.read_to_end(&mut response).await.unwrap();
         assert_eq!(&response, b"upstream-to-client");
 
-        task.await.unwrap().unwrap();
+        let stats = task.await.unwrap().unwrap();
+        assert_eq!(
+            stats,
+            BidirectionalCopyStats {
+                downstream_to_upstream: 18,
+                upstream_to_downstream: 18,
+            }
+        );
     }
 
     #[tokio::test]
@@ -170,10 +211,13 @@ mod tests {
                 &mut reader,
                 &mut writer,
                 Box::new(upstream),
-                Duration::from_secs(2),
-                Duration::from_secs(2),
-                Duration::from_secs(2),
-                4096,
+                BidirectionalCopyTimeouts {
+                    upstream_write: Duration::from_secs(2),
+                    upstream_read: Duration::from_secs(2),
+                    downstream_write: Duration::from_secs(2),
+                    buffer_size: 4096,
+                },
+                &mut BidirectionalCopyStats::default(),
             )
             .await
         });
@@ -196,10 +240,13 @@ mod tests {
                 &mut reader,
                 &mut writer,
                 Box::new(upstream),
-                Duration::from_millis(20),
-                Duration::from_secs(2),
-                Duration::from_secs(2),
-                4096,
+                BidirectionalCopyTimeouts {
+                    upstream_write: Duration::from_millis(20),
+                    upstream_read: Duration::from_secs(2),
+                    downstream_write: Duration::from_secs(2),
+                    buffer_size: 4096,
+                },
+                &mut BidirectionalCopyStats::default(),
             )
             .await
         });

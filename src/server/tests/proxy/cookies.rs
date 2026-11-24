@@ -13,6 +13,7 @@ fn rewrites_proxy_cookie_domains_paths_and_regexes() {
                             proxy_pass http://127.0.0.1:19000;
                             proxy_cookie_domain backend.test frontend.test;
                             proxy_cookie_domain ~^api\.(.+)$ $1;
+                            proxy_cookie_domain ~^(.+)\.com$ $1.org;
                             proxy_cookie_path /api /service;
                             proxy_cookie_path ~^/old/(.*)$ /new/$1;
                         }
@@ -59,6 +60,10 @@ fn rewrites_proxy_cookie_domains_paths_and_regexes() {
                 name: "Set-Cookie".into(),
                 value: "api=y; Domain=api.backend.test; Path=/other".into(),
             },
+            Header {
+                name: "Set-Cookie".into(),
+                value: "mixed=z; Domain=www.example.COM; Path=/mixed".into(),
+            },
         ]
     };
 
@@ -87,6 +92,10 @@ fn rewrites_proxy_cookie_domains_paths_and_regexes() {
     assert_eq!(
         response.headers[2].value,
         "api=y; Domain=backend.test; Path=/other"
+    );
+    assert_eq!(
+        response.headers[3].value,
+        "mixed=z; Domain=www.example.org; Path=/mixed"
     );
 
     let mut untouched = Response {

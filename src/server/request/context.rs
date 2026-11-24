@@ -370,6 +370,7 @@ pub(in crate::server) struct Processed {
     pub(in crate::server) response: Response,
     pub(in crate::server) context: EffectiveConfig,
     pub(in crate::server) tunnel: bool,
+    pub(in crate::server) upgrade: Option<Box<ProxyUpgrade>>,
 }
 
 pub(in crate::server) fn refresh_variables(

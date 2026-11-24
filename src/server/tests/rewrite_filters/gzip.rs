@@ -68,7 +68,6 @@ async fn compresses_eligible_responses_with_gzip() {
         &mut direct,
         &config.http.as_ref().unwrap().servers[0].locations[0].context,
         &test_request,
-        false,
     )
     .await;
     assert!(direct.header("Content-Encoding").is_some());
@@ -255,6 +254,10 @@ async fn evaluates_gzip_proxied_response_conditions() {
                 name: "Authorization".into(),
                 value: "Basic dXNlcjpwYXNz".into(),
             },
+            Header {
+                name: "Via".into(),
+                value: "proxy".into(),
+            },
         ],
         body_stream: None,
         body: Vec::new(),
@@ -264,23 +267,29 @@ async fn evaluates_gzip_proxied_response_conditions() {
     };
     let mut no_cache = Response::bytes(200, "text/plain", "cacheable body");
     no_cache.set_header("Cache-Control", "no-cache");
-    maybe_gzip(&mut no_cache, context, &request, true).await;
+    maybe_gzip(&mut no_cache, context, &request).await;
     assert!(no_cache.header("Content-Encoding").is_some());
 
     let mut no_etag = Response::bytes(200, "text/plain", "cacheable body");
-    maybe_gzip(&mut no_etag, context, &request, true).await;
+    maybe_gzip(&mut no_etag, context, &request).await;
     assert!(no_etag.header("Content-Encoding").is_some());
 
     let request = Request {
-        headers: vec![Header {
-            name: "Accept-Encoding".into(),
-            value: "gzip".into(),
-        }],
+        headers: vec![
+            Header {
+                name: "Accept-Encoding".into(),
+                value: "gzip".into(),
+            },
+            Header {
+                name: "Via".into(),
+                value: "proxy".into(),
+            },
+        ],
         ..request
     };
     let mut cacheable = Response::bytes(200, "text/plain", "cacheable body");
     cacheable.set_header("ETag", "\"present\"");
-    maybe_gzip(&mut cacheable, context, &request, true).await;
+    maybe_gzip(&mut cacheable, context, &request).await;
     assert!(cacheable.header("Content-Encoding").is_none());
     let _ = std::fs::remove_dir_all(prefix);
 }

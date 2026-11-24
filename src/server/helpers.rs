@@ -3,9 +3,15 @@ use super::*;
 pub(in crate::server) fn log_access(
     http: &HttpConfig,
     context: &EffectiveConfig,
-    request: &Request,
     variables: &Variables,
-    response: &Response,
+) {
+    log_access_with_formats(&http.log_formats, context, variables);
+}
+
+pub(in crate::server) fn log_access_with_formats(
+    log_formats: &HashMap<String, crate::config::AccessLogFormat>,
+    context: &EffectiveConfig,
+    variables: &Variables,
 ) {
     let config = &context.access_log;
     if config.off {
@@ -17,8 +23,7 @@ pub(in crate::server) fn log_access(
         {
             continue;
         }
-        let format = http
-            .log_formats
+        let format = log_formats
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case(&log.format_name))
             .map(|(_, format)| format);
@@ -43,7 +48,6 @@ pub(in crate::server) fn log_access(
             |template| eval_variables(template, variables),
         );
     }
-    let _ = (request, response);
 }
 
 pub(in crate::server) fn write_access_log_target(

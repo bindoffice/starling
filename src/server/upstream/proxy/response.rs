@@ -8,23 +8,25 @@ pub(super) async fn finalize_proxy_response(
     context: &EffectiveConfig,
     upstream_variables: &Variables,
 ) -> Response {
-    if upstream_response.body.is_stream() {
-        store_proxy_response_streaming(
-            &mut upstream_response,
-            env,
-            location,
-            context,
-            upstream_variables,
-        );
-    } else {
-        let _ = store_proxy_response(
-            &upstream_response,
-            env,
-            location,
-            context,
-            upstream_variables,
-        )
-        .await;
+    if upstream_response.status != 101 {
+        if upstream_response.body.is_stream() {
+            store_proxy_response_streaming(
+                &mut upstream_response,
+                env,
+                location,
+                context,
+                upstream_variables,
+            );
+        } else {
+            let _ = store_proxy_response(
+                &upstream_response,
+                env,
+                location,
+                context,
+                upstream_variables,
+            )
+            .await;
+        }
     }
     let early_hints = if should_send_early_hints(&context.early_hints, upstream_variables) {
         std::mem::take(&mut upstream_response.early_hints)
@@ -74,7 +76,10 @@ pub(super) async fn finalize_proxy_response(
     }
     apply_proxy_redirect(&mut response, proxy, location, context, upstream_variables);
     apply_proxy_cookie_rewrites(&mut response, context, upstream_variables);
-    if !upstream_variables.method.eq_ignore_ascii_case("HEAD")
+    if response.status == 101 {
+        response.remove_header("Content-Length");
+        response.remove_header("Transfer-Encoding");
+    } else if !upstream_variables.method.eq_ignore_ascii_case("HEAD")
         || response.header("Content-Length").is_none()
     {
         response.set_content_length();

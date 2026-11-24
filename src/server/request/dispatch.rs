@@ -21,6 +21,31 @@ pub(in crate::server) struct DispatchOutcome {
     pub(in crate::server) close: ConnectionCloseConfig,
     pub(in crate::server) _body_file_guard: Option<Arc<RequestBodyFile>>,
     pub(in crate::server) _connection_guard: Option<ConnectionLimitGuard>,
+    pub(in crate::server) deferred_access_log: Option<Box<DeferredAccessLog>>,
+    pub(in crate::server) upgrade: Option<Box<ProxyUpgrade>>,
+}
+
+pub(in crate::server) struct DeferredAccessLog {
+    formats: HashMap<String, crate::config::AccessLogFormat>,
+    context: EffectiveConfig,
+    variables: Variables,
+}
+
+impl DeferredAccessLog {
+    pub(in crate::server) fn write(mut self) {
+        if !self.variables.upstream_response_time.is_empty() {
+            self.variables.upstream_response_time =
+                format!("{:.3}", self.variables.started.elapsed().as_secs_f64());
+        }
+        log_access_with_formats(&self.formats, &self.context, &self.variables);
+    }
+
+    pub(in crate::server) fn write_upgraded(self, bytes_sent: u64, body_bytes_sent: u64) {
+        let mut updated = self;
+        updated.variables.bytes_sent = bytes_sent;
+        updated.variables.body_bytes_sent = body_bytes_sent;
+        updated.write();
+    }
 }
 
 pub(in crate::server) struct DispatchRequestContext<'a> {
@@ -67,6 +92,8 @@ pub(in crate::server) async fn dispatch_http_request(
             close: ConnectionCloseConfig::default(),
             _body_file_guard: None,
             _connection_guard: None,
+            deferred_access_log: None,
+            upgrade: None,
         }));
     };
     let active_group = build_listener_groups(&config)
@@ -201,7 +228,7 @@ pub(in crate::server) async fn dispatch_http_request(
                 variables.status = 400;
                 let error_logger = http_logger_for_context(state, &server.context).await;
                 let response = error_response(400);
-                log_access(http, &server.context, &request, &variables, &response);
+                log_access(http, &server.context, &variables);
                 return Some(DispatchAction::Response(DispatchOutcome {
                     response,
                     error_logger,
@@ -218,6 +245,8 @@ pub(in crate::server) async fn dispatch_http_request(
                     close: ConnectionCloseConfig::from(&server.context),
                     _body_file_guard: None,
                     _connection_guard: None,
+                    deferred_access_log: None,
+                    upgrade: None,
                 }));
             }
         }
@@ -263,6 +292,7 @@ pub(in crate::server) async fn dispatch_http_request(
             response: outcome.response,
             context: outcome.context,
             tunnel: false,
+            upgrade: None,
         }
     } else {
         process_request_with_connection_guard(
@@ -312,13 +342,60 @@ pub(in crate::server) async fn dispatch_http_request(
                     close: ConnectionCloseConfig::from(&processed.context),
                     _body_file_guard: None,
                     _connection_guard: connection_guard.take(),
+                    deferred_access_log: None,
+                    upgrade: None,
                 }));
             }
         };
         if processed.context.log_not_found {
-            log_access(http, &processed.context, &request, &variables, &response);
+            log_access(http, &processed.context, &variables);
         }
         return Some(DispatchAction::Tunnel(tunnel));
+    }
+    if let Some(upgrade) = processed.upgrade {
+        variables.status = response.status;
+        prepare_userid_variables(&processed.context, &mut variables);
+        response.remove_header("Content-Length");
+        response.remove_header("Transfer-Encoding");
+        response.set_header("Connection", "upgrade");
+        sync_sent_response_variables(
+            &response,
+            &request,
+            &mut variables,
+            false,
+            None,
+            processed.context.chunked_transfer_encoding,
+        );
+        variables.bytes_sent = 0;
+        variables.body_bytes_sent = 0;
+        let should_log_access = processed.context.log_not_found || response.status != 404;
+        let deferred_access_log = should_log_access.then(|| {
+            Box::new(DeferredAccessLog {
+                formats: http.log_formats.clone(),
+                context: processed.context.clone(),
+                variables: variables.clone(),
+            })
+        });
+        let error_logger = http_logger_for_context(state, &processed.context).await;
+        return Some(DispatchAction::Response(DispatchOutcome {
+            response,
+            error_logger,
+            keepalive_timeout: processed.context.keepalive_timeout,
+            keepalive_min_timeout: processed.context.keepalive_min_timeout,
+            keep_alive: false,
+            keepalive_header: None,
+            send_timeout: processed.context.send_timeout,
+            tcp_nodelay: processed.context.tcp_nodelay,
+            limit_rate: ResponseRate::default(),
+            server_tokens: processed.context.server_tokens,
+            chunked_transfer_encoding: processed.context.chunked_transfer_encoding,
+            http2_chunk_size: processed.context.http2_limits.chunk_size,
+            close: ConnectionCloseConfig::from(&processed.context),
+            _body_file_guard: variables.request_body_file_guard.clone(),
+            _connection_guard: connection_guard,
+            deferred_access_log,
+            upgrade: Some(upgrade),
+        }));
     }
     if matches!(response.status, 444 | 499) {
         variables.status = response.status;
@@ -357,13 +434,7 @@ pub(in crate::server) async fn dispatch_http_request(
         0,
     )
     .await;
-    maybe_gzip(
-        &mut response,
-        &processed.context,
-        &request,
-        variables.response_from_upstream,
-    )
-    .await;
+    maybe_gzip(&mut response, &processed.context, &request).await;
     let conditional = evaluate_conditional_request(&response, &request, &processed.context);
     if conditional == ConditionalResult::PreconditionFailed {
         let outcome = configured_error_page(
@@ -436,8 +507,16 @@ pub(in crate::server) async fn dispatch_http_request(
     ));
     variables.body_bytes_sent = response.body_len();
 
-    if processed.context.log_not_found || response.status != 404 {
-        log_access(http, &processed.context, &request, &variables, &response);
+    let should_log_access = processed.context.log_not_found || response.status != 404;
+    let deferred_access_log = (should_log_access && response.body.is_stream()).then(|| {
+        Box::new(DeferredAccessLog {
+            formats: http.log_formats.clone(),
+            context: processed.context.clone(),
+            variables: variables.clone(),
+        })
+    });
+    if should_log_access && deferred_access_log.is_none() {
+        log_access(http, &processed.context, &variables);
     }
     start_post_action(
         http,
@@ -466,5 +545,7 @@ pub(in crate::server) async fn dispatch_http_request(
         close: ConnectionCloseConfig::from(&processed.context),
         _body_file_guard: variables.request_body_file_guard.clone(),
         _connection_guard: connection_guard,
+        deferred_access_log,
+        upgrade: None,
     }))
 }

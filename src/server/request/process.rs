@@ -85,6 +85,7 @@ async fn process_request_inner(
             response: error_response(500),
             context: server.context.clone(),
             tunnel: false,
+            upgrade: None,
         };
     }
     if request.method == "TRACE" {
@@ -133,6 +134,7 @@ async fn process_request_inner(
             response,
             context: *context,
             tunnel,
+            upgrade: None,
         };
     }
 
@@ -142,6 +144,7 @@ async fn process_request_inner(
             response: request_body_error_response(&error),
             context: *context,
             tunnel: false,
+            upgrade: None,
         };
     }
 
@@ -154,6 +157,7 @@ async fn process_request_inner(
                 response,
                 context: *context,
                 tunnel: false,
+                upgrade: None,
             };
         }
         IndexDecision::Redirect(uri) => {
@@ -162,6 +166,7 @@ async fn process_request_inner(
                     response: error_response(500),
                     context: *context,
                     tunnel: false,
+                    upgrade: None,
                 };
             }
             env.uri = uri;
@@ -190,12 +195,21 @@ async fn process_request_inner(
             response: stub_status_response(request, variables),
             context: *context,
             tunnel: false,
+            upgrade: None,
         };
     }
 
-    let (mut response, content) =
+    let (mut response, content, upgrade) =
         content::serve_content(http, request, &env, location, &context, variables).await;
     sync_upstream_response_variables(variables, &response);
+    if let Some(upgrade) = upgrade.filter(|_| response.status == 101) {
+        return Processed {
+            response,
+            context: *context,
+            tunnel: false,
+            upgrade: Some(upgrade),
+        };
+    }
 
     // Nginx intercepts upstream statuses starting at 300 before X-Accel-Redirect.
     if intercepts_upstream_status(
@@ -242,6 +256,7 @@ async fn process_request_inner(
         response,
         context: *context,
         tunnel: false,
+        upgrade: None,
     }
 }
 
@@ -272,6 +287,7 @@ fn response_with_context(context: EffectiveConfig, response: Response) -> Proces
         response,
         context,
         tunnel: false,
+        upgrade: None,
     }
 }
 

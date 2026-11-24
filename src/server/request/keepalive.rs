@@ -130,6 +130,7 @@ pub(in crate::server) fn should_keep_alive(
         && !keepalive_disabled(context, request)
         && request.keep_alive
         && !matches!(request.method.as_str(), "TRACE" | "CONNECT")
+        && response.status != 101
         && !(unsized_stream
             && (request.version != "HTTP/1.1" || !context.chunked_transfer_encoding))
         && response.status < 500

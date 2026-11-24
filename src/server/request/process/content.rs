@@ -120,7 +120,7 @@ pub(super) async fn serve_content(
     location: Option<&LocationConfig>,
     context: &EffectiveConfig,
     variables: &mut Variables,
-) -> (Response, ContentKind) {
+) -> (Response, ContentKind, Option<Box<ProxyUpgrade>>) {
     let handler = variables
         .content_handler
         .or_else(|| content_handler_for_context(context));
@@ -132,6 +132,7 @@ pub(super) async fn serve_content(
     if preserve_on_client_abort && let Some(client_abort) = variables.client_abort.as_ref() {
         client_abort.mark_preserve();
     }
+    let mut upgrade = None;
     let mut response = match handler {
         Some(ContentHandlerKind::FastCgi) => {
             if let Some(pass) = &context.fastcgi_pass {
@@ -170,7 +171,10 @@ pub(super) async fn serve_content(
         }
         Some(ContentHandlerKind::Proxy) => {
             if let Some(proxy) = &context.proxy_pass {
-                proxy_request(proxy, http, request, env, location, context, variables).await
+                let result =
+                    proxy_request(proxy, http, request, env, location, context, variables).await;
+                upgrade = result.upgrade.map(Box::new);
+                result.response
             } else {
                 error_response(500)
             }
@@ -196,7 +200,7 @@ pub(super) async fn serve_content(
     }
     if kind.gateway() {
         serve_gateway_store(&mut response, env, location, context, variables).await;
-        return (response, kind);
+        return (response, kind, None);
     }
-    (response, kind)
+    (response, kind, upgrade)
 }

@@ -336,6 +336,8 @@ pub(super) async fn handle_h2_request(
         nodelay.apply_nodelay(outcome.tcp_nodelay)?;
     }
     send_h2_early_hints(&mut respond, outcome.response.early_hints())?;
+    let send_timeout = outcome.send_timeout;
+    let deferred_access_log = outcome.deferred_access_log;
     let send = async {
         if discard_request_body {
             send_h2_response_discarding_request_body(
@@ -357,7 +359,11 @@ pub(super) async fn handle_h2_request(
             .await
         }
     };
-    timeout_io(outcome.send_timeout, send).await
+    let result = timeout_io(send_timeout, send).await;
+    if let Some(log) = deferred_access_log {
+        log.write();
+    }
+    result
 }
 
 pub(super) struct H2RequestOptions {

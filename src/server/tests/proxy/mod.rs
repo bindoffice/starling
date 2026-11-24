@@ -3,6 +3,7 @@ use super::*;
 
 mod cookies;
 mod headers_errors;
+mod implicit;
 mod paths;
 mod redirects;
 mod request_errors;
@@ -16,4 +17,5 @@ mod requests;
 mod streaming;
 mod streaming_errors;
 mod streaming_prefetch;
+mod upgrade;
 mod upstream_early_response;

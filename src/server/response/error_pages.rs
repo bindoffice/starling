@@ -218,6 +218,7 @@ async fn follow_error_page(
             response: error_page_redirect(&uri, page.overwrite),
             context: current_context.clone(),
             tunnel: false,
+            upgrade: None,
         });
     }
     if !uri.starts_with('/') {
@@ -225,6 +226,7 @@ async fn follow_error_page(
             response: error_page_redirect(&uri, page.overwrite),
             context: current_context.clone(),
             tunnel: false,
+            upgrade: None,
         });
     }
     let (uri, args) = match uri.split_once('?') {

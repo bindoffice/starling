@@ -106,15 +106,7 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
     limit_rate: u64,
     streaming_allowed: bool,
     stream_reuse_allowed: bool,
-) -> Result<
-    (
-        UpstreamResponse,
-        Option<UpstreamConnection>,
-        Option<tokio::sync::oneshot::Receiver<UpstreamConnection>>,
-        Duration,
-    ),
-    ProxyFailure,
-> {
+) -> Result<ConnectionProxyOutcome, ProxyFailure> {
     connection.requests = connection.requests.saturating_add(1);
     let write_result = write_proxy_request_timed(
         &mut connection.reader,
@@ -149,6 +141,43 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
         head.body_kind = UpstreamBodyKind::None;
     }
     let header_time = head.header_time;
+    if head.status == 101 {
+        return Ok(ConnectionProxyOutcome {
+            response: UpstreamResponse {
+                status: head.status,
+                version: head.version,
+                headers: head.headers,
+                trailers: Vec::new(),
+                early_hints: head.early_hints,
+                body: ResponseBody::Empty,
+                body_temp_file: None,
+            },
+            reusable: None,
+            deferred: None,
+            upgrade: Some(connection),
+            header_time,
+        });
+    }
+    if has_accel_redirect(&head.headers, context) {
+        // nginx follows X-Accel-Redirect from the response headers and does
+        // not wait for the upstream body. The connection cannot be reused
+        // because the unread body would otherwise corrupt the next response.
+        return Ok(ConnectionProxyOutcome {
+            response: UpstreamResponse {
+                status: head.status,
+                version: head.version,
+                headers: head.headers,
+                trailers: Vec::new(),
+                early_hints: head.early_hints,
+                body: ResponseBody::Empty,
+                body_temp_file: None,
+            },
+            reusable: None,
+            deferred: None,
+            upgrade: None,
+            header_time,
+        });
+    }
     let stream_reuse = stream_reuse_allowed
         && !write_incomplete
         && can_reuse_stream_head(outgoing, version, &head);
@@ -165,8 +194,8 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
             limit_rate,
             reuse_tx,
         );
-        return Ok((
-            UpstreamResponse {
+        return Ok(ConnectionProxyOutcome {
+            response: UpstreamResponse {
                 status: head.status,
                 version: head.version,
                 headers: head.headers,
@@ -175,10 +204,11 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
                 body,
                 body_temp_file: None,
             },
-            None,
-            reuse_rx,
+            reusable: None,
+            deferred: reuse_rx,
+            upgrade: None,
             header_time,
-        ));
+        });
     }
     if body_streaming_allowed
         && can_prestream_buffered_response(context, head.status, &head.headers)
@@ -206,8 +236,8 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
                     UpstreamBodyBufferOptions::upstream(&context.proxy_buffering),
                     reuse_tx,
                 );
-                return Ok((
-                    UpstreamResponse {
+                return Ok(ConnectionProxyOutcome {
+                    response: UpstreamResponse {
                         status: head.status,
                         version: head.version,
                         headers: head.headers,
@@ -216,10 +246,11 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
                         body,
                         body_temp_file: None,
                     },
-                    None,
-                    reuse_rx,
+                    reusable: None,
+                    deferred: reuse_rx,
+                    upgrade: None,
                     header_time,
-                ));
+                });
             }
             UpstreamBodyKind::Chunked => {
                 let rate = (limit_rate != 0).then(|| ReadRate::new(limit_rate));
@@ -234,8 +265,8 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
                 {
                     streaming_prefetch::ChunkedPrefetch::Complete { body, trailers } => {
                         let reusable = connection.reader.buffer().is_empty();
-                        return Ok((
-                            UpstreamResponse {
+                        return Ok(ConnectionProxyOutcome {
+                            response: UpstreamResponse {
                                 status: head.status,
                                 version: head.version,
                                 headers: head.headers,
@@ -244,10 +275,11 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
                                 body: ResponseBody::Bytes(body),
                                 body_temp_file: None,
                             },
-                            reusable.then_some(connection),
-                            None,
+                            reusable: reusable.then_some(connection),
+                            deferred: None,
+                            upgrade: None,
                             header_time,
-                        ));
+                        });
                     }
                     streaming_prefetch::ChunkedPrefetch::Stream(prefetched) => {
                         let (reuse_tx, reuse_rx) = deferred_stream_connection(stream_reuse);
@@ -258,8 +290,8 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
                             UpstreamBodyBufferOptions::upstream(&context.proxy_buffering),
                             reuse_tx,
                         );
-                        return Ok((
-                            UpstreamResponse {
+                        return Ok(ConnectionProxyOutcome {
+                            response: UpstreamResponse {
                                 status: head.status,
                                 version: head.version,
                                 headers: head.headers,
@@ -268,10 +300,11 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
                                 body,
                                 body_temp_file: None,
                             },
-                            None,
-                            reuse_rx,
+                            reusable: None,
+                            deferred: reuse_rx,
+                            upgrade: None,
                             header_time,
-                        ));
+                        });
                     }
                 }
             }
@@ -287,8 +320,8 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
                 .map_err(proxy_failure_from_io)?
                 {
                     streaming_prefetch::UntilEofPrefetch::Complete(body) => {
-                        return Ok((
-                            UpstreamResponse {
+                        return Ok(ConnectionProxyOutcome {
+                            response: UpstreamResponse {
                                 status: head.status,
                                 version: head.version,
                                 headers: head.headers,
@@ -297,10 +330,11 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
                                 body: ResponseBody::Bytes(body),
                                 body_temp_file: None,
                             },
-                            None,
-                            None,
+                            reusable: None,
+                            deferred: None,
+                            upgrade: None,
                             header_time,
-                        ));
+                        });
                     }
                     streaming_prefetch::UntilEofPrefetch::Stream { prefix, rate } => {
                         let body = streaming_prefetch::spawn_prefetched_until_eof_stream(
@@ -310,8 +344,8 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
                             rate,
                             UpstreamBodyBufferOptions::upstream(&context.proxy_buffering),
                         );
-                        return Ok((
-                            UpstreamResponse {
+                        return Ok(ConnectionProxyOutcome {
+                            response: UpstreamResponse {
                                 status: head.status,
                                 version: head.version,
                                 headers: head.headers,
@@ -320,10 +354,11 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
                                 body,
                                 body_temp_file: None,
                             },
-                            None,
-                            None,
+                            reusable: None,
+                            deferred: None,
+                            upgrade: None,
                             header_time,
-                        ));
+                        });
                     }
                 }
             }
@@ -345,7 +380,28 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
         .map_err(proxy_failure_from_io)?
     };
     let reusable = connection.reader.buffer().is_empty();
-    Ok((response, reusable.then_some(connection), None, header_time))
+    Ok(ConnectionProxyOutcome {
+        response,
+        reusable: reusable.then_some(connection),
+        deferred: None,
+        upgrade: None,
+        header_time,
+    })
+}
+
+pub(in crate::server) struct ConnectionProxyOutcome {
+    pub(in crate::server) response: UpstreamResponse,
+    pub(in crate::server) reusable: Option<UpstreamConnection>,
+    pub(in crate::server) deferred: Option<tokio::sync::oneshot::Receiver<UpstreamConnection>>,
+    pub(in crate::server) upgrade: Option<UpstreamConnection>,
+    pub(in crate::server) header_time: Duration,
+}
+
+fn has_accel_redirect(headers: &[Header], context: &EffectiveConfig) -> bool {
+    !upstream_header_ignored(&context.proxy_ignore_headers, "X-Accel-Redirect")
+        && headers.iter().any(|header| {
+            header.name.eq_ignore_ascii_case("X-Accel-Redirect") && !header.value.is_empty()
+        })
 }
 
 #[cfg(test)]

@@ -4,6 +4,10 @@ mod connect;
 mod relay;
 mod tls;
 
+pub(in crate::server) use relay::{
+    BidirectionalCopyStats, BidirectionalCopyTimeouts, copy_bidirectional,
+};
+
 pub(in crate::server) struct TunnelDispatch {
     pub(in crate::server) response: Response,
     pub(in crate::server) error_logger: Option<Arc<Logger>>,
@@ -139,14 +143,18 @@ where
     };
     let mut response = dispatch.response;
     relay::write_tunnel_response(downstream_writer, &mut response, dispatch.server_tokens).await?;
+    let mut stats = relay::BidirectionalCopyStats::default();
     let result = relay::copy_bidirectional(
         downstream_reader,
         downstream_writer,
         opened.io,
-        dispatch.upstream_send_timeout,
-        dispatch.upstream_read_timeout,
-        dispatch.downstream_send_timeout,
-        dispatch.buffer_size,
+        BidirectionalCopyTimeouts {
+            upstream_write: dispatch.upstream_send_timeout,
+            upstream_read: dispatch.upstream_read_timeout,
+            downstream_write: dispatch.downstream_send_timeout,
+            buffer_size: dispatch.buffer_size,
+        },
+        &mut stats,
     )
     .await;
     drop(opened.guard);

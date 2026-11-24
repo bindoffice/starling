@@ -1,6 +1,7 @@
 use super::support::*;
 use super::*;
 
+mod access_log;
 mod concurrency;
 mod framing;
 mod lifecycle;

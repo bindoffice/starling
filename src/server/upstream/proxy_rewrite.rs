@@ -321,12 +321,11 @@ pub(in crate::server) fn apply_proxy_cookie_domain_rule(
 ) -> Option<String> {
     for rule in rules {
         if let Some(pattern) = rule.pattern.strip_prefix('~') {
-            let (pattern, case_insensitive) = match pattern.strip_prefix('*') {
-                Some(pattern) => (pattern, true),
-                None => (pattern, false),
-            };
+            // Cookie domains are DNS names, so nginx always matches this
+            // regular expression case-insensitively.
+            let pattern = pattern.strip_prefix('*').unwrap_or(pattern);
             let regex = crate::config::RegexBuilder::new(pattern)
-                .case_insensitive(case_insensitive)
+                .case_insensitive(true)
                 .build()
                 .ok()?;
             let Some(captures) = regex.captures(value) else {
@@ -350,28 +349,96 @@ pub(in crate::server) fn apply_proxy_cookie_domain_rule(
     None
 }
 
-pub(in crate::server) fn resolve_proxy_targets(
+pub(in crate::server) async fn resolve_proxy_targets(
     proxy: &ProxyPassConfig,
     http: &HttpConfig,
     variables: &Variables,
     peer: Option<IpAddr>,
 ) -> Vec<ResolvedUpstreamTarget> {
-    if let Some(upstream) = &proxy.upstream {
-        let Some(config) = http.upstreams.get(upstream) else {
-            return Vec::new();
-        };
+    if let Some(upstream) = &proxy.upstream
+        && let Some(config) = http.upstreams.get(upstream)
+    {
         let hash_key = config
             .hash_key
             .as_deref()
             .map(|key| eval_variables(key, variables));
         return resolve_upstream_config(config, peer, hash_key.as_deref());
     }
-    vec![ResolvedUpstreamTarget {
-        host: eval_variables(&proxy.host, variables),
-        port: proxy.port,
-        peer: None,
-        check_health: false,
-    }]
+    let host = eval_variables(&proxy.host, variables);
+    let (host, port) = proxy_runtime_authority(&host, proxy.port);
+    resolve_implicit_proxy_targets(host, port).await
+}
+
+fn proxy_runtime_authority(value: &str, default_port: u16) -> (String, u16) {
+    if value.starts_with("unix:") {
+        return (value.to_string(), 0);
+    }
+    if let Some(rest) = value.strip_prefix('[')
+        && let Some((host, suffix)) = rest.split_once(']')
+    {
+        let port = suffix
+            .strip_prefix(':')
+            .and_then(|port| port.parse().ok())
+            .unwrap_or(default_port);
+        return (format!("[{host}]"), port);
+    }
+    if let Some((host, port)) = value.rsplit_once(':')
+        && !host.contains(':')
+        && let Ok(port) = port.parse()
+    {
+        return (host.to_string(), port);
+    }
+    (value.to_string(), default_port)
+}
+
+async fn resolve_implicit_proxy_targets(host: String, port: u16) -> Vec<ResolvedUpstreamTarget> {
+    if host.starts_with("unix:") || host.parse::<IpAddr>().is_ok() {
+        return vec![ResolvedUpstreamTarget {
+            host,
+            port,
+            peer: None,
+            check_health: false,
+        }];
+    }
+    let lookup_host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(&host);
+    let Ok(addresses) = tokio::net::lookup_host((lookup_host, port)).await else {
+        return vec![ResolvedUpstreamTarget {
+            host,
+            port,
+            peer: None,
+            check_health: false,
+        }];
+    };
+    let mut targets = Vec::new();
+    for address in addresses {
+        let host = match address.ip() {
+            IpAddr::V4(address) => address.to_string(),
+            IpAddr::V6(address) => format!("[{address}]"),
+        };
+        if targets.iter().any(|target: &ResolvedUpstreamTarget| {
+            target.host == host && target.port == address.port()
+        }) {
+            continue;
+        }
+        targets.push(ResolvedUpstreamTarget {
+            host,
+            port: address.port(),
+            peer: None,
+            check_health: false,
+        });
+    }
+    if targets.is_empty() {
+        targets.push(ResolvedUpstreamTarget {
+            host,
+            port,
+            peer: None,
+            check_health: false,
+        });
+    }
+    targets
 }
 
 pub(in crate::server) fn resolve_upstream_config(

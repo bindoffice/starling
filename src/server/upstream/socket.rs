@@ -132,7 +132,13 @@ pub(super) async fn connect_upstream_tcp(
     socket_options: UpstreamSocketOptions,
     bind_directive: &str,
 ) -> io::Result<TcpStream> {
-    let targets: Vec<_> = tokio::net::lookup_host((host, port)).await?.collect();
+    let lookup_host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    let targets: Vec<_> = tokio::net::lookup_host((lookup_host, port))
+        .await?
+        .collect();
     if targets.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::AddrNotAvailable,

@@ -25,6 +25,10 @@ async fn honors_request_version_and_user_agent_gzip_rules() {
                         gzip_disable "does-not-match";
                         return 200 "abcdefghijklmnopqrstuvwxyz";
                     }
+                    location /proxied-any {
+                        gzip_proxied any;
+                        return 200 "abcdefghijklmnopqrstuvwxyz";
+                    }
                 }
             }
         "#,
@@ -96,6 +100,37 @@ async fn honors_request_version_and_user_agent_gzip_rules() {
     )
     .await;
     assert!(compressed(&response), "HTTP/1.1 must support gzip");
+
+    let response = request_bytes(
+        &config,
+        "GET /default HTTP/1.1\r\nHost: localhost\r\nVia: proxy\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(
+        !compressed(&response),
+        "gzip_proxied off must skip requests with Via"
+    );
+
+    let response = request_bytes(
+        &config,
+        "GET /proxied-any HTTP/1.1\r\nHost: localhost\r\nVia: proxy\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(
+        compressed(&response),
+        "gzip_proxied any must allow requests with Via"
+    );
+
+    let response = request_bytes(
+        &config,
+        "HEAD /default HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(
+        compressed(&response),
+        "HEAD must expose gzip response headers: {}",
+        String::from_utf8_lossy(&response)
+    );
     let _ = std::fs::remove_dir_all(prefix);
 }
 

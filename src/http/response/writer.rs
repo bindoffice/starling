@@ -56,6 +56,13 @@ pub(crate) fn prepare_response_for_write(
         response.remove_header("Content-Length");
         response.set_header("Transfer-Encoding", "chunked");
     }
+    if response.status == 101 {
+        response.remove_header("Content-Length");
+        response.remove_header("Transfer-Encoding");
+        response.remove_header("Keep-Alive");
+        response.set_header("Connection", "upgrade");
+        return false;
+    }
     if options.request_version == "HTTP/1.0" && !options.keep_alive {
         response.set_header("Connection", "close");
     } else if options.keep_alive {

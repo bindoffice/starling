@@ -198,6 +198,7 @@ pub(super) async fn prepare_request(
                         response: outcome.response,
                         context: outcome.context,
                         tunnel: false,
+                        upgrade: None,
                     });
                 }
                 TryFilesResult::FallbackUri(uri) => {
@@ -253,6 +254,7 @@ async fn pre_rewrite_response(
             response: request_body_error_response(&error),
             context: context.clone(),
             tunnel: false,
+            upgrade: None,
         });
     }
     if context.client_max_body_size != 0
@@ -262,6 +264,7 @@ async fn pre_rewrite_response(
             response: error_response(413),
             context: context.clone(),
             tunnel: false,
+            upgrade: None,
         });
     }
     if location.is_some_and(|location| location.context.internal) && !env.internal {
@@ -269,6 +272,7 @@ async fn pre_rewrite_response(
             response: error_response(404),
             context: context.clone(),
             tunnel: false,
+            upgrade: None,
         });
     }
     if let Some(response) = basic_access_response(context, request, variables).await {
@@ -276,6 +280,7 @@ async fn pre_rewrite_response(
             response: apply_auth_delay(context, response).await,
             context: context.clone(),
             tunnel: false,
+            upgrade: None,
         });
     }
     if !env.limits_checked {
@@ -288,6 +293,7 @@ async fn pre_rewrite_response(
                 response: outcome.response,
                 context: outcome.context,
                 tunnel: false,
+                upgrade: None,
             });
         }
         match acquire_connection_limits(context, variables) {
@@ -307,6 +313,7 @@ async fn pre_rewrite_response(
                     response: outcome.response,
                     context: outcome.context,
                     tunnel: false,
+                    upgrade: None,
                 });
             }
         }
@@ -322,6 +329,7 @@ async fn pre_rewrite_response(
             response: outcome.response,
             context: outcome.context,
             tunnel: false,
+            upgrade: None,
         });
     }
     None
@@ -360,6 +368,7 @@ fn response_outcome(context: EffectiveConfig, response: Response) -> PrepareOutc
         response,
         context,
         tunnel: false,
+        upgrade: None,
     })
 }
 
@@ -415,6 +424,7 @@ async fn rewrite_response_outcome(
         response: outcome.response,
         context: outcome.context,
         tunnel: false,
+        upgrade: None,
     })
 }
 

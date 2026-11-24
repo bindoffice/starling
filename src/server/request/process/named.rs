@@ -17,6 +17,7 @@ pub(in crate::server) async fn process_named_location(
             response: error_response(500),
             context: server.context.clone(),
             tunnel: false,
+            upgrade: None,
         });
     }
     let location = find_named_location(&server.locations, name)?;
@@ -33,6 +34,7 @@ pub(in crate::server) async fn process_named_location(
             response,
             context: *context,
             tunnel: false,
+            upgrade: None,
         });
     }
     if !env.limits_checked {
@@ -45,6 +47,7 @@ pub(in crate::server) async fn process_named_location(
                 response: outcome.response,
                 context: outcome.context,
                 tunnel: false,
+                upgrade: None,
             });
         }
         match acquire_connection_limits(&context, variables) {
@@ -64,6 +67,7 @@ pub(in crate::server) async fn process_named_location(
                     response: outcome.response,
                     context: outcome.context,
                     tunnel: false,
+                    upgrade: None,
                 });
             }
         }
@@ -79,6 +83,7 @@ pub(in crate::server) async fn process_named_location(
             response: outcome.response,
             context: outcome.context,
             tunnel: false,
+            upgrade: None,
         });
     }
     let actions = std::mem::take(&mut context.rewrite_actions);
@@ -101,6 +106,7 @@ pub(in crate::server) async fn process_named_location(
                 response: outcome.response,
                 context: outcome.context,
                 tunnel: false,
+                upgrade: None,
             });
         }
         RewriteOutcome::Last => {
@@ -150,6 +156,7 @@ pub(in crate::server) async fn process_named_location(
                     response: outcome.response,
                     context: outcome.context,
                     tunnel: false,
+                    upgrade: None,
                 });
             }
             TryFilesResult::FallbackUri(uri) => {
@@ -159,6 +166,7 @@ pub(in crate::server) async fn process_named_location(
                         response: error_response(500),
                         context: *context,
                         tunnel: false,
+                        upgrade: None,
                     });
                 }
                 variables.uri = env.uri.clone();
@@ -197,6 +205,7 @@ pub(in crate::server) async fn process_named_location(
                     response: error_response(500),
                     context: *context,
                     tunnel: false,
+                    upgrade: None,
                 });
             }
         }
@@ -215,6 +224,7 @@ pub(in crate::server) async fn process_named_location(
             response,
             context: *context,
             tunnel,
+            upgrade: None,
         });
     }
     if let Err(error) = prepare_request_body(request, &context, variables).await {
@@ -223,6 +233,7 @@ pub(in crate::server) async fn process_named_location(
             response: request_body_error_response(&error),
             context: *context,
             tunnel: false,
+            upgrade: None,
         });
     }
     start_mirror_requests(http, server, request, &mut env, &context, variables, depth);
@@ -233,6 +244,7 @@ pub(in crate::server) async fn process_named_location(
                 response,
                 context: *context,
                 tunnel: false,
+                upgrade: None,
             });
         }
         IndexDecision::Redirect(uri) => {
@@ -241,6 +253,7 @@ pub(in crate::server) async fn process_named_location(
                     response: error_response(500),
                     context: *context,
                     tunnel: false,
+                    upgrade: None,
                 });
             }
             env.uri = uri;
@@ -270,11 +283,20 @@ pub(in crate::server) async fn process_named_location(
             response: stub_status_response(request, variables),
             context: *context,
             tunnel: false,
+            upgrade: None,
         });
     }
-    let (mut response, content) =
+    let (mut response, content, upgrade) =
         content::serve_content(http, request, &env, Some(location), &context, variables).await;
     sync_upstream_response_variables(variables, &response);
+    if let Some(upgrade) = upgrade.filter(|_| response.status == 101) {
+        return Some(Processed {
+            response,
+            context: *context,
+            tunnel: false,
+            upgrade: Some(upgrade),
+        });
+    }
     if intercepts_upstream_status(
         response.status,
         content.intercept_errors(&context),
@@ -323,5 +345,6 @@ pub(in crate::server) async fn process_named_location(
         response,
         context: *context,
         tunnel: false,
+        upgrade: None,
     })
 }

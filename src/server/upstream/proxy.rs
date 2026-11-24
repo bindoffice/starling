@@ -9,8 +9,22 @@ use attempt::proxy_attempt;
 use cache::*;
 use response::finalize_proxy_response;
 use result::ProxyAttemptTarget;
-pub(in crate::server) use result::{ProxyAttemptResult, ReusableUpstreamConnection};
+pub(in crate::server) use result::{ProxyAttemptResult, ProxyUpgrade, ReusableUpstreamConnection};
 pub(in crate::server) use transport::*;
+
+pub(in crate::server) struct ProxyRequestResult {
+    pub(in crate::server) response: Response,
+    pub(in crate::server) upgrade: Option<ProxyUpgrade>,
+}
+
+impl From<Response> for ProxyRequestResult {
+    fn from(response: Response) -> Self {
+        Self {
+            response,
+            upgrade: None,
+        }
+    }
+}
 
 pub(in crate::server) async fn proxy_request(
     proxy: &ProxyPassConfig,
@@ -20,7 +34,7 @@ pub(in crate::server) async fn proxy_request(
     location: Option<&LocationConfig>,
     context: &EffectiveConfig,
     variables: &mut Variables,
-) -> Response {
+) -> ProxyRequestResult {
     if let Some(client_abort) = variables.client_abort.as_ref() {
         client_abort.mark_upstream_active();
     }
@@ -65,7 +79,8 @@ pub(in crate::server) async fn proxy_request(
             return proxy_response_from_updating(
                 stale.take().expect("expired cache response"),
                 variables,
-            );
+            )
+            .into();
         }
         if !variables.proxy_cache_background
             && expired
@@ -97,7 +112,8 @@ pub(in crate::server) async fn proxy_request(
                     stale.take().expect("expired cache response"),
                     variables,
                 ),
-            };
+            }
+            .into();
         }
         if !variables.proxy_cache_background
             && !matches!(lookup, CacheLookup::Hit(_) | CacheLookup::Error(_))
@@ -125,7 +141,7 @@ pub(in crate::server) async fn proxy_request(
             }
         }
         if let Some(response) = cached_lookup_response(lookup, variables) {
-            return response;
+            return response.into();
         }
         if expired {
             variables.upstream_cache_status = "EXPIRED".into();
@@ -149,7 +165,7 @@ pub(in crate::server) async fn proxy_request(
             .is_some_and(|plan| cache_store_allowed && !plan.bypass && plan.would_store_now());
     let streaming_allowed =
         !variables.proxy_cache_background && !cache_head_conversion && !strip_cache_headers;
-    let targets = resolve_proxy_targets(proxy, http, variables, request_peer(request));
+    let targets = resolve_proxy_targets(proxy, http, variables, request_peer(request)).await;
     let mut attempted = Vec::new();
     let mut last_failure = ProxyFailure::Failure;
     let mut next = NextUpstreamState::new(&context.proxy_next_upstream);
@@ -237,7 +253,7 @@ pub(in crate::server) async fn proxy_request(
                     variables.upstream_addr = attempted.join(", ");
                     variables.upstream_status = upstream_statuses.join(", ");
                     variables.upstream_response_time = upstream_response_times.join(", ");
-                    return proxy_response_from_revalidated(cached, variables);
+                    return proxy_response_from_revalidated(cached, variables).into();
                 }
                 let stale_status = cache
                     .as_ref()
@@ -246,8 +262,9 @@ pub(in crate::server) async fn proxy_request(
                     variables.upstream_addr = attempted.join(", ");
                     variables.upstream_status = upstream_statuses.join(", ");
                     variables.upstream_response_time = upstream_response_times.join(", ");
-                    return proxy_response_from_stale(stale, variables);
+                    return proxy_response_from_stale(stale, variables).into();
                 }
+                let upgrade = result.upgrade;
                 let mut response = result.response;
                 let cache_validity = if let Some(plan) = &cache
                     && cache_store_allowed
@@ -271,7 +288,7 @@ pub(in crate::server) async fn proxy_request(
                 variables.upstream_addr = attempted.join(", ");
                 variables.upstream_status = upstream_statuses.join(", ");
                 variables.upstream_response_time = upstream_response_times.join(", ");
-                return response;
+                return ProxyRequestResult { response, upgrade };
             }
             Err(failure) => {
                 upstream_statuses.push("-".into());
@@ -298,7 +315,7 @@ pub(in crate::server) async fn proxy_request(
         && allows_stale_error(&plan.use_stale, cached, &last_failure)
     {
         let stale = stale.take().expect("stale cache response");
-        return proxy_response_from_stale(stale, variables);
+        return proxy_response_from_stale(stale, variables).into();
     }
     store_proxy_cache_failure(
         cache.as_ref(),
@@ -312,4 +329,5 @@ pub(in crate::server) async fn proxy_request(
         ProxyFailure::Failure | ProxyFailure::InvalidHeader => error_response(502),
         ProxyFailure::RequestBody(status) => error_response(status),
     }
+    .into()
 }

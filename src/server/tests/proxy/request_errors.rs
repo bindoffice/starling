@@ -114,7 +114,7 @@ async fn truncated_file_backed_request_body_maps_to_500_and_truncates_upstream_b
     )
     .await;
 
-    assert_eq!(response.status, 500);
+    assert_eq!(response.response.status, 500);
     assert_eq!(backend.await.unwrap(), b"part");
 
     drop(request);

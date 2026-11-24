@@ -2,6 +2,7 @@ use super::body_stream::Http1BodyTask;
 use super::*;
 
 mod response_write;
+mod upgrade;
 use response_write::{DispatchWrite, write_dispatch_response};
 
 pub(in crate::server) async fn handle_io_with_shutdown<S>(
@@ -391,7 +392,78 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             }
             let mut response = outcome.response;
             let _ = drain_after_client_abort(&mut response);
+            if let Some(log) = outcome.deferred_access_log.take() {
+                log.write();
+            }
             break 'connection;
+        }
+        if let Some(proxy_upgrade) = outcome.upgrade.take() {
+            if let Some(task) = body_task.take() {
+                task.close().await;
+                match task.finish().await {
+                    Ok((restored, Ok(()))) => reader = Some(restored),
+                    Ok((_, Err(err))) => {
+                        request_logger.log(
+                            LogLevel::Info,
+                            format!(
+                                "client request body for \"{} {}\" from {remote} failed: {err}",
+                                request.method, request.target
+                            ),
+                        );
+                        break;
+                    }
+                    Err(err) => {
+                        request_logger.log(
+                            LogLevel::Error,
+                            format!(
+                                "client request body task for \"{} {}\" failed: {err}",
+                                request.method, request.target
+                            ),
+                        );
+                        break;
+                    }
+                }
+            }
+            let Some(reader) = reader.take() else {
+                break;
+            };
+            if let Some(control) = &control
+                && let Err(err) = control.apply_nodelay(outcome.tcp_nodelay)
+            {
+                request_logger.log(
+                    LogLevel::Alert,
+                    format!("setsockopt(TCP_NODELAY) failed: {err}"),
+                );
+                break;
+            }
+            match upgrade::serve_proxy_upgrade(
+                reader,
+                &mut write_half,
+                &mut outcome,
+                *proxy_upgrade,
+                &request,
+                control.as_ref(),
+            )
+            .await
+            {
+                upgrade::UpgradeOutcome::ClientClosed => {}
+                upgrade::UpgradeOutcome::Finished {
+                    result,
+                    bytes_sent,
+                    body_bytes_sent,
+                } => {
+                    if let Some(log) = outcome.deferred_access_log.take() {
+                        log.write_upgraded(bytes_sent, body_bytes_sent);
+                    }
+                    if let Err(err) = result {
+                        request_logger.log(
+                            LogLevel::Info,
+                            format!("proxied upgraded connection from {remote} failed: {err}"),
+                        );
+                    }
+                }
+            }
+            break;
         }
         if let Some(task) = body_task.as_ref() {
             task.close().await;
@@ -421,16 +493,25 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                     format!("client {remote} closed the connection during the response"),
                 );
                 let _ = drain_after_client_abort(&mut outcome.response);
+                if let Some(log) = outcome.deferred_access_log.take() {
+                    log.write();
+                }
                 break;
             }
             DispatchWrite::Failed(err) => {
                 timed_out = err.kind() == io::ErrorKind::TimedOut;
                 let _ = drain_after_client_abort(&mut outcome.response);
+                if let Some(log) = outcome.deferred_access_log.take() {
+                    log.write();
+                }
                 if err.kind() != io::ErrorKind::BrokenPipe {
                     request_logger.log(LogLevel::Error, format!("write() failed: {err}"));
                 }
                 break;
             }
+        }
+        if let Some(log) = outcome.deferred_access_log.take() {
+            log.write();
         }
         if let Some(task) = body_task.take() {
             if !keep_alive {
