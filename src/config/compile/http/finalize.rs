@@ -3,6 +3,7 @@ use super::*;
 
 impl HttpCompileState<'_> {
     pub(super) fn finish(mut self, directive: &Directive) -> ConfigResult<HttpConfig> {
+        validate_http_variables(&directive.children)?;
         finalize_scope_directives(&mut self.context, &mut self.seen_scope);
         validate_upstream_buffering(&self.context, &directive.location)?;
         finalize_secure_link(

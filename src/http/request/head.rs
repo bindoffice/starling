@@ -98,6 +98,7 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
         }
         break request_line;
     };
+    let request_line_length = request_line.len();
     let request_line = request_line.trim_end_matches(['\r', '\n']);
     let mut parts = request_line.split_whitespace();
     let method = parts
@@ -131,7 +132,7 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
 
     let mut headers = Vec::new();
     let mut invalid_headers = Vec::new();
-    let mut total = request_line.len() + 2;
+    let mut total = request_line_length;
     loop {
         let Some(line) = read_line_limited(
             reader,
@@ -262,6 +263,7 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
         target: target.to_string(),
         version: version.to_string(),
         headers,
+        request_length: total as u64,
         invalid_headers,
         keep_alive,
         content_length,

@@ -5,6 +5,17 @@ pub fn render_log_format(
     escape: LogEscapeMode,
     mut variable: impl FnMut(&str) -> Option<String>,
 ) -> String {
+    let bytes = render_log_format_bytes(template, escape, |name| {
+        variable(name).map(String::into_bytes)
+    });
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+pub fn render_log_format_bytes(
+    template: &str,
+    escape: LogEscapeMode,
+    mut variable: impl FnMut(&str) -> Option<Vec<u8>>,
+) -> Vec<u8> {
     let mut output = Vec::with_capacity(template.len());
     let bytes = template.as_bytes();
     let mut index = 0;
@@ -43,12 +54,12 @@ pub fn render_log_format(
             &template[start..index]
         };
         match variable(name) {
-            Some(value) => append_escaped(&mut output, value.as_bytes(), escape),
-            None => output.push(b'-'),
+            Some(value) => append_escaped(&mut output, &value, escape),
+            None if escape == LogEscapeMode::Default => output.push(b'-'),
+            None => {}
         }
     }
-    String::from_utf8(output)
-        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
+    output
 }
 
 fn append_escaped(output: &mut Vec<u8>, value: &[u8], escape: LogEscapeMode) {
@@ -137,5 +148,25 @@ mod tests {
     fn renders_missing_variables_as_dash() {
         let rendered = render_log_format("$missing", LogEscapeMode::Default, |_| None);
         assert_eq!(rendered, "-");
+    }
+
+    #[test]
+    fn omits_missing_variables_without_default_escaping() {
+        assert_eq!(
+            render_log_format("$missing", LogEscapeMode::None, |_| None),
+            ""
+        );
+        assert_eq!(
+            render_log_format("$missing", LogEscapeMode::Json, |_| None),
+            ""
+        );
+    }
+
+    #[test]
+    fn escapes_binary_variable_bytes_before_utf8_conversion() {
+        let rendered = render_log_format_bytes("$binary", LogEscapeMode::Default, |_| {
+            Some(vec![0x7f, 0x00, 0x00, 0x01])
+        });
+        assert_eq!(rendered, b"\\x7F\\x00\\x00\\x01");
     }
 }

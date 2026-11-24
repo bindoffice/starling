@@ -105,6 +105,11 @@ pub(in crate::server) async fn dispatch_http_request(
     }
     variables.connection = connection_request.connection_id.to_string();
     variables.connection_requests = connection_request.served_requests.to_string();
+    variables.pipe = if connection_request.pipelined {
+        "p".into()
+    } else {
+        ".".into()
+    };
     variables.connection_time =
         format!("{:.3}", connection_request.started.elapsed().as_secs_f64());
     if let Some((regex, captures)) = server.names.iter().find_map(|name| {
@@ -403,6 +408,16 @@ pub(in crate::server) async fn dispatch_http_request(
         connection_request,
     );
     let keepalive_header = keepalive_header_timeout(&processed.context, keep_alive);
+    let response_options = ResponseWriteOptions {
+        request_method: &request.method,
+        request_version: &request.version,
+        keep_alive,
+        keep_alive_header: keepalive_header,
+        server_tokens: processed.context.server_tokens,
+        chunked_transfer_encoding: processed.context.chunked_transfer_encoding,
+        rate: ResponseRate::default(),
+    };
+    let chunked = prepare_response_for_write(&mut response, &response_options);
     sync_sent_response_variables(
         &response,
         &request,
@@ -414,6 +429,11 @@ pub(in crate::server) async fn dispatch_http_request(
     let limit_rate =
         response_rate_with_upstream(response_rate(&processed.context, &variables), &response);
     variables.status = response.status;
+    variables.bytes_sent = response_head_length(&response).saturating_add(response_wire_body_len(
+        &response,
+        &request.method,
+        chunked,
+    ));
     variables.body_bytes_sent = response.body_len();
 
     if processed.context.log_not_found || response.status != 404 {

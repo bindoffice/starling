@@ -69,7 +69,7 @@ pub(in crate::server) fn log_stream_access(
         line.push('\n');
         write_access_log_target(
             target,
-            &line,
+            line.as_bytes(),
             server.open_log_file_cache.as_ref(),
             |template| eval_stream_log_variables(template, log),
         );

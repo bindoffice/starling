@@ -19,6 +19,32 @@ pub async fn write_response<W: AsyncWrite + Unpin>(
     options: ResponseWriteOptions<'_>,
 ) -> io::Result<()> {
     write_early_hints(writer, response.early_hints(), options.request_version).await?;
+    let chunked = prepare_response_for_write(response, &options);
+
+    let head = build_response_head(response);
+    writer.write_all(&head).await?;
+
+    if options.request_method.eq_ignore_ascii_case("HEAD") {
+        writer.flush().await?;
+        return Ok(());
+    }
+    if chunked {
+        let mut trailers =
+            body::write_chunked_body(writer, options.rate, &mut response.body).await?;
+        trailers.extend(response.trailers.iter().cloned());
+        body::write_chunked_trailers(writer, &trailers).await?;
+        writer.flush().await?;
+        return Ok(());
+    }
+    body::write_body(writer, options.rate, &mut response.body).await?;
+    writer.flush().await?;
+    Ok(())
+}
+
+pub(crate) fn prepare_response_for_write(
+    response: &mut Response,
+    options: &ResponseWriteOptions<'_>,
+) -> bool {
     prepare_response_headers(response, options.server_tokens);
     let chunked = response_uses_chunked_encoding(
         response,
@@ -47,6 +73,14 @@ pub async fn write_response<W: AsyncWrite + Unpin>(
         response.remove_header("Keep-Alive");
     }
 
+    chunked
+}
+
+pub(crate) fn response_head_length(response: &Response) -> u64 {
+    build_response_head(response).len() as u64
+}
+
+fn build_response_head(response: &Response) -> Vec<u8> {
     let header_bytes = response
         .headers
         .iter()
@@ -73,23 +107,7 @@ pub async fn write_response<W: AsyncWrite + Unpin>(
         head.extend_from_slice(b"\r\n");
     }
     head.extend_from_slice(b"\r\n");
-    writer.write_all(&head).await?;
-
-    if options.request_method.eq_ignore_ascii_case("HEAD") {
-        writer.flush().await?;
-        return Ok(());
-    }
-    if chunked {
-        let mut trailers =
-            body::write_chunked_body(writer, options.rate, &mut response.body).await?;
-        trailers.extend(response.trailers.iter().cloned());
-        body::write_chunked_trailers(writer, &trailers).await?;
-        writer.flush().await?;
-        return Ok(());
-    }
-    body::write_body(writer, options.rate, &mut response.body).await?;
-    writer.flush().await?;
-    Ok(())
+    head
 }
 
 fn extend_sanitized_header_value(output: &mut Vec<u8>, value: &[u8]) {

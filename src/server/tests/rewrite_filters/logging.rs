@@ -9,6 +9,10 @@ async fn applies_rewrite_log_and_uninitialized_variable_warning_at_runtime() {
             error_log logs/rewrite.log notice;
             rewrite_log on;
             uninitialized_variable_warn off;
+            log_format status '$status';
+            map $late_map $mapped_warning {
+                default mapped;
+            }
             server {
                 listen 127.0.0.1:18391;
                 uninitialized_variable_warn on;
@@ -53,6 +57,31 @@ async fn applies_rewrite_log_and_uninitialized_variable_warning_at_runtime() {
                     add_header X-Late $late_for_header always;
                     return 204;
                 }
+                location /return-warning {
+                    if ($arg_never = yes) {
+                        set $late_return value;
+                    }
+                    return 200 "$late_return";
+                }
+                location /try-warning {
+                    if ($arg_never = yes) {
+                        set $late_try value;
+                    }
+                    try_files $late_try /target/;
+                }
+                location /log-warning {
+                    if ($arg_never = yes) {
+                        set $late_log value;
+                    }
+                    access_log logs/access-warning.log status if=$late_log;
+                    return 204;
+                }
+                location /map-warning {
+                    if ($arg_never = yes) {
+                        set $late_map value;
+                    }
+                    return 200 "$mapped_warning";
+                }
             }
         }
     "#;
@@ -79,6 +108,10 @@ async fn applies_rewrite_log_and_uninitialized_variable_warning_at_runtime() {
         "/loclog/item",
         "/debuglog/item",
         "/warn",
+        "/return-warning",
+        "/try-warning",
+        "/log-warning",
+        "/map-warning",
     ] {
         let request = Request {
             method: "GET".into(),
@@ -134,6 +167,22 @@ async fn applies_rewrite_log_and_uninitialized_variable_warning_at_runtime() {
     );
     assert!(
         log.contains("using uninitialized \"late_for_header\" variable"),
+        "{log}"
+    );
+    assert!(
+        log.contains("using uninitialized \"late_return\" variable"),
+        "{log}"
+    );
+    assert!(
+        log.contains("using uninitialized \"late_try\" variable"),
+        "{log}"
+    );
+    assert!(
+        log.contains("using uninitialized \"late_log\" variable"),
+        "{log}"
+    );
+    assert!(
+        log.contains("using uninitialized \"late_map\" variable"),
         "{log}"
     );
     assert!(!log.contains("missing_quiet"), "{log}");

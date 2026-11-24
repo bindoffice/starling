@@ -6,6 +6,7 @@ pub(in crate::server) struct ConnectionRequestState {
     pub(in crate::server) connection_id: u64,
     pub(in crate::server) started: Instant,
     pub(in crate::server) served_requests: u64,
+    pub(in crate::server) pipelined: bool,
 }
 
 impl ConnectionRequestState {
@@ -18,7 +19,13 @@ impl ConnectionRequestState {
             connection_id,
             started,
             served_requests,
+            pipelined: false,
         }
+    }
+
+    pub(in crate::server) fn with_pipelined(mut self, pipelined: bool) -> Self {
+        self.pipelined = pipelined;
+        self
     }
 }
 

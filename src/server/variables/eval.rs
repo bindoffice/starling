@@ -110,6 +110,7 @@ pub(in crate::server) fn variable_value(
         "scheme" => variables.scheme.clone(),
         "https" => variables.https.clone(),
         "http2" => variables.http2.clone(),
+        "pipe" => variables.pipe.clone(),
         "connection" => variables.connection.clone(),
         "connection_requests" => variables.connection_requests.clone(),
         "connection_time" => variables.connection_time.clone(),
@@ -141,7 +142,8 @@ pub(in crate::server) fn variable_value(
             proxy_protocol_tlv_value(name, variables.proxy_protocol_tlvs.as_deref())
         }
         "status" => variables.status.to_string(),
-        "body_bytes_sent" | "bytes_sent" => variables.body_bytes_sent.to_string(),
+        "bytes_sent" => variables.bytes_sent.to_string(),
+        "body_bytes_sent" => variables.body_bytes_sent.to_string(),
         "content_length" => variables.content_length.clone(),
         "content_type" => variables.content_type.clone(),
         "request_body" => variables.request_body.clone(),
@@ -193,7 +195,7 @@ pub(in crate::server) fn variable_value(
         "pid" => std::process::id().to_string(),
         "upstream_addr" => variables.upstream_addr.clone(),
         "remote_user" => variables.remote_user.clone(),
-        "time_local" => nginx_timestamp(SystemTime::now()),
+        "time_local" => nginx_access_timestamp(SystemTime::now()),
         "time_iso8601" => iso_timestamp(SystemTime::now()),
         "msec" => {
             let now = SystemTime::now()
@@ -300,14 +302,31 @@ pub(in crate::server) fn variable_value_for_log(
 ) -> Option<String> {
     if log_variable_missing(name, variables) {
         None
+    } else if name == "remote_user" {
+        remote_user_from_request(variables)
     } else {
         Some(variable_value(name, variables, stack))
     }
 }
 
+pub(in crate::server) fn variable_bytes_for_log(
+    name: &str,
+    variables: &Variables,
+    stack: &mut Vec<String>,
+) -> Option<Vec<u8>> {
+    if name == "binary_remote_addr" {
+        return Some(binary_address_bytes(&variables.remote_addr));
+    }
+    variable_value_for_log(name, variables, stack)
+        .map(|value| crate::http::header_value_bytes(&value).into_owned())
+}
+
 fn log_variable_missing(name: &str, variables: &Variables) -> bool {
     if variables.custom.contains_key(name) {
         return false;
+    }
+    if name == "remote_user" {
+        return remote_user_from_request(variables).is_none();
     }
     if name == "http_host" {
         return !has_request_header(&variables.headers, "host");
@@ -357,6 +376,15 @@ fn log_variable_missing(name: &str, variables: &Variables) -> bool {
         });
     }
     false
+}
+
+fn remote_user_from_request(variables: &Variables) -> Option<String> {
+    variables
+        .headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case("authorization"))
+        .and_then(|header| parse_authorization_header(&header.value))
+        .map(|credentials| credentials.username)
 }
 
 fn has_request_header(headers: &[Header], name: &str) -> bool {

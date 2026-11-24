@@ -29,6 +29,7 @@ pub(super) struct Variables {
     pub(super) scheme: String,
     pub(super) https: String,
     pub(super) http2: String,
+    pub(super) pipe: String,
     pub(super) connection: String,
     pub(super) connection_requests: String,
     pub(super) connection_time: String,
@@ -64,6 +65,7 @@ pub(super) struct Variables {
     pub(super) scgi_script_name: String,
     pub(super) args: String,
     pub(super) status: u16,
+    pub(super) bytes_sent: u64,
     pub(super) body_bytes_sent: u64,
     pub(super) content_length: String,
     pub(super) content_type: String,
@@ -214,6 +216,7 @@ impl Variables {
             scheme: "http".into(),
             https: String::new(),
             http2: String::new(),
+            pipe: ".".into(),
             connection: String::new(),
             connection_requests: String::new(),
             connection_time: String::new(),
@@ -249,6 +252,7 @@ impl Variables {
             scgi_script_name: request.path_and_query().0.to_string(),
             args: request.path_and_query().1.unwrap_or_default().to_string(),
             status: 0,
+            bytes_sent: 0,
             body_bytes_sent: 0,
             content_length: request
                 .header("content-length")
@@ -349,7 +353,7 @@ mod proxy_protocol;
 pub(super) use captures::{expand_captures, expand_captures_in_args, set_regex_captures};
 pub(super) use eval::{
     binary_address_bytes, eval_variables, eval_variables_bytes, eval_variables_with_stack,
-    variable_value, variable_value_for_log,
+    variable_bytes_for_log, variable_value,
 };
 pub(super) use headers::response_header_value;
 pub(super) use maps::{

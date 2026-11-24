@@ -25,17 +25,17 @@ pub(in crate::server) fn log_access(
         let (template, escape) = format.map_or_else(
             || {
                 (
-                    "$remote_addr - $remote_user [$time_local] \"$request\" $status $body_bytes_sent \"$http_referer\" \"$http_user_agent\" \"$http_x_forwarded_for\"",
+                    "$remote_addr - $remote_user [$time_local] \"$request\" $status $body_bytes_sent \"$http_referer\" \"$http_user_agent\"",
                     LogEscapeMode::Default,
                 )
             },
             |format| (format.template.as_str(), format.escape),
         );
         let mut stack = Vec::new();
-        let mut line = render_log_format(template, escape, |name| {
-            variable_value_for_log(name, variables, &mut stack)
+        let mut line = render_log_format_bytes(template, escape, |name| {
+            variable_bytes_for_log(name, variables, &mut stack)
         });
-        line.push('\n');
+        line.push(b'\n');
         write_access_log_target(
             log,
             &line,
@@ -48,7 +48,7 @@ pub(in crate::server) fn log_access(
 
 pub(in crate::server) fn write_access_log_target(
     target: &AccessLogTarget,
-    line: &str,
+    line: &[u8],
     file_cache: Option<&Arc<OpenLogFileCacheConfig>>,
     evaluate: impl FnOnce(&str) -> String,
 ) {
@@ -67,7 +67,7 @@ pub(in crate::server) fn write_access_log_target(
                 );
             }
         }
-        AccessLogDestination::Syslog(config) => send_syslog(config, line),
+        AccessLogDestination::Syslog(config) => send_syslog(config, &String::from_utf8_lossy(line)),
     }
 }
 
@@ -158,21 +158,5 @@ pub(in crate::server) fn next_request_id() -> String {
 }
 
 pub(in crate::server) fn iso_timestamp(time: SystemTime) -> String {
-    let seconds = time
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as libc::time_t;
-    let mut value: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe {
-        libc::gmtime_r(&seconds, &mut value);
-    }
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}+00:00",
-        value.tm_year + 1900,
-        value.tm_mon + 1,
-        value.tm_mday,
-        value.tm_hour,
-        value.tm_min,
-        value.tm_sec
-    )
+    crate::logging::nginx_iso_timestamp(time)
 }

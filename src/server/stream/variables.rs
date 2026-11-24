@@ -260,7 +260,7 @@ fn stream_variable_value(
                 .unwrap_or_default();
             format!("{}.{:03}", now.as_secs(), now.subsec_millis())
         }
-        "time_local" => nginx_timestamp(SystemTime::now()),
+        "time_local" => nginx_access_timestamp(SystemTime::now()),
         "time_iso8601" => iso_timestamp(SystemTime::now()),
         name if name.len() == 1 && name.as_bytes()[0].is_ascii_digit() => captures
             .values

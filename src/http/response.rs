@@ -12,8 +12,10 @@ pub use body::*;
 pub(crate) use early_hints::write_early_hints;
 pub(crate) use stream::{ResponseStream, ResponseStreamItem};
 pub(crate) use tokens::prepare_response_headers;
-pub(crate) use writer::response_uses_chunked_encoding;
 pub use writer::{ResponseWriteOptions, write_response};
+pub(crate) use writer::{
+    prepare_response_for_write, response_head_length, response_uses_chunked_encoding,
+};
 
 pub struct Response {
     pub status: u16,

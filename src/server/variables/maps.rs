@@ -108,9 +108,7 @@ pub(in crate::server) fn geo_value(
             })
             .or(geo.default.as_ref())
     };
-    let output = value
-        .map(|value| eval_variables_with_stack(value, variables, stack))
-        .unwrap_or_default();
+    let output = value.cloned().unwrap_or_default();
     stack.pop();
     output
 }
@@ -132,7 +130,6 @@ pub(in crate::server) fn split_clients_value(
         .find(|part| part.percent == 0 || hash < part.threshold)
         .map(|part| part.value.clone())
         .unwrap_or_default();
-    let value = eval_variables_with_stack(&value, variables, stack);
     stack.pop();
     value
 }

@@ -258,3 +258,173 @@ fn compiles_split_clients_and_rejects_invalid_percentages() {
     }
     let _ = fs::remove_dir_all(prefix);
 }
+
+#[test]
+fn rejects_unknown_variables_at_configuration_time() {
+    let prefix = temp_prefix();
+    fs::create_dir_all(&prefix).unwrap();
+    let config_path = prefix.join("nginx.conf");
+    let location_cases = [
+        ("set $copy $missing;", "missing"),
+        ("return 200 \"$missing\";", "missing"),
+        ("add_header X-Test $missing always;", "missing"),
+        ("proxy_set_header X-Test $missing;", "missing"),
+        ("try_files $missing =404;", "missing"),
+        ("if ($missing = yes) { return 204; }", "missing"),
+        ("rewrite ^/old$ /new/$missing last;", "missing"),
+        ("auth_request_set $copy $missing;", "missing"),
+        ("proxy_pass http://127.0.0.1:8080/$missing;", "missing"),
+        ("access_log logs/test.log combined if=$missing;", "missing"),
+        ("proxy_cookie_flags $missing secure;", "missing"),
+        ("proxy_cookie_domain $missing example.com;", "missing"),
+    ];
+    for (directive, expected) in location_cases {
+        fs::write(
+            &config_path,
+            format!(
+                "events {{}} http {{ server {{ listen 127.0.0.1:18109; location / {{ {directive} }} }} }}"
+            ),
+        )
+        .unwrap();
+        let document = ConfigLoader::new(prefix.clone())
+            .load(&config_path)
+            .unwrap();
+        let error = compile(document, prefix.clone(), config_path.clone()).unwrap_err();
+        assert!(
+            error
+                .message
+                .contains(&format!("unknown \"{expected}\" variable")),
+            "unexpected error for {directive}: {error}"
+        );
+    }
+
+    for (source, expected) in [
+        ("events {} http { log_format main '$missing'; }", "missing"),
+        (
+            "events {} http { map $missing $mapped { default value; } }",
+            "missing",
+        ),
+        (
+            "events {} http { geo $missing $site { default local; } }",
+            "missing",
+        ),
+        (
+            "events {} http { split_clients $missing $variant { * one; } }",
+            "missing",
+        ),
+        (
+            "events {} http { map $host $mapped { default $missing; } }",
+            "missing",
+        ),
+    ] {
+        fs::write(&config_path, source).unwrap();
+        let document = ConfigLoader::new(prefix.clone())
+            .load(&config_path)
+            .unwrap();
+        let error = compile(document, prefix.clone(), config_path.clone()).unwrap_err();
+        assert!(
+            error
+                .message
+                .contains(&format!("unknown \"{expected}\" variable")),
+            "unexpected error for {source}: {error}"
+        );
+    }
+
+    fs::write(
+        &config_path,
+        r#"
+            events {}
+            http {
+                uninitialized_variable_warn off;
+                server {
+                    listen 127.0.0.1:18109;
+                    location / { return 200 "$missing"; }
+                }
+            }
+        "#,
+    )
+    .unwrap();
+    let document = ConfigLoader::new(prefix.clone())
+        .load(&config_path)
+        .unwrap();
+    let error = compile(document, prefix.clone(), config_path.clone()).unwrap_err();
+    assert!(
+        error.message.contains("unknown \"missing\" variable"),
+        "{error}"
+    );
+    let _ = fs::remove_dir_all(prefix);
+}
+
+#[test]
+fn accepts_known_and_forward_declared_variables() {
+    let prefix = temp_prefix();
+    fs::create_dir_all(&prefix).unwrap();
+    let config_path = prefix.join("nginx.conf");
+    fs::write(
+        &config_path,
+        r#"
+            events {}
+            http {
+                server {
+                    listen 127.0.0.1:18110;
+                    location / {
+                        set $forward $later;
+                        set $later value;
+                        return 200 "$forward|$http_x|$arg_x|$cookie_x|$sent_http_x|$upstream_http_x|$request_completion|$tcpinfo_rtt|$ssl_ciphers|$upstream_bytes_received|$gzip_ratio|$slice_range|$grpc_internal_trailers|$1|$later";
+                    }
+                }
+                map $host $mapped { default mapped; }
+                geo $remote_addr $site { default local; }
+                split_clients $remote_addr $variant { * one; }
+                server {
+                    listen 127.0.0.1:18111;
+                    location / {
+                        add_header X-Map $mapped always;
+                        add_header X-Geo $site always;
+                        add_header X-Variant $variant always;
+                        return 204;
+                    }
+                }
+            }
+        "#,
+    )
+    .unwrap();
+    let document = ConfigLoader::new(prefix.clone())
+        .load(&config_path)
+        .unwrap();
+    compile(document, prefix.clone(), config_path).unwrap();
+    let _ = fs::remove_dir_all(prefix);
+}
+
+#[test]
+fn accepts_literal_variable_syntax_in_static_values() {
+    let prefix = temp_prefix();
+    fs::create_dir_all(&prefix).unwrap();
+    let config_path = prefix.join("nginx.conf");
+    fs::write(
+        &config_path,
+        r#"
+            events {}
+            http {
+                geo $remote_addr $site { default $literal; }
+                split_clients $remote_addr $variant { * $literal; }
+                server {
+                    listen 127.0.0.1:18112;
+                    location / {
+                        proxy_cookie_domain "~^api\.example\.com$" example.com;
+                        proxy_cookie_flags "~^api_" secure;
+                        valid_referers "~^example\.com$";
+                        if ($uri ~ "^/path$literal") { return 204; }
+                        return 204;
+                    }
+                }
+            }
+        "#,
+    )
+    .unwrap();
+    let document = ConfigLoader::new(prefix.clone())
+        .load(&config_path)
+        .unwrap();
+    compile(document, prefix.clone(), config_path).unwrap();
+    let _ = fs::remove_dir_all(prefix);
+}

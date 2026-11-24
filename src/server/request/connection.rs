@@ -31,6 +31,9 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
         if shutdown_requested(&shutdown) {
             break;
         }
+        let pipelined = reader
+            .as_ref()
+            .is_some_and(|reader| !reader.buffer().is_empty());
         if let Some(policy) = keepalive_policy.take() {
             connection_stats.set_idle();
             let initial = policy.initial_idle_timeout();
@@ -278,6 +281,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
         } else {
             None
         };
+        let request_length = head.request_length;
         let request = Request {
             method: head.method,
             target: head.target,
@@ -301,10 +305,11 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                     connection_stats.id(),
                     connection_started,
                     served_requests,
-                ),
+                )
+                .with_pipelined(pipelined),
                 invalid_host,
                 client_abort: Some(client_abort.clone()),
-                request_length: None,
+                request_length: Some(request_length),
             },
             &state,
         );

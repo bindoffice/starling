@@ -12,7 +12,7 @@ mod format;
 mod syslog;
 
 pub use access::{append_access_log, flush_access_logs, reopen_access_logs};
-pub use format::render_log_format;
+pub use format::{render_log_format, render_log_format_bytes};
 pub use syslog::{send_syslog, send_syslog_with_severity};
 
 pub struct Logger {
@@ -151,11 +151,50 @@ pub fn nginx_timestamp(time: SystemTime) -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let (year, month, day, hour, minute, second) = local_time_parts(seconds);
+    let (year, month, day, hour, minute, second, _) = local_time_parts(seconds);
     format!("{year:04}/{month:02}/{day:02} {hour:02}:{minute:02}:{second:02}")
 }
 
-fn local_time_parts(timestamp: i64) -> (i32, u32, u32, u32, u32, u32) {
+pub fn nginx_access_timestamp(time: SystemTime) -> String {
+    let seconds = time
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let (year, month, day, hour, minute, second, offset) = local_time_parts(seconds);
+    let month_name = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ][month.saturating_sub(1) as usize];
+    format!(
+        "{day:02}/{month_name}/{year:04}:{hour:02}:{minute:02}:{second:02} {}",
+        format_offset(offset, false)
+    )
+}
+
+pub fn nginx_iso_timestamp(time: SystemTime) -> String {
+    let seconds = time
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let (year, month, day, hour, minute, second, offset) = local_time_parts(seconds);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}{}",
+        format_offset(offset, true)
+    )
+}
+
+fn format_offset(offset: i64, colon: bool) -> String {
+    let sign = if offset < 0 { '-' } else { '+' };
+    let offset = offset.abs();
+    let hours = offset / 3600;
+    let minutes = (offset % 3600) / 60;
+    if colon {
+        format!("{sign}{hours:02}:{minutes:02}")
+    } else {
+        format!("{sign}{hours:02}{minutes:02}")
+    }
+}
+
+fn local_time_parts(timestamp: i64) -> (i32, u32, u32, u32, u32, u32, i64) {
     let mut time: libc::tm = unsafe { std::mem::zeroed() };
     let raw = timestamp as libc::time_t;
     unsafe {
@@ -168,6 +207,7 @@ fn local_time_parts(timestamp: i64) -> (i32, u32, u32, u32, u32, u32) {
         time.tm_hour as u32,
         time.tm_min as u32,
         time.tm_sec as u32,
+        time.tm_gmtoff as i64,
     )
 }
 

@@ -31,7 +31,7 @@ struct BufferedLog {
 
 pub fn append_access_log(
     path: Option<&Path>,
-    line: &str,
+    line: &[u8],
     buffer: Option<&AccessLogBufferConfig>,
     file_cache: Option<&Arc<OpenLogFileCacheConfig>>,
 ) {
@@ -58,7 +58,7 @@ pub fn append_access_log(
     } else if let Some(buffered) = buffered_logs.get_mut(path) {
         buffered.write(path, line, file_caches);
     } else {
-        file_caches.write(path, line.as_bytes(), file_cache);
+        file_caches.write(path, line, file_cache);
     }
 }
 
@@ -93,7 +93,7 @@ impl BufferedLog {
         }
     }
 
-    fn write(&mut self, path: &Path, line: &str, files: &mut LogFileCaches) {
+    fn write(&mut self, path: &Path, line: &[u8], files: &mut LogFileCaches) {
         let now = Instant::now();
         if self.flush_at.is_some_and(|flush_at| now >= flush_at) {
             self.flush(path, files);
@@ -102,7 +102,7 @@ impl BufferedLog {
             self.flush(path, files);
             write_payload(
                 path,
-                line.as_bytes(),
+                line,
                 self.config.gzip_level,
                 self.file_cache.as_ref(),
                 files,
@@ -113,7 +113,7 @@ impl BufferedLog {
             self.flush(path, files);
         }
         let was_empty = self.bytes.is_empty();
-        self.bytes.extend_from_slice(line.as_bytes());
+        self.bytes.extend_from_slice(line);
         if was_empty {
             self.flush_at = self.config.flush.map(|flush| now + flush);
         }

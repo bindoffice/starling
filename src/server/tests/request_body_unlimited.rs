@@ -10,6 +10,7 @@ async fn http1_body_task_treats_zero_limit_as_unlimited() {
         target: "/".into(),
         version: "HTTP/1.1".into(),
         headers: Vec::new(),
+        request_length: 0,
         invalid_headers: Vec::new(),
         keep_alive: false,
         content_length: Some(4),

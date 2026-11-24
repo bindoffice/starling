@@ -37,3 +37,31 @@ pub(in crate::server) fn sync_sent_response_variables(
         String::new()
     };
 }
+
+pub(in crate::server) fn response_wire_body_len(
+    response: &Response,
+    request_method: &str,
+    chunked: bool,
+) -> u64 {
+    if request_method.eq_ignore_ascii_case("HEAD") {
+        return 0;
+    }
+    if !chunked {
+        return response.body_len();
+    }
+
+    let body_len = response.body_len();
+    let mut total: u64 = if body_len == 0 {
+        5
+    } else {
+        format!("{body_len:x}\r\n").len() as u64 + body_len + 2 + 5
+    };
+    for trailer in &response.trailers {
+        total = total
+            .saturating_add(trailer.name.len() as u64)
+            .saturating_add(2)
+            .saturating_add(trailer.value.len() as u64)
+            .saturating_add(2);
+    }
+    total
+}

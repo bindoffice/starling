@@ -9,6 +9,41 @@ mod cache;
 mod syslog;
 
 #[tokio::test]
+async fn logs_nginx_time_request_length_and_wire_bytes() {
+    let (prefix, config) = test_config(
+        r#"
+            worker_processes 1;
+            events { worker_connections 64; }
+            http {
+                log_format metrics '$time_local|$request_length|$bytes_sent|$body_bytes_sent|$pipe';
+                server {
+                    listen 127.0.0.1:18198;
+                    access_log logs/metrics.log metrics;
+                    return 200 "OK";
+                }
+            }
+        "#,
+        &[],
+    );
+
+    let response = request_bytes(&config, "GET /metrics HTTP/1.0\nHost: localhost\n\n").await;
+    let log = std::fs::read_to_string(prefix.join("logs/metrics.log")).unwrap();
+    let fields: Vec<_> = log.trim_end().split('|').collect();
+    assert_eq!(fields.len(), 5, "{log}");
+    assert!(
+        regex::Regex::new(r"^\d\d/[A-Z][a-z]{2}/\d{4}:\d\d:\d\d:\d\d [+-]\d{4}$")
+            .unwrap()
+            .is_match(fields[0]),
+        "{log}"
+    );
+    assert_eq!(fields[1], "39");
+    assert_eq!(fields[2], response.len().to_string());
+    assert_eq!(fields[3], "2");
+    assert_eq!(fields[4], ".");
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
 async fn writes_all_http_access_logs_with_independent_filters_and_overrides() {
     let (prefix, config) = test_config(
         r#"

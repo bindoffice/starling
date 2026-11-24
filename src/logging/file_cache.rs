@@ -24,12 +24,6 @@ impl LogFileCaches {
         bytes: &[u8],
         config: Option<&Arc<OpenLogFileCacheConfig>>,
     ) {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-            && std::fs::create_dir_all(parent).is_err()
-        {
-            return;
-        }
         let Some(config) = config else {
             write_direct(path, bytes);
             return;
@@ -287,6 +281,30 @@ mod tests {
         let cache = caches.caches.get(&(Arc::as_ptr(&config) as usize)).unwrap();
         assert!(cache.files[&path].file.is_some());
         assert_eq!(std::fs::read_to_string(path).unwrap(), "first\nsecond\n");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn keeps_cached_file_open_when_parent_directory_is_renamed() {
+        let dir = temp_dir();
+        let log_dir = dir.join("logs");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        let path = log_dir.join("access.log");
+        let moved_dir = dir.join("logs.old");
+        let moved_path = moved_dir.join("access.log");
+        let config = cache_config(4, 2, Duration::from_secs(60));
+        let mut caches = LogFileCaches::new();
+
+        caches.write(&path, b"first\n", Some(&config));
+        caches.write(&path, b"second\n", Some(&config));
+        std::fs::rename(&log_dir, &moved_dir).unwrap();
+        caches.write(&path, b"third\n", Some(&config));
+
+        assert!(!log_dir.exists());
+        assert_eq!(
+            std::fs::read_to_string(moved_path).unwrap(),
+            "first\nsecond\nthird\n"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

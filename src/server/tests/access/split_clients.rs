@@ -65,3 +65,32 @@ async fn assigns_split_clients_buckets_from_deterministic_hashes() {
     );
     let _ = std::fs::remove_dir_all(prefix);
 }
+
+#[tokio::test]
+async fn returns_geo_and_split_client_values_without_recursive_expansion() {
+    let (prefix, config) = test_config(
+        r#"
+            worker_processes 1;
+            events { worker_connections 64; }
+            http {
+                geo $remote_addr $site { default $literal_site; }
+                split_clients $remote_addr $variant { * $literal_variant; }
+                server {
+                    listen 127.0.0.1:18136;
+                    location / { return 200 "$site|$variant\n"; }
+                }
+            }
+        "#,
+        &[],
+    );
+    let response = request_body(
+        &config,
+        "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(
+        response.ends_with("$literal_site|$literal_variant\n"),
+        "unexpected response:\n{response}"
+    );
+    let _ = std::fs::remove_dir_all(prefix);
+}

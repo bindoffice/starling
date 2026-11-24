@@ -233,6 +233,7 @@ pub struct RequestHead {
     pub target: String,
     pub version: String,
     pub headers: Vec<Header>,
+    pub request_length: u64,
     pub(crate) invalid_headers: Vec<InvalidRequestHeader>,
     pub keep_alive: bool,
     pub content_length: Option<u64>,

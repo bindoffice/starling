@@ -32,6 +32,7 @@ fn compiles_uwsgi_tls_configuration_and_scheme() {
                         uwsgi_pass uwsgi://127.0.0.1:9001;
                     }
                     location /override {
+                        set $uwsgi_backend uwsgi://127.0.0.1:9001;
                         uwsgi_ssl_server_name off;
                         uwsgi_ssl_name localhost;
                         uwsgi_ssl_session_reuse on;

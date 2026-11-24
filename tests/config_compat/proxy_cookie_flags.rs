@@ -13,6 +13,7 @@ fn compiles_proxy_cookie_flags_and_inheritance() {
                 proxy_cookie_flags $http_x_cookie secure;
                 server {
                     listen 127.0.0.1:18550;
+                    set $flag samesite=strict;
                     proxy_cookie_flags session samesite=lax $flag;
                     location /inherited {}
                     location /rules {

@@ -88,6 +88,61 @@ async fn handles_expect_continue_and_pipelined_keepalive_requests() {
 }
 
 #[tokio::test]
+async fn exposes_http1_pipeline_state_like_nginx() {
+    let (prefix, config) = test_config(
+        r#"
+                worker_processes 1;
+                events { worker_connections 64; }
+                http {
+                    server {
+                        listen 127.0.0.1:18135;
+                        location /pipe { return 200 "$pipe\n"; }
+                    }
+                }
+            "#,
+        &[],
+    );
+    let group = build_listener_groups(&config)[0].clone();
+    let state = test_state(&config);
+    let (mut client, server) = tokio::io::duplex(64 * 1024);
+    let task = tokio::spawn(handle_io(
+        server,
+        ConnectionAddresses::direct(
+            ListenAddress::Inet("127.0.0.1:45684".parse().unwrap()),
+            group.address.clone(),
+        ),
+        group,
+        state,
+    ));
+
+    client
+        .write_all(b"GET /pipe HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    let mut first = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    while !first.windows(2).any(|window| window == b".\n") {
+        let size = client.read(&mut buffer).await.unwrap();
+        assert!(size > 0);
+        first.extend_from_slice(&buffer[..size]);
+    }
+
+    client
+        .write_all(
+            b"GET /pipe HTTP/1.1\r\nHost: localhost\r\n\r\nGET /pipe HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    let mut responses = Vec::new();
+    client.read_to_end(&mut responses).await.unwrap();
+    let responses = String::from_utf8(responses).unwrap();
+    assert_eq!(responses.matches(".\n").count(), 1, "{responses}");
+    assert_eq!(responses.matches("p\n").count(), 1, "{responses}");
+    task.await.unwrap();
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
 async fn closes_keepalive_connection_at_request_limit() {
     let (prefix, config) = test_config(
         r#"

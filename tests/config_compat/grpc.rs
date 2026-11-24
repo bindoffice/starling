@@ -61,6 +61,7 @@ fn compiles_grpc_endpoints_headers_and_runtime_options() {
                         grpc_ssl_ciphers ECDHE-RSA-AES128-GCM-SHA256;
                     }
                     location /dynamic {
+                        set $grpc_backend 127.0.0.1:9000;
                         grpc_pass $grpc_backend;
                         grpc_ssl_certificate_cache max=16 inactive=10m valid=1h;
                     }
