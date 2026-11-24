@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) struct PreparedRequest {
     pub(super) env: RequestEnv,
-    pub(super) context: EffectiveConfig,
+    pub(super) context: Arc<EffectiveConfig>,
 }
 
 pub(super) enum PrepareOutcome {
@@ -24,7 +24,7 @@ pub(super) async fn prepare_request(
 ) -> PrepareOutcome {
     loop {
         env.add_uri_to_alias = false;
-        let mut server_context = Box::new(server.context.clone());
+        let mut server_context = server.context.clone();
         let server_logger = variables.error_logger_for(&server_context);
         variables.set_variable_warning_context(&server_context, server_logger.clone());
         prepare_userid_variables(&server_context, variables);
@@ -35,7 +35,10 @@ pub(super) async fn prepare_request(
         {
             if let Err(error) = buffer_request_body(request, &server_context).await {
                 request.keep_alive = false;
-                return response_outcome(*server_context, request_body_error_response(&error));
+                return response_outcome(
+                    server_context.clone(),
+                    request_body_error_response(&error),
+                );
             }
             if let Err(error) =
                 validate_declared_request_body_size(request, server_context.client_max_body_size)
@@ -47,7 +50,10 @@ pub(super) async fn prepare_request(
                     })
             {
                 request.keep_alive = false;
-                return response_outcome(*server_context, request_body_error_response(&error));
+                return response_outcome(
+                    server_context.clone(),
+                    request_body_error_response(&error),
+                );
             }
             set_buffered_request_body_variable(request, variables);
         }
@@ -66,7 +72,7 @@ pub(super) async fn prepare_request(
                         server,
                         request,
                         *response,
-                        *server_context,
+                        server_context.clone(),
                         variables,
                         depth,
                     )
@@ -74,7 +80,7 @@ pub(super) async fn prepare_request(
                 }
                 RewriteOutcome::Last => {
                     if !consume_uri_change(&mut uri_changes) {
-                        return error_outcome(*server_context);
+                        return error_outcome(server_context.clone());
                     }
                 }
                 RewriteOutcome::Break | RewriteOutcome::None => {}
@@ -89,12 +95,10 @@ pub(super) async fn prepare_request(
             return response_outcome(context, response);
         }
         set_location_captures(location, &env, variables);
-        let mut context = Box::new(
-            location
-                .as_ref()
-                .map(|location| location.context.clone())
-                .unwrap_or_else(|| (*server_context).clone()),
-        );
+        let mut context = location
+            .as_ref()
+            .map(|location| location.context.clone())
+            .unwrap_or_else(|| server_context.clone());
         apply_limit_except(&mut context, request);
         variables.content_handler = content_handler_for_context(&context);
         let context_logger = variables.error_logger_for(&context);
@@ -106,7 +110,7 @@ pub(super) async fn prepare_request(
         {
             if let Err(error) = buffer_request_body(request, &context).await {
                 request.keep_alive = false;
-                return response_outcome(*context, request_body_error_response(&error));
+                return response_outcome(context.clone(), request_body_error_response(&error));
             }
             if let Err(error) =
                 validate_declared_request_body_size(request, context.client_max_body_size).and_then(
@@ -114,7 +118,7 @@ pub(super) async fn prepare_request(
                 )
             {
                 request.keep_alive = false;
-                return response_outcome(*context, request_body_error_response(&error));
+                return response_outcome(context.clone(), request_body_error_response(&error));
             }
             set_buffered_request_body_variable(request, variables);
         }
@@ -151,13 +155,19 @@ pub(super) async fn prepare_request(
         match outcome {
             RewriteOutcome::Response(response) => {
                 return rewrite_response_outcome(
-                    http, server, request, *response, *context, variables, depth,
+                    http,
+                    server,
+                    request,
+                    *response,
+                    context.clone(),
+                    variables,
+                    depth,
                 )
                 .await;
             }
             RewriteOutcome::Last => {
                 if !consume_uri_change(&mut uri_changes) {
-                    return error_outcome(*context);
+                    return error_outcome(context.clone());
                 }
                 run_server_rewrite = false;
                 variables.uri = env.uri.clone();
@@ -168,7 +178,7 @@ pub(super) async fn prepare_request(
         if access_rules.is_some_and(|access_rules| context.access_rules != access_rules)
             && !access_allowed(&context.access_rules, &variables.remote_addr)
         {
-            return response_outcome(*context, error_response(403));
+            return response_outcome(context.clone(), error_response(403));
         }
         refresh_variables(&env, location, variables, &context);
 
@@ -204,7 +214,7 @@ pub(super) async fn prepare_request(
                 TryFilesResult::FallbackUri(uri) => {
                     apply_try_files_fallback_uri(&mut env, &uri);
                     if !consume_uri_change(&mut uri_changes) {
-                        return error_outcome(*context);
+                        return error_outcome(context.clone());
                     }
                     run_server_rewrite = true;
                     continue;
@@ -225,15 +235,12 @@ pub(super) async fn prepare_request(
                     {
                         return PrepareOutcome::Response(processed);
                     }
-                    return error_outcome(*context);
+                    return error_outcome(context.clone());
                 }
             }
         }
 
-        return PrepareOutcome::Ready(PreparedRequest {
-            env,
-            context: *context,
-        });
+        return PrepareOutcome::Ready(PreparedRequest { env, context });
     }
 }
 
@@ -244,7 +251,7 @@ async fn pre_rewrite_response(
     request: &Request,
     depth: usize,
     env: &mut RequestEnv,
-    context: &EffectiveConfig,
+    context: &Arc<EffectiveConfig>,
     location: Option<&LocationConfig>,
     variables: &mut Variables,
     connection_guard: &mut Option<ConnectionLimitGuard>,
@@ -336,13 +343,14 @@ async fn pre_rewrite_response(
 }
 
 fn run_script(
-    context: &mut EffectiveConfig,
+    context: &mut Arc<EffectiveConfig>,
     env: &mut RequestEnv,
     variables: &mut Variables,
     request: &Request,
     location: Option<&LocationConfig>,
     logger: Option<Arc<Logger>>,
 ) -> RewriteOutcome {
+    let context = Arc::make_mut(context);
     let actions = std::mem::take(&mut context.rewrite_actions);
     let outcome =
         apply_rewrite_script(&actions, env, context, variables, request, location, logger);
@@ -363,7 +371,7 @@ fn set_location_captures(
     }
 }
 
-fn response_outcome(context: EffectiveConfig, response: Response) -> PrepareOutcome {
+fn response_outcome(context: Arc<EffectiveConfig>, response: Response) -> PrepareOutcome {
     PrepareOutcome::Response(Processed {
         response,
         context,
@@ -376,7 +384,7 @@ fn location_auto_redirect(
     locations: &[LocationConfig],
     uri: &str,
     args: Option<&str>,
-) -> Option<(EffectiveConfig, Response)> {
+) -> Option<(Arc<EffectiveConfig>, Response)> {
     for location in locations {
         if let LocationMatcher::Prefix(prefix) | LocationMatcher::PrefixNoRegex(prefix) =
             &location.matcher
@@ -414,7 +422,7 @@ async fn rewrite_response_outcome(
     server: &ServerConfig,
     request: &Request,
     response: Response,
-    context: EffectiveConfig,
+    context: Arc<EffectiveConfig>,
     variables: &mut Variables,
     depth: usize,
 ) -> PrepareOutcome {
@@ -428,6 +436,6 @@ async fn rewrite_response_outcome(
     })
 }
 
-fn error_outcome(context: EffectiveConfig) -> PrepareOutcome {
+fn error_outcome(context: Arc<EffectiveConfig>) -> PrepareOutcome {
     response_outcome(context, error_response(500))
 }

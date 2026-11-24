@@ -165,7 +165,7 @@ fn apply_conditional(
     location: &LocationConfig,
     server: &ServerConfig,
     mode: &str,
-) -> EffectiveConfig {
+) -> Arc<EffectiveConfig> {
     apply_conditional_headers(location, server, &[("X-Mode", mode)])
 }
 
@@ -173,7 +173,7 @@ fn apply_conditional_headers(
     location: &LocationConfig,
     server: &ServerConfig,
     headers: &[(&str, &str)],
-) -> EffectiveConfig {
+) -> Arc<EffectiveConfig> {
     let request = request_with_headers("GET", "/conditional", headers);
     let remote: SocketAddr = "127.0.0.1:45678".parse().unwrap();
     let local: SocketAddr = "127.0.0.1:18573".parse().unwrap();
@@ -184,7 +184,7 @@ fn apply_conditional_headers(
     let outcome = apply_conditionals(
         &conditionals,
         &mut env,
-        &mut context,
+        Arc::make_mut(&mut context),
         &mut variables,
         &request,
     );

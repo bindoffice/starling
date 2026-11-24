@@ -5,7 +5,7 @@ pub(in crate::server) struct UpstreamRedirectContext<'a> {
     pub server: &'a ServerConfig,
     pub request: &'a mut Request,
     pub env: &'a RequestEnv,
-    pub current: &'a EffectiveConfig,
+    pub current: &'a Arc<EffectiveConfig>,
     pub depth: usize,
     pub connection_guard: &'a mut Option<ConnectionLimitGuard>,
 }
@@ -106,7 +106,7 @@ async fn redirect_failure(
     server: &ServerConfig,
     request: &Request,
     status: u16,
-    current_context: &EffectiveConfig,
+    current_context: &Arc<EffectiveConfig>,
     variables: &mut Variables,
     depth: usize,
 ) -> Processed {

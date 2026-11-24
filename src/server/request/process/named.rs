@@ -21,7 +21,7 @@ pub(in crate::server) async fn process_named_location(
         });
     }
     let location = find_named_location(&server.locations, name)?;
-    let mut context = Box::new(location.context.clone());
+    let mut context = location.context.clone();
     apply_limit_except(&mut context, request);
     variables.content_handler = content_handler_for_context(&context);
     let context_logger = variables.error_logger_for(&context);
@@ -32,7 +32,7 @@ pub(in crate::server) async fn process_named_location(
     if let Some(response) = basic_access_response(&context, request, variables).await {
         return Some(Processed {
             response,
-            context: *context,
+            context,
             tunnel: false,
             upgrade: None,
         });
@@ -86,17 +86,23 @@ pub(in crate::server) async fn process_named_location(
             upgrade: None,
         });
     }
-    let actions = std::mem::take(&mut context.rewrite_actions);
-    let outcome = apply_rewrite_script(
-        &actions,
-        &mut env,
-        &mut context,
-        variables,
-        request,
-        Some(location),
-        context_logger,
-    );
-    context.rewrite_actions = actions;
+    let outcome = if context.rewrite_actions.is_empty() {
+        RewriteOutcome::None
+    } else {
+        let context = Arc::make_mut(&mut context);
+        let actions = std::mem::take(&mut context.rewrite_actions);
+        let outcome = apply_rewrite_script(
+            &actions,
+            &mut env,
+            context,
+            variables,
+            request,
+            Some(location),
+            context_logger,
+        );
+        context.rewrite_actions = actions;
+        outcome
+    };
     match outcome {
         RewriteOutcome::Response(response) => {
             let outcome =
@@ -164,7 +170,7 @@ pub(in crate::server) async fn process_named_location(
                 if !consume_uri_change(&mut uri_changes) {
                     return Some(Processed {
                         response: error_response(500),
-                        context: *context,
+                        context,
                         tunnel: false,
                         upgrade: None,
                     });
@@ -203,7 +209,7 @@ pub(in crate::server) async fn process_named_location(
                 }
                 return Some(Processed {
                     response: error_response(500),
-                    context: *context,
+                    context,
                     tunnel: false,
                     upgrade: None,
                 });
@@ -222,7 +228,7 @@ pub(in crate::server) async fn process_named_location(
     if let Some((response, tunnel)) = tunnel_outcome {
         return Some(Processed {
             response,
-            context: *context,
+            context,
             tunnel,
             upgrade: None,
         });
@@ -231,7 +237,7 @@ pub(in crate::server) async fn process_named_location(
         request.keep_alive = false;
         return Some(Processed {
             response: request_body_error_response(&error),
-            context: *context,
+            context,
             tunnel: false,
             upgrade: None,
         });
@@ -242,7 +248,7 @@ pub(in crate::server) async fn process_named_location(
         IndexDecision::Response(response) => {
             return Some(Processed {
                 response,
-                context: *context,
+                context,
                 tunnel: false,
                 upgrade: None,
             });
@@ -251,7 +257,7 @@ pub(in crate::server) async fn process_named_location(
             if !consume_uri_change(&mut uri_changes) {
                 return Some(Processed {
                     response: error_response(500),
-                    context: *context,
+                    context,
                     tunnel: false,
                     upgrade: None,
                 });
@@ -281,7 +287,7 @@ pub(in crate::server) async fn process_named_location(
     if context.stub_status {
         return Some(Processed {
             response: stub_status_response(request, variables),
-            context: *context,
+            context,
             tunnel: false,
             upgrade: None,
         });
@@ -292,7 +298,7 @@ pub(in crate::server) async fn process_named_location(
     if let Some(upgrade) = upgrade.filter(|_| response.status == 101) {
         return Some(Processed {
             response,
-            context: *context,
+            context,
             tunnel: false,
             upgrade: Some(upgrade),
         });
@@ -313,7 +319,7 @@ pub(in crate::server) async fn process_named_location(
         )
         .await;
         response = outcome.response;
-        *context = outcome.context;
+        context = outcome.context;
     }
     if let Some(redirect) = response.take_upstream_redirect() {
         let mut processed = follow_upstream_redirect(
@@ -343,7 +349,7 @@ pub(in crate::server) async fn process_named_location(
     sync_upstream_response_variables(variables, &response);
     Some(Processed {
         response,
-        context: *context,
+        context,
         tunnel: false,
         upgrade: None,
     })

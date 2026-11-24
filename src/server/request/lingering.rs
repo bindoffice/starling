@@ -31,6 +31,12 @@ impl From<&EffectiveConfig> for ConnectionCloseConfig {
     }
 }
 
+impl From<&Arc<EffectiveConfig>> for ConnectionCloseConfig {
+    fn from(context: &Arc<EffectiveConfig>) -> Self {
+        Self::from(context.as_ref())
+    }
+}
+
 pub(in crate::server) async fn lingering_close<R>(reader: &mut R, config: ConnectionCloseConfig)
 where
     R: AsyncBufRead + Unpin,

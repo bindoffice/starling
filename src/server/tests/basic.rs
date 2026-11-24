@@ -331,7 +331,8 @@ fn variable_expansion_supports_braces_and_headers() {
             proxy_redirect: crate::config::ProxyRedirectConfig::Rules(vec![
                 crate::config::ProxyRedirectRule::Default,
             ]),
-        },
+        }
+        .into(),
         locations: Vec::new(),
     };
     let remote: SocketAddr = "127.0.0.1:1".parse().unwrap();

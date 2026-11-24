@@ -70,13 +70,19 @@ pub(in crate::server) fn limit_except_applies(limit_except: &LimitExcept, method
         .any(|allowed| allowed.eq_ignore_ascii_case(method))
 }
 
-pub(in crate::server) fn apply_limit_except(context: &mut EffectiveConfig, request: &Request) {
-    let Some(limit_except) = &context.limit_except else {
-        return;
-    };
-    if !limit_except_applies(limit_except, &request.method) {
+pub(in crate::server) fn apply_limit_except(context: &mut Arc<EffectiveConfig>, request: &Request) {
+    if !context
+        .limit_except
+        .as_ref()
+        .is_some_and(|limit_except| limit_except_applies(limit_except, &request.method))
+    {
         return;
     }
+    let limit_except = context
+        .limit_except
+        .clone()
+        .expect("limit_except checked above");
+    let context = Arc::make_mut(context);
     if let Some(proxy_pass) = &limit_except.proxy_pass {
         context.proxy_pass = Some(proxy_pass.clone());
         context.grpc.pass = None;

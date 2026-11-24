@@ -254,7 +254,7 @@ pub struct ServerConfig {
     pub listens: Vec<ListenConfig>,
     pub http2: bool,
     pub names: Vec<ServerName>,
-    pub context: EffectiveConfig,
+    pub context: Arc<EffectiveConfig>,
     pub locations: Vec<LocationConfig>,
 }
 
@@ -321,7 +321,7 @@ impl ServerName {
 #[derive(Debug, Clone)]
 pub struct LocationConfig {
     pub matcher: LocationMatcher,
-    pub context: EffectiveConfig,
+    pub context: Arc<EffectiveConfig>,
     pub nested: Vec<LocationConfig>,
     pub location: SourceLocation,
 }

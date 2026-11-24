@@ -125,7 +125,7 @@ pub(super) fn compile_server(
         listens,
         http2,
         names,
-        context,
+        context: Arc::new(context),
         locations,
     })
 }
@@ -228,7 +228,7 @@ pub(super) fn compile_location(
 
     Ok(LocationConfig {
         matcher,
-        context,
+        context: Arc::new(context),
         nested,
         location: directive.location.clone(),
     })

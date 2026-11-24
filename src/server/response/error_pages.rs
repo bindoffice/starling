@@ -73,7 +73,7 @@ pub(in crate::server) fn intercepts_upstream_status(
 
 pub(in crate::server) struct ErrorPageOutcome {
     pub(in crate::server) response: Response,
-    pub(in crate::server) context: EffectiveConfig,
+    pub(in crate::server) context: Arc<EffectiveConfig>,
 }
 
 pub(in crate::server) async fn configured_error_page(
@@ -81,7 +81,7 @@ pub(in crate::server) async fn configured_error_page(
     server: &ServerConfig,
     request: &Request,
     response: Response,
-    context: &EffectiveConfig,
+    context: &Arc<EffectiveConfig>,
     variables: &mut Variables,
     depth: usize,
 ) -> ErrorPageOutcome {
@@ -175,7 +175,7 @@ async fn follow_error_page(
     request: &Request,
     page: &ErrorPage,
     original_status: u16,
-    current_context: &EffectiveConfig,
+    current_context: &Arc<EffectiveConfig>,
     variables: &mut Variables,
     depth: usize,
 ) -> Option<Processed> {

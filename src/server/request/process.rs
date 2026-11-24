@@ -117,7 +117,7 @@ async fn process_request_inner(
         PrepareOutcome::Response(processed) => return processed,
     };
     let mut env = prepared.env;
-    let mut context = Box::new(prepared.context);
+    let mut context = prepared.context;
     let location = resolve_location(&server.locations, &env.uri);
 
     let tunnel_outcome = if variables.content_handler == Some(ContentHandlerKind::Tunnel) {
@@ -132,7 +132,7 @@ async fn process_request_inner(
     if let Some((response, tunnel)) = tunnel_outcome {
         return Processed {
             response,
-            context: *context,
+            context,
             tunnel,
             upgrade: None,
         };
@@ -142,7 +142,7 @@ async fn process_request_inner(
         request.keep_alive = false;
         return Processed {
             response: request_body_error_response(&error),
-            context: *context,
+            context,
             tunnel: false,
             upgrade: None,
         };
@@ -155,7 +155,7 @@ async fn process_request_inner(
         IndexDecision::Response(response) => {
             return Processed {
                 response,
-                context: *context,
+                context,
                 tunnel: false,
                 upgrade: None,
             };
@@ -164,7 +164,7 @@ async fn process_request_inner(
             if !consume_uri_change(&mut uri_changes) {
                 return Processed {
                     response: error_response(500),
-                    context: *context,
+                    context,
                     tunnel: false,
                     upgrade: None,
                 };
@@ -193,7 +193,7 @@ async fn process_request_inner(
     if context.stub_status {
         return Processed {
             response: stub_status_response(request, variables),
-            context: *context,
+            context,
             tunnel: false,
             upgrade: None,
         };
@@ -205,7 +205,7 @@ async fn process_request_inner(
     if let Some(upgrade) = upgrade.filter(|_| response.status == 101) {
         return Processed {
             response,
-            context: *context,
+            context,
             tunnel: false,
             upgrade: Some(upgrade),
         };
@@ -221,7 +221,7 @@ async fn process_request_inner(
             configured_error_page(http, server, request, response, &context, variables, depth)
                 .await;
         response = outcome.response;
-        *context = outcome.context;
+        context = outcome.context;
     }
 
     if let Some(redirect) = response.take_upstream_redirect() {
@@ -254,7 +254,7 @@ async fn process_request_inner(
     sync_upstream_response_variables(variables, &response);
     Processed {
         response,
-        context: *context,
+        context,
         tunnel: false,
         upgrade: None,
     }
@@ -282,7 +282,7 @@ fn config_allows_connect(context: &EffectiveConfig) -> bool {
         })
 }
 
-fn response_with_context(context: EffectiveConfig, response: Response) -> Processed {
+fn response_with_context(context: Arc<EffectiveConfig>, response: Response) -> Processed {
     Processed {
         response,
         context,

@@ -27,7 +27,7 @@ pub(in crate::server) struct DispatchOutcome {
 
 pub(in crate::server) struct DeferredAccessLog {
     formats: HashMap<String, crate::config::AccessLogFormat>,
-    context: EffectiveConfig,
+    context: Arc<EffectiveConfig>,
     variables: Variables,
 }
 
