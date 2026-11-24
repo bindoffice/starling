@@ -7,6 +7,7 @@ fn compiles_udp_stream_proxy_configuration() {
                 worker_processes 1;
                 events { worker_connections 64; }
                 stream {
+                    proxy_ssl on;
                     upstream dns_upstream {
                         server 127.0.0.1:15353;
                     }
@@ -22,6 +23,7 @@ fn compiles_udp_stream_proxy_configuration() {
     );
     let stream = config.stream.as_ref().unwrap();
     assert!(stream.servers[0].listens[0].udp);
+    assert!(stream.servers[0].proxy_ssl);
     assert_eq!(
         stream.servers[0].proxy_connect_timeout,
         Duration::from_secs(2)
@@ -34,7 +36,7 @@ fn compiles_udp_stream_proxy_configuration() {
 }
 
 #[tokio::test]
-async fn reuses_udp_stream_sessions_for_multiple_datagrams() {
+async fn reuses_plaintext_udp_sessions_when_proxy_ssl_is_enabled() {
     let upstream = match UdpSocket::bind("127.0.0.1:0").await {
         Ok(socket) => socket,
         Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
@@ -59,6 +61,7 @@ async fn reuses_udp_stream_sessions_for_multiple_datagrams() {
         r#"
                 events {{}}
                 stream {{
+                    proxy_ssl on;
                     log_format datagrams
                         '$remote_addr $protocol $status $bytes_received $bytes_sent '
                         '$upstream_addr $upstream_bytes_sent $upstream_bytes_received';

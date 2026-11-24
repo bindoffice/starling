@@ -275,12 +275,8 @@ pub(super) fn compile_stream_server(
             "no \"proxy_pass\", \"return\" or \"pass\" is defined for stream server",
         ));
     }
-    if listens.iter().any(|listen| listen.udp) && tls.proxy_ssl {
-        return Err(ConfigError::at(
-            directive.location.clone(),
-            "\"proxy_ssl\" is not supported for UDP stream listeners",
-        ));
-    }
+    // Nginx only starts upstream TLS for SOCK_STREAM connections.  It still
+    // accepts proxy_ssl for UDP listen sockets, where the setting is inert.
     validate_ssl_client_verification(
         &directive.location,
         tls.ssl_verify_client,
