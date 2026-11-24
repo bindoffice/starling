@@ -1,61 +1,12 @@
 use super::*;
 
-pub(in crate::server) enum DispatchAction {
-    Response(DispatchOutcome),
-    Tunnel(TunnelDispatch),
-}
+mod types;
+mod variables;
 
-pub(in crate::server) struct DispatchOutcome {
-    pub(in crate::server) response: Response,
-    pub(in crate::server) error_logger: Arc<Logger>,
-    pub(in crate::server) keepalive_timeout: Duration,
-    pub(in crate::server) keepalive_min_timeout: Duration,
-    pub(in crate::server) keep_alive: bool,
-    pub(in crate::server) keepalive_header: Option<u64>,
-    pub(in crate::server) send_timeout: Duration,
-    pub(in crate::server) tcp_nodelay: bool,
-    pub(in crate::server) limit_rate: ResponseRate,
-    pub(in crate::server) server_tokens: ServerTokens,
-    pub(in crate::server) chunked_transfer_encoding: bool,
-    pub(in crate::server) http2_chunk_size: usize,
-    pub(in crate::server) close: ConnectionCloseConfig,
-    pub(in crate::server) _body_file_guard: Option<Arc<RequestBodyFile>>,
-    pub(in crate::server) _connection_guard: Option<ConnectionLimitGuard>,
-    pub(in crate::server) deferred_access_log: Option<Box<DeferredAccessLog>>,
-    pub(in crate::server) upgrade: Option<Box<ProxyUpgrade>>,
-}
-
-pub(in crate::server) struct DeferredAccessLog {
-    formats: HashMap<String, crate::config::AccessLogFormat>,
-    context: Arc<EffectiveConfig>,
-    variables: Variables,
-}
-
-impl DeferredAccessLog {
-    pub(in crate::server) fn write(mut self) {
-        if !self.variables.upstream_response_time.is_empty() {
-            self.variables.upstream_response_time =
-                format!("{:.3}", self.variables.started.elapsed().as_secs_f64());
-        }
-        log_access_with_formats(&self.formats, &self.context, &self.variables);
-    }
-
-    pub(in crate::server) fn write_upgraded(self, bytes_sent: u64, body_bytes_sent: u64) {
-        let mut updated = self;
-        updated.variables.bytes_sent = bytes_sent;
-        updated.variables.body_bytes_sent = body_bytes_sent;
-        updated.write();
-    }
-}
-
-pub(in crate::server) struct DispatchRequestContext<'a> {
-    pub(in crate::server) request: &'a mut Request,
-    pub(in crate::server) connection: ConnectionAddresses,
-    pub(in crate::server) connection_request: ConnectionRequestState,
-    pub(in crate::server) invalid_host: bool,
-    pub(in crate::server) client_abort: Option<ClientAbortState>,
-    pub(in crate::server) request_length: Option<u64>,
-}
+pub(in crate::server) use types::{
+    DeferredAccessLog, DispatchAction, DispatchOutcome, DispatchRequestContext,
+};
+use variables::apply_connection_variables;
 
 pub(in crate::server) async fn dispatch_http_request(
     snapshot: RuntimeSnapshot,
@@ -149,48 +100,7 @@ pub(in crate::server) async fn dispatch_http_request(
         http_error_loggers.clone(),
     ));
     variables.client_abort = client_abort;
-    if let Some(tls) = &connection.tls {
-        variables.ssl_protocol = tls.protocol.clone();
-        variables.ssl_cipher = tls.cipher.clone();
-        variables.ssl_server_name = tls.server_name.clone();
-        variables.ssl_alpn_protocol = tls.alpn_protocol.clone();
-        variables.ssl_client_verify = if tls.client_certificate.is_some() {
-            "SUCCESS".into()
-        } else {
-            "NONE".into()
-        };
-        if let Some(certificate) = &tls.client_certificate {
-            variables.ssl_client_cert = certificate.certificate.clone();
-            variables.ssl_client_escaped_cert = certificate.escaped_certificate.clone();
-            variables.ssl_client_fingerprint = certificate.fingerprint.clone();
-            variables.ssl_client_serial = certificate.serial.clone();
-            variables.ssl_client_s_dn = certificate.subject_dn.clone();
-            variables.ssl_client_i_dn = certificate.issuer_dn.clone();
-            variables.ssl_client_s_dn_legacy = certificate.subject_dn_legacy.clone();
-            variables.ssl_client_i_dn_legacy = certificate.issuer_dn_legacy.clone();
-            variables.ssl_client_v_start = certificate.valid_start.clone();
-            variables.ssl_client_v_end = certificate.valid_end.clone();
-            variables.ssl_client_v_remain = certificate.valid_remain.clone();
-        }
-    }
-    variables.realip_remote_addr = connection.remote.variable_address();
-    variables.proxy_protocol_port = connection
-        .proxy_protocol_port
-        .map(|port| port.to_string())
-        .unwrap_or_default();
-    variables.proxy_protocol_server_addr = connection
-        .proxy_protocol_server_addr
-        .map(|address| address.to_string())
-        .unwrap_or_default();
-    variables.proxy_protocol_server_port = connection
-        .proxy_protocol_server_port
-        .map(|port| port.to_string())
-        .unwrap_or_default();
-    variables.proxy_protocol_tlvs = connection.proxy_protocol_tlvs.clone();
-    variables.proxy_protocol_addr = connection
-        .proxy_protocol_addr
-        .map(|address| address.to_string())
-        .unwrap_or_default();
+    apply_connection_variables(&mut variables, &connection);
     let mut env = RequestEnv {
         uri: String::from("/"),
         args: None,
