@@ -98,6 +98,41 @@ async fn includes_virtual_files_and_honors_types_and_escape_encoding() {
 }
 
 #[tokio::test]
+async fn subrequests_share_the_parent_request_id() {
+    let (prefix, config) = test_config(
+        r#"
+                worker_processes 1;
+                events { worker_connections 64; }
+                http {
+                    server {
+                        listen 127.0.0.1:18198;
+                        root html;
+                        ssi on;
+                        add_header X-Request-Id $request_id;
+                        location = /index.html { }
+                        location = /id { return 200 $request_id; }
+                    }
+                }
+            "#,
+        &[("html/index.html", "<!--# include virtual=\"/id\" -->")],
+    );
+
+    let response = request_bytes(
+        &config,
+        "GET /index.html HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let (headers, body) = split_http_response(&response);
+    let request_id = headers
+        .lines()
+        .find_map(|line| line.strip_prefix("X-Request-Id: "))
+        .expect("missing request id header");
+    assert_eq!(request_id, String::from_utf8_lossy(body));
+    assert_eq!(request_id.len(), 32);
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
 async fn supports_blocks_and_include_set() {
     let (prefix, config) = test_config(
         r#"
