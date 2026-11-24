@@ -22,6 +22,7 @@ async fn handles_expect_continue_and_pipelined_keepalive_requests() {
     let state = SharedState {
         config: Arc::new(ArcSwap::from_pointee(RuntimeSnapshot {
             config: config.clone(),
+            listener_groups: build_listener_groups(&config).into(),
             upstream_keepalive_generation: 0,
         })),
         reload: Arc::new(reload),

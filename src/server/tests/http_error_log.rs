@@ -31,7 +31,7 @@ async fn selects_the_inherited_or_overridden_http_error_logger() {
         ("/inherited", "inherited location selected"),
         ("/override", "override location selected"),
     ] {
-        let request = Request {
+        let mut request = Request {
             method: "GET".into(),
             target: target.into(),
             version: "HTTP/1.1".into(),
@@ -50,7 +50,7 @@ async fn selects_the_inherited_or_overridden_http_error_logger() {
             snapshot,
             &group,
             DispatchRequestContext {
-                request: &request,
+                request: &mut request,
                 connection: connection.clone(),
                 connection_request: ConnectionRequestState::new(0, std::time::Instant::now(), 0),
                 invalid_host: false,

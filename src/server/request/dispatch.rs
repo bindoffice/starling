@@ -49,7 +49,7 @@ impl DeferredAccessLog {
 }
 
 pub(in crate::server) struct DispatchRequestContext<'a> {
-    pub(in crate::server) request: &'a Request,
+    pub(in crate::server) request: &'a mut Request,
     pub(in crate::server) connection: ConnectionAddresses,
     pub(in crate::server) connection_request: ConnectionRequestState,
     pub(in crate::server) invalid_host: bool,
@@ -73,6 +73,7 @@ pub(in crate::server) async fn dispatch_http_request(
     } = context;
     let RuntimeSnapshot {
         config,
+        listener_groups,
         upstream_keepalive_generation,
     } = snapshot;
     let Some(http) = config.http.as_ref() else {
@@ -96,12 +97,8 @@ pub(in crate::server) async fn dispatch_http_request(
             upgrade: None,
         }));
     };
-    let active_group = build_listener_groups(&config)
-        .into_iter()
-        .find(|candidate| candidate.address == group.address)
-        .unwrap_or_else(|| group.clone());
-    let server = select_server(http, &active_group, &request.host_without_port());
-    let mut request = request.clone();
+    let active_group = current_listener_group(&listener_groups, group);
+    let server = select_server(http, active_group, &request.host_without_port());
     if invalid_host {
         request.keep_alive = false;
     }
@@ -119,7 +116,7 @@ pub(in crate::server) async fn dispatch_http_request(
             .unwrap_or_default(),
     };
     let mut variables = Variables::new(
-        &request,
+        request,
         &host,
         server,
         &connection.local,
@@ -255,7 +252,7 @@ pub(in crate::server) async fn dispatch_http_request(
     variables.args = env.args.clone().unwrap_or_default();
     variables.remote_addr = effective_real_ip(
         server,
-        &request,
+        request,
         &env.uri,
         connection.remote.socket_addr().map(|address| address.ip()),
         &variables.realip_remote_addr,
@@ -281,7 +278,7 @@ pub(in crate::server) async fn dispatch_http_request(
         let outcome = configured_error_page(
             http,
             server,
-            &request,
+            request,
             error_response(400),
             &server.context,
             &mut variables,
@@ -298,7 +295,7 @@ pub(in crate::server) async fn dispatch_http_request(
         process_request_with_connection_guard(
             http,
             server,
-            &mut request,
+            request,
             env,
             &mut variables,
             0,
@@ -360,7 +357,7 @@ pub(in crate::server) async fn dispatch_http_request(
         response.set_header("Connection", "upgrade");
         sync_sent_response_variables(
             &response,
-            &request,
+            request,
             &mut variables,
             false,
             None,
@@ -402,7 +399,7 @@ pub(in crate::server) async fn dispatch_http_request(
         start_post_action(
             http,
             server,
-            &request,
+            request,
             &post_action_env,
             &variables,
             &processed.context,
@@ -412,11 +409,11 @@ pub(in crate::server) async fn dispatch_http_request(
     }
     variables.status = response.status;
     prepare_userid_variables(&processed.context, &mut variables);
-    maybe_gunzip(&mut response, &processed.context, &request).await;
+    maybe_gunzip(&mut response, &processed.context, request).await;
     apply_addition(
         http,
         server,
-        &request,
+        request,
         &mut response,
         &processed.context,
         &mut variables,
@@ -427,20 +424,20 @@ pub(in crate::server) async fn dispatch_http_request(
     apply_ssi(
         http,
         server,
-        &request,
+        request,
         &mut response,
         &processed.context,
         &mut variables,
         0,
     )
     .await;
-    maybe_gzip(&mut response, &processed.context, &request).await;
-    let conditional = evaluate_conditional_request(&response, &request, &processed.context);
+    maybe_gzip(&mut response, &processed.context, request).await;
+    let conditional = evaluate_conditional_request(&response, request, &processed.context);
     if conditional == ConditionalResult::PreconditionFailed {
         let outcome = configured_error_page(
             http,
             server,
-            &request,
+            request,
             error_response(412),
             &processed.context,
             &mut variables,
@@ -455,24 +452,24 @@ pub(in crate::server) async fn dispatch_http_request(
         variables.set_variable_warning_context(&processed.context, processed_logger);
     }
     apply_expires(&mut response, &processed.context, &variables);
-    apply_response_headers(&mut response, &processed.context, &request, &mut variables);
+    apply_response_headers(&mut response, &processed.context, request, &mut variables);
     apply_userid(&mut response, &processed.context, &mut variables);
-    apply_msie_compat(&processed.context, &request, &mut response);
+    apply_msie_compat(&processed.context, request, &mut response);
     apply_redirect_location(
         &mut response,
         &processed.context,
         server,
-        &request,
+        request,
         &connection.local,
         group.ssl,
     );
     if conditional == ConditionalResult::NotModified {
         finalize_not_modified(&mut response);
     }
-    apply_response_range(&mut response, &request, processed.context.max_ranges);
-    apply_response_trailers(&mut response, &processed.context, &request, &mut variables);
+    apply_response_range(&mut response, request, processed.context.max_ranges);
+    apply_response_trailers(&mut response, &processed.context, request, &mut variables);
     let keep_alive = should_keep_alive(
-        &request,
+        request,
         &processed.context,
         &response,
         false,
@@ -491,7 +488,7 @@ pub(in crate::server) async fn dispatch_http_request(
     let chunked = prepare_response_for_write(&mut response, &response_options);
     sync_sent_response_variables(
         &response,
-        &request,
+        request,
         &mut variables,
         keep_alive,
         keepalive_header,
@@ -521,7 +518,7 @@ pub(in crate::server) async fn dispatch_http_request(
     start_post_action(
         http,
         server,
-        &request,
+        request,
         &post_action_env,
         &variables,
         &processed.context,

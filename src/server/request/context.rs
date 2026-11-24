@@ -38,19 +38,13 @@ pub(in crate::server) fn complex_size(value: Option<&str>, variables: &Variables
 
 pub(in crate::server) fn request_server_context<'a>(
     config: &'a RuntimeConfig,
+    listener_groups: &[ListenerGroup],
     group: &ListenerGroup,
-    request: &Request,
+    host: &str,
 ) -> Option<&'a ServerConfig> {
     let http = config.http.as_ref()?;
-    let active_group = build_listener_groups(config)
-        .into_iter()
-        .find(|candidate| candidate.address == group.address)
-        .unwrap_or_else(|| group.clone());
-    Some(select_server(
-        http,
-        &active_group,
-        &request.host_without_port(),
-    ))
+    let active_group = current_listener_group(listener_groups, group);
+    Some(select_server(http, active_group, host))
 }
 
 pub(in crate::server) async fn timeout_io<T>(

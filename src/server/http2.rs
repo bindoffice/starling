@@ -202,7 +202,12 @@ pub(super) async fn handle_h2_request(
         connection.remote.variable_address(),
         connection.local.variable_address(),
     );
-    let server_context = request_server_context(config, group, &request);
+    let server_context = request_server_context(
+        config,
+        &snapshot.listener_groups,
+        group,
+        &request.host_without_port(),
+    );
     let server_tokens = server_context
         .map(|server| server.context.server_tokens)
         .unwrap_or(ServerTokens::On);
@@ -250,7 +255,7 @@ pub(super) async fn handle_h2_request(
             snapshot,
             group,
             DispatchRequestContext {
-                request: &request,
+                request: &mut request,
                 connection,
                 connection_request: ConnectionRequestState::new(
                     connection_id,

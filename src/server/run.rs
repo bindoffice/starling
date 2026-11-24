@@ -13,6 +13,7 @@ pub async fn run(config: RuntimeConfig, logger: Arc<Logger>) -> io::Result<()> {
         .worker_shutdown_timeout
         .filter(|timeout| !timeout.is_zero());
     let groups = build_listener_groups(&config);
+    let listener_groups: Arc<[ListenerGroup]> = groups.clone().into();
     let tls_configs = build_tls_configs(&config, &groups)?;
     let stream_tls_configs = build_stream_tls_configs(&config)?;
     let http_error_loggers = build_http_error_loggers(&config)?;
@@ -23,6 +24,7 @@ pub async fn run(config: RuntimeConfig, logger: Arc<Logger>) -> io::Result<()> {
     let state = SharedState {
         config: Arc::new(ArcSwap::from_pointee(RuntimeSnapshot {
             config,
+            listener_groups,
             upstream_keepalive_generation: upstream_keepalive.generation(),
         })),
         reload: Arc::new(reload_tx),
@@ -346,6 +348,7 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
     let generation = state.upstream_keepalive.generation();
     state.config.store(Arc::new(RuntimeSnapshot {
         config: new_config,
+        listener_groups: groups.into(),
         upstream_keepalive_generation: generation,
     }));
     state.notify_reload();

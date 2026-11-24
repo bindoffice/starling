@@ -183,6 +183,7 @@ pub struct SharedState {
 #[derive(Clone)]
 pub(in crate::server) struct RuntimeSnapshot {
     pub(in crate::server) config: Arc<RuntimeConfig>,
+    pub(in crate::server) listener_groups: Arc<[ListenerGroup]>,
     pub(in crate::server) upstream_keepalive_generation: u64,
 }
 
@@ -192,6 +193,7 @@ impl SharedState {
         let snapshot = self.config.load();
         RuntimeSnapshot {
             config: snapshot.config.clone(),
+            listener_groups: snapshot.listener_groups.clone(),
             upstream_keepalive_generation: snapshot.upstream_keepalive_generation,
         }
     }

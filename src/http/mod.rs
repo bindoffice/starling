@@ -46,21 +46,7 @@ impl Request {
     }
 
     pub fn host_without_port(&self) -> Cow<'_, str> {
-        if self.method == "CONNECT"
-            && let Some((host, _)) = parse_connect_authority(&self.target)
-        {
-            return normalize_host(host);
-        }
-        let host = self.absolute_authority().unwrap_or_else(|| self.host());
-        if let Some(rest) = host.strip_prefix('[') {
-            let literal = rest
-                .split_once(']')
-                .map(|(address, _)| &host[..address.len() + 2])
-                .unwrap_or(host);
-            return lowercase_host(literal);
-        }
-        let host = host.split_once(':').map(|(name, _)| name).unwrap_or(host);
-        normalize_host(host)
+        host_without_port(&self.method, &self.target, &self.headers)
     }
 
     pub fn request_port(&self) -> Option<u16> {
@@ -240,6 +226,35 @@ pub struct RequestHead {
     pub chunked: bool,
     pub expect_continue: bool,
     pub invalid_host: bool,
+}
+
+impl RequestHead {
+    pub fn host_without_port(&self) -> Cow<'_, str> {
+        host_without_port(&self.method, &self.target, &self.headers)
+    }
+}
+
+fn host_without_port<'a>(method: &str, target: &'a str, headers: &'a [Header]) -> Cow<'a, str> {
+    if method == "CONNECT"
+        && let Some((host, _)) = parse_connect_authority(target)
+    {
+        return normalize_host(host);
+    }
+    let header_host = headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case("host"))
+        .map(|header| header.value.as_str())
+        .unwrap_or_default();
+    let host = absolute_target_authority(target).unwrap_or(header_host);
+    if let Some(rest) = host.strip_prefix('[') {
+        let literal = rest
+            .split_once(']')
+            .map(|(address, _)| &host[..address.len() + 2])
+            .unwrap_or(host);
+        return lowercase_host(literal);
+    }
+    let host = host.split_once(':').map(|(name, _)| name).unwrap_or(host);
+    normalize_host(host)
 }
 
 mod rate;

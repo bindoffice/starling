@@ -66,6 +66,16 @@ pub(in crate::server) fn build_listener_groups(config: &RuntimeConfig) -> Vec<Li
     result
 }
 
+pub(in crate::server) fn current_listener_group<'a>(
+    groups: &'a [ListenerGroup],
+    fallback: &'a ListenerGroup,
+) -> &'a ListenerGroup {
+    groups
+        .iter()
+        .find(|candidate| candidate.address == fallback.address)
+        .unwrap_or(fallback)
+}
+
 #[derive(Default)]
 pub(in crate::server) struct ListenerAccumulator {
     server_ids: Vec<usize>,

@@ -94,7 +94,8 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
         }
         let snapshot = state.config_snapshot();
         let config = &snapshot.config;
-        let default_context = connection_server_context(config, &group);
+        let active_group = current_listener_group(&snapshot.listener_groups, &group);
+        let default_context = connection_server_context(config, active_group);
         close_config = default_context
             .map(|server| ConnectionCloseConfig::from(&server.context))
             .unwrap_or_default();
@@ -171,18 +172,9 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
         connection_stats.set_writing();
         let request_context = request_server_context(
             config,
+            &snapshot.listener_groups,
             &group,
-            &Request {
-                method: head.method.clone(),
-                target: head.target.clone(),
-                version: head.version.clone(),
-                headers: head.headers.clone(),
-                body_stream: None,
-                body: Vec::new(),
-                remote_addr: remote.to_string(),
-                local_addr: local.to_string(),
-                keep_alive: head.keep_alive,
-            },
+            &head.host_without_port(),
         );
         let ignore_invalid_headers = request_context
             .map(|server| server.context.ignore_invalid_headers)
@@ -283,7 +275,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             None
         };
         let request_length = head.request_length;
-        let request = Request {
+        let mut request = Request {
             method: head.method,
             target: head.target,
             version: head.version,
@@ -300,7 +292,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             snapshot,
             &group,
             DispatchRequestContext {
-                request: &request,
+                request: &mut request,
                 connection: connection.clone(),
                 connection_request: ConnectionRequestState::new(
                     connection_stats.id(),
