@@ -4,6 +4,7 @@ use super::*;
 mod compat;
 mod gzip;
 mod if_loc_conf;
+mod if_loc_conf_matrix;
 mod logging;
 mod order;
 mod rewrite;
