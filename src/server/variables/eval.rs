@@ -346,6 +346,12 @@ fn log_variable_missing(name: &str, variables: &Variables) -> bool {
     if name == "sent_http_transfer_encoding" {
         return variables.sent_transfer_encoding.is_empty();
     }
+    if name == "limit_req_status" {
+        return variables.limit_req_status.is_empty();
+    }
+    if name == "limit_conn_status" {
+        return variables.limit_conn_status.is_empty();
+    }
     for (prefix, headers) in [
         ("sent_http_", variables.sent_headers.as_slice()),
         ("sent_trailer_", variables.sent_trailers.as_slice()),
