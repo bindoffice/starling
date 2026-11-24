@@ -3,6 +3,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 mod corpus;
 mod header_limits;
+mod hpack;
 mod mutations;
 
 const FRAME_HEADERS: u8 = 0x1;
@@ -323,7 +324,7 @@ async fn invalid_headers_padding_sends_connection_goaway() {
 #[tokio::test]
 async fn oversized_frame_sends_connection_goaway() {
     assert_goaway(
-        frame(FRAME_DATA, 0, 1, &vec![0; 16 * 1024 + 1]),
+        frame(FRAME_DATA, 0, 1, &vec![0; 32 * 1024 + 1]),
         h2::Reason::FRAME_SIZE_ERROR,
     )
     .await;
@@ -338,7 +339,7 @@ async fn invalid_hpack_index_sends_connection_goaway() {
             1,
             &[0x80],
         ),
-        h2::Reason::PROTOCOL_ERROR,
+        h2::Reason::COMPRESSION_ERROR,
     )
     .await;
 }
@@ -403,6 +404,60 @@ async fn assert_goaway_with_http(http_directives: &str, frames: Vec<u8>, expecte
     tokio::time::timeout(Duration::from_secs(2), server_task)
         .await
         .expect("HTTP/2 server should stop after GOAWAY")
+        .unwrap();
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
+async fn handshake_expands_the_connection_window_to_body_preread_size() {
+    let source = r#"
+        worker_processes 1;
+        events { worker_connections 64; }
+        http {
+            http2_body_preread_size 96k;
+            server {
+                listen 127.0.0.1:18464 http2;
+                location / { return 204; }
+            }
+        }
+    "#;
+    let (prefix, config) = test_config(source, &[]);
+    let group = build_listener_groups(&config)[0].clone();
+    let state = test_state(&config);
+    let local = group.address.clone();
+    let remote: SocketAddr = "127.0.0.1:45686".parse().unwrap();
+    let (mut client, server) = tokio::io::duplex(64 * 1024);
+    let server_task = tokio::spawn(handle_http_connection(
+        server,
+        ConnectionAddresses::direct(ListenAddress::Inet(remote), local),
+        group,
+        state,
+    ));
+
+    client
+        .write_all(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+        .await
+        .unwrap();
+    client.flush().await.unwrap();
+
+    let increment = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let (kind, _flags, stream_id, payload) = read_frame(&mut client).await;
+            if kind == FRAME_WINDOW_UPDATE {
+                assert_eq!(stream_id, 0);
+                assert_eq!(payload.len(), 4);
+                return u32::from_be_bytes(payload.try_into().unwrap());
+            }
+        }
+    })
+    .await
+    .expect("server should send a connection WINDOW_UPDATE");
+    assert_eq!(increment, 96 * 1024 - 65_535);
+
+    drop(client);
+    tokio::time::timeout(Duration::from_secs(2), server_task)
+        .await
+        .expect("HTTP/2 server should stop")
         .unwrap();
     let _ = std::fs::remove_dir_all(prefix);
 }

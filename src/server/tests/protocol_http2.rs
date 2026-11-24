@@ -10,6 +10,7 @@ mod request_body_content_length;
 mod request_body_gateway_reset;
 mod request_body_h2_upstream_reset;
 mod request_retry_cancel;
+mod response_reset;
 mod streaming;
 
 pub(super) async fn bind_test_tcp(label: &str) -> Option<TcpListener> {

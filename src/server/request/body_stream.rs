@@ -44,6 +44,8 @@ where
                 sender
                     .fail(crate::http::clone_request_body_error(error))
                     .await;
+            } else {
+                sender.finish();
             }
             (reader, result)
         });
@@ -89,7 +91,7 @@ impl H2BodyTask {
         connection_fault: Option<H2ConnectionFault>,
         content_length: Option<u64>,
     ) -> Self {
-        let (sender, stream) = RequestBodyStream::channel();
+        let (sender, stream, window) = RequestBodyStream::channel_with_h2_window();
         let task = tokio::spawn(async move {
             let result = pump_h2_body(
                 body,
@@ -98,6 +100,7 @@ impl H2BodyTask {
                 content_length,
                 &sender,
                 connection_fault.as_ref(),
+                window,
             )
             .await;
             if let Err(error) = &result {
@@ -143,41 +146,54 @@ async fn pump_h2_body(
     content_length: Option<u64>,
     sender: &RequestBodySender,
     connection_fault: Option<&H2ConnectionFault>,
+    mut window: tokio::sync::watch::Receiver<Option<u32>>,
 ) -> io::Result<()> {
     let mut total = 0_u64;
     let mut active = true;
     loop {
-        let next = body.data();
-        let data = if timeout == Duration::ZERO {
-            next.await
-        } else {
-            match tokio::time::timeout(timeout, next).await {
-                Ok(data) => data,
-                Err(_) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "request body timed out",
-                    ));
-                }
-            }
+        let data = match wait_for_h2_data(&mut body, timeout, &mut window).await? {
+            Some(data) => data,
+            None => break,
         };
         let Some(data) = data else {
             break;
         };
-        let data = data.map_err(h2_body_io_error)?;
-        body.flow_control()
-            .release_capacity(data.len())
-            .map_err(io::Error::other)?;
-        total = total
-            .checked_add(data.len() as u64)
-            .ok_or_else(crate::http::request_body_too_large_error)?;
-        if limit != 0 && total > limit {
-            return Err(crate::http::request_body_too_large_error());
+        let mut next_data = Some(data.map_err(h2_body_io_error)?);
+
+        // Nginx presents DATA frames received in one read event as one request
+        // body chunk. Drain frames that are already buffered without waiting
+        // for another network event, while preserving flow-control accounting.
+        let mut chunks = Vec::new();
+        while let Some(data) = next_data.take() {
+            release_h2_body_capacity(&mut body, data.len())?;
+            let new_total = total
+                .checked_add(data.len() as u64)
+                .ok_or_else(crate::http::request_body_too_large_error)?;
+            if limit != 0 && new_total > limit {
+                send_h2_chunks(sender, chunks, &mut active).await;
+                return Err(crate::http::request_body_too_large_error());
+            }
+            if content_length.is_some_and(|expected| new_total > expected) {
+                send_h2_chunks(sender, chunks, &mut active).await;
+                return Err(content_length_mismatch_error());
+            }
+            total = new_total;
+            chunks.push(data);
+            next_data = match poll_h2_data_now(&mut body).await {
+                Some(Some(data)) => Some(data.map_err(h2_body_io_error)?),
+                _ => None,
+            };
         }
-        if content_length.is_some_and(|expected| total > expected) {
+        let end_stream = body.is_end_stream();
+        let content_length_mismatch =
+            end_stream && content_length.is_some_and(|expected| total != expected);
+        if content_length_mismatch {
             return Err(content_length_mismatch_error());
         }
-        send_or_discard(sender, &data, &mut active).await;
+        if end_stream {
+            sender.finish();
+        }
+        send_h2_chunks(sender, chunks, &mut active).await;
     }
 
     let trailers = if timeout == Duration::ZERO {
@@ -204,7 +220,88 @@ async fn pump_h2_body(
     if content_length.is_some_and(|expected| total != expected) {
         return Err(content_length_mismatch_error());
     }
+    sender.finish();
     Ok(())
+}
+
+async fn send_h2_chunks(sender: &RequestBodySender, chunks: Vec<Bytes>, active: &mut bool) {
+    let data = if chunks.len() == 1 {
+        chunks.into_iter().next().expect("one request body chunk")
+    } else {
+        let length = chunks.iter().map(Bytes::len).sum();
+        if length == 0 {
+            return;
+        }
+        let mut combined = Vec::with_capacity(length);
+        for chunk in chunks {
+            combined.extend_from_slice(&chunk);
+        }
+        Bytes::from(combined)
+    };
+    if !data.is_empty() {
+        send_or_discard(sender, &data, active).await;
+    }
+}
+
+async fn wait_for_h2_data(
+    body: &mut RecvStream,
+    timeout: Duration,
+    window: &mut tokio::sync::watch::Receiver<Option<u32>>,
+) -> io::Result<Option<Option<Result<Bytes, h2::Error>>>> {
+    let next = async {
+        let mut window_open = true;
+        loop {
+            apply_h2_window_target(body, window)?;
+            tokio::select! {
+                changed = window.changed(), if window_open => {
+                    if changed.is_err() {
+                        window_open = false;
+                    }
+                }
+                data = body.data() => {
+                    return Ok::<Option<Result<Bytes, h2::Error>>, io::Error>(data);
+                }
+            }
+        }
+    };
+    if timeout == Duration::ZERO {
+        return Ok(Some(next.await?));
+    }
+    match tokio::time::timeout(timeout, next).await {
+        Ok(data) => Ok(Some(data?)),
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "request body timed out",
+        )),
+    }
+}
+
+fn apply_h2_window_target(
+    body: &mut RecvStream,
+    window: &tokio::sync::watch::Receiver<Option<u32>>,
+) -> io::Result<()> {
+    let target = *window.borrow();
+    if let Some(target) = target {
+        body.set_target_window_size(target)
+            .map_err(io::Error::other)?;
+    }
+    Ok(())
+}
+
+async fn poll_h2_data_now(body: &mut RecvStream) -> Option<Option<Result<Bytes, h2::Error>>> {
+    std::future::poll_fn(|context| {
+        std::task::Poll::Ready(match body.poll_data(context) {
+            std::task::Poll::Ready(data) => Some(data),
+            std::task::Poll::Pending => None,
+        })
+    })
+    .await
+}
+
+fn release_h2_body_capacity(body: &mut RecvStream, length: usize) -> io::Result<()> {
+    body.flow_control()
+        .release_capacity(length)
+        .map_err(io::Error::other)
 }
 
 fn content_length_mismatch_error() -> io::Error {

@@ -7,6 +7,7 @@ pub(in crate::server) struct UpstreamRedirectContext<'a> {
     pub env: &'a RequestEnv,
     pub current: &'a EffectiveConfig,
     pub depth: usize,
+    pub connection_guard: &'a mut Option<ConnectionLimitGuard>,
 }
 
 pub(in crate::server) async fn follow_upstream_redirect(
@@ -26,6 +27,7 @@ pub(in crate::server) async fn follow_upstream_redirect(
             variables,
             context.depth + 1,
             MAX_URI_CHANGES + 1,
+            context.connection_guard,
         ))
         .await
         {
@@ -87,13 +89,14 @@ pub(in crate::server) async fn follow_upstream_redirect(
         auth_request_checked: false,
         mirror_checked: false,
     };
-    Box::pin(process_request(
+    Box::pin(process_request_with_connection_guard(
         context.http,
         context.server,
         &mut internal_request,
         env,
         variables,
         context.depth + 1,
+        context.connection_guard,
     ))
     .await
 }

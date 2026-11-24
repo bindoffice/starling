@@ -17,6 +17,7 @@ enum StringPart {
 struct PendingInteger {
     value: usize,
     shift: u32,
+    octets: u8,
     purpose: IntegerPurpose,
 }
 
@@ -26,6 +27,13 @@ enum State {
     Integer(PendingInteger),
     StringLength(StringPart),
     String { remaining: usize, part: StringPart },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum HeaderBlockError {
+    FrameSize,
+    Compression,
+    FieldLimit,
 }
 
 pub(super) struct HeaderBlockValidator {
@@ -45,7 +53,7 @@ impl HeaderBlockValidator {
         self.state = State::Representation;
     }
 
-    pub(super) fn validate(&mut self, mut bytes: &[u8]) -> Result<(), ()> {
+    pub(super) fn validate(&mut self, mut bytes: &[u8]) -> Result<(), HeaderBlockError> {
         if self.field_limit == 0 {
             return Ok(());
         }
@@ -78,7 +86,15 @@ impl HeaderBlockValidator {
         Ok(())
     }
 
-    fn start_representation(&self, byte: u8) -> Result<State, ()> {
+    pub(super) fn finish(&self) -> Result<(), HeaderBlockError> {
+        if matches!(self.state, State::Representation) {
+            Ok(())
+        } else {
+            Err(HeaderBlockError::FrameSize)
+        }
+    }
+
+    fn start_representation(&self, byte: u8) -> Result<State, HeaderBlockError> {
         match byte {
             0x80..=0xff => self.start_integer(byte, 7, IntegerPurpose::FieldIndex),
             0x40..=0x7f => self.start_integer(byte, 6, IntegerPurpose::LiteralNameIndex),
@@ -87,7 +103,7 @@ impl HeaderBlockValidator {
         }
     }
 
-    fn start_string(&self, byte: u8, part: StringPart) -> Result<State, ()> {
+    fn start_string(&self, byte: u8, part: StringPart) -> Result<State, HeaderBlockError> {
         let purpose = match part {
             StringPart::Name => IntegerPurpose::NameLength,
             StringPart::Value => IntegerPurpose::ValueLength,
@@ -100,7 +116,7 @@ impl HeaderBlockValidator {
         byte: u8,
         prefix_bits: u32,
         purpose: IntegerPurpose,
-    ) -> Result<State, ()> {
+    ) -> Result<State, HeaderBlockError> {
         let prefix_max = (1_usize << prefix_bits) - 1;
         let value = usize::from(byte) & prefix_max;
         if value < prefix_max {
@@ -109,26 +125,42 @@ impl HeaderBlockValidator {
             Ok(State::Integer(PendingInteger {
                 value,
                 shift: 0,
+                octets: 1,
                 purpose,
             }))
         }
     }
 
-    fn continue_integer(&self, mut pending: PendingInteger, byte: u8) -> Result<State, ()> {
+    fn continue_integer(
+        &self,
+        mut pending: PendingInteger,
+        byte: u8,
+    ) -> Result<State, HeaderBlockError> {
         let contribution = usize::from(byte & 0x7f)
             .checked_shl(pending.shift)
-            .unwrap_or(usize::MAX);
-        pending.value = pending.value.saturating_add(contribution);
+            .ok_or(HeaderBlockError::Compression)?;
+        pending.value = pending
+            .value
+            .checked_add(contribution)
+            .ok_or(HeaderBlockError::Compression)?;
+        pending.octets += 1;
 
         if byte & 0x80 == 0 {
             self.complete_integer(pending.value, pending.purpose)
         } else {
+            if pending.octets >= 4 {
+                return Err(HeaderBlockError::Compression);
+            }
             pending.shift = pending.shift.saturating_add(7);
             Ok(State::Integer(pending))
         }
     }
 
-    fn complete_integer(&self, value: usize, purpose: IntegerPurpose) -> Result<State, ()> {
+    fn complete_integer(
+        &self,
+        value: usize,
+        purpose: IntegerPurpose,
+    ) -> Result<State, HeaderBlockError> {
         match purpose {
             IntegerPurpose::FieldIndex | IntegerPurpose::TableSizeUpdate => {
                 Ok(State::Representation)
@@ -140,7 +172,7 @@ impl HeaderBlockValidator {
             })),
             IntegerPurpose::NameLength | IntegerPurpose::ValueLength => {
                 if value > self.field_limit {
-                    return Err(());
+                    return Err(HeaderBlockError::FieldLimit);
                 }
                 let part = if purpose == IntegerPurpose::NameLength {
                     StringPart::Name
@@ -185,14 +217,20 @@ mod tests {
     fn rejects_literal_strings_over_the_encoded_limit() {
         let mut validator = HeaderBlockValidator::new(4);
         let block = [0x00, 0x05, b'n', b'a', b'm', b'e', b'x'];
-        assert_eq!(validator.validate(&block), Err(()));
+        assert_eq!(
+            validator.validate(&block),
+            Err(HeaderBlockError::FieldLimit)
+        );
     }
 
     #[test]
     fn checks_huffman_encoded_length_without_decoding() {
         let mut validator = HeaderBlockValidator::new(3);
         let block = [0x00, 0x04, b'n', b'a', b'm', b'e'];
-        assert_eq!(validator.validate(&block), Err(()));
+        assert_eq!(
+            validator.validate(&block),
+            Err(HeaderBlockError::FieldLimit)
+        );
 
         let mut validator = HeaderBlockValidator::new(4);
         let block = [0x00, 0x84, 0xff, 0xff, 0xff, 0xff];
@@ -216,7 +254,10 @@ mod tests {
         assert_eq!(validator.validate(&block), Ok(()));
 
         let mut validator = HeaderBlockValidator::new(129);
-        assert_eq!(validator.validate(&block), Err(()));
+        assert_eq!(
+            validator.validate(&block),
+            Err(HeaderBlockError::FieldLimit)
+        );
     }
 
     #[test]
@@ -229,6 +270,35 @@ mod tests {
     fn applies_the_limit_to_literal_names_with_indexed_values() {
         let mut validator = HeaderBlockValidator::new(3);
         let block = [0x00, 0x04, b'x', b'y', b'z', b'w', 0x00];
-        assert_eq!(validator.validate(&block), Err(()));
+        assert_eq!(
+            validator.validate(&block),
+            Err(HeaderBlockError::FieldLimit)
+        );
+    }
+
+    #[test]
+    fn rejects_overlong_integers_as_compression_errors() {
+        let mut validator = HeaderBlockValidator::new(1024);
+        assert_eq!(
+            validator.validate(&[0xff, 0xff, 0xff, 0xff]),
+            Err(HeaderBlockError::Compression)
+        );
+    }
+
+    #[test]
+    fn detects_truncated_integers_at_the_end_of_a_header_block() {
+        let mut validator = HeaderBlockValidator::new(1024);
+        assert_eq!(validator.validate(&[0xff]), Ok(()));
+        assert_eq!(validator.finish(), Err(HeaderBlockError::FrameSize));
+    }
+
+    #[test]
+    fn accepts_huffman_literals_from_the_nginx_test_suite() {
+        let mut validator = HeaderBlockValidator::new(1024);
+        let block = [
+            0x42, 0x83, 0xc5, 0x83, 0x7f, 0x46, 0x83, 0x9d, 0x29, 0xaf, 0x44, 0x81, 0x63, 0x41,
+            0x87, 0xa0, 0xe4, 0x1d, 0x13, 0x9d, 0x09, 0xff,
+        ];
+        assert_eq!(validator.validate(&block), Ok(()));
     }
 }

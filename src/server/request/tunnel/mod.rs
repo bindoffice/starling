@@ -17,6 +17,7 @@ pub(in crate::server) struct TunnelDispatch {
     pub(super) next_upstream: NextUpstreamConfig,
     pub(super) server_tokens: ServerTokens,
     pub(super) tcp_nodelay: bool,
+    pub(super) connection_guard: Option<ConnectionLimitGuard>,
 }
 
 pub(in crate::server) fn build_tunnel_dispatch(
@@ -79,6 +80,7 @@ pub(in crate::server) fn build_tunnel_dispatch(
         next_upstream: context.tunnel.next_upstream,
         server_tokens: context.server_tokens,
         tcp_nodelay: context.tcp_nodelay,
+        connection_guard: None,
     })
 }
 

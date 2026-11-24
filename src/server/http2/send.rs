@@ -1,11 +1,48 @@
 use super::*;
 
 pub(in crate::server) async fn send_h2_response(
+    respond: SendResponse<Bytes>,
+    response: Response,
+    request_method: &str,
+    server_tokens: ServerTokens,
+    chunk_size: usize,
+) -> io::Result<()> {
+    send_h2_response_inner(
+        respond,
+        response,
+        request_method,
+        server_tokens,
+        chunk_size,
+        false,
+    )
+    .await
+}
+
+pub(in crate::server) async fn send_h2_response_discarding_request_body(
+    respond: SendResponse<Bytes>,
+    response: Response,
+    request_method: &str,
+    server_tokens: ServerTokens,
+    chunk_size: usize,
+) -> io::Result<()> {
+    send_h2_response_inner(
+        respond,
+        response,
+        request_method,
+        server_tokens,
+        chunk_size,
+        true,
+    )
+    .await
+}
+
+async fn send_h2_response_inner(
     mut respond: SendResponse<Bytes>,
     mut response: Response,
     request_method: &str,
     server_tokens: ServerTokens,
     chunk_size: usize,
+    discard_request_body: bool,
 ) -> io::Result<()> {
     prepare_response_headers(&mut response, server_tokens);
     let mut builder = HttpResponse::builder()
@@ -34,6 +71,9 @@ pub(in crate::server) async fn send_h2_response(
         .send_response(response_head, !has_output)
         .map_err(io::Error::other)?;
     if !has_output {
+        if discard_request_body {
+            send.send_reset(h2::Reason::NO_ERROR);
+        }
         return Ok(());
     }
 
@@ -51,6 +91,9 @@ pub(in crate::server) async fn send_h2_response(
     }
     if !trailers.is_empty() {
         super::body::send_h2_trailers(&mut send, &trailers)?;
+    }
+    if discard_request_body {
+        send.send_reset(h2::Reason::NO_ERROR);
     }
     Ok(())
 }
@@ -78,20 +121,37 @@ pub(in crate::server) fn is_h2_connection_header(name: &str) -> bool {
     .any(|candidate| name.eq_ignore_ascii_case(candidate))
 }
 
-fn h2_header_value(
+pub(super) fn h2_header_value(
     value: &str,
 ) -> Result<http::header::HeaderValue, http::header::InvalidHeaderValue> {
-    match http::header::HeaderValue::from_str(value) {
-        Ok(value) => Ok(value),
-        Err(_)
-            if value
-                .as_bytes()
-                .iter()
-                .any(|byte| matches!(byte, b'\r' | b'\n')) =>
-        {
-            http::header::HeaderValue::from_str(&sanitize_header_value(value))
-        }
-        Err(error) => Err(error),
+    let bytes = crate::http::header_value_bytes(value);
+    let sanitized: Vec<u8> = bytes
+        .iter()
+        .map(|byte| match byte {
+            b'\r' | b'\n' => b' ',
+            byte => *byte,
+        })
+        .collect();
+    if let Ok(value) = http::header::HeaderValue::from_bytes(&sanitized) {
+        return Ok(value);
+    }
+    if sanitized.contains(&0) {
+        return http::header::HeaderValue::from_bytes(&sanitized);
+    }
+
+    // HPACK carries opaque octets, while http::HeaderValue normally rejects
+    // control bytes and obs-text. The h2 encoder writes the bytes unchanged.
+    #[cfg(not(debug_assertions))]
+    {
+        return Ok(unsafe {
+            http::header::HeaderValue::from_maybe_shared_unchecked(Bytes::copy_from_slice(
+                &sanitized,
+            ))
+        });
+    }
+    #[cfg(debug_assertions)]
+    {
+        http::header::HeaderValue::from_bytes(&sanitized)
     }
 }
 

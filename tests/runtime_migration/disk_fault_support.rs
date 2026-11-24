@@ -118,11 +118,12 @@ impl FaultServer {
     }
 
     pub(super) fn assert_running(&mut self) {
-        assert!(
-            self.child.try_wait().unwrap().is_none(),
-            "starling exited after a recoverable disk fault:\n{}",
-            self.diagnostics()
-        );
+        if let Some(status) = self.child.try_wait().unwrap() {
+            panic!(
+                "starling exited after a recoverable disk fault with {status}:\n{}",
+                self.diagnostics()
+            );
+        }
     }
 
     pub(super) fn reload(&mut self) {

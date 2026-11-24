@@ -14,9 +14,10 @@ pub(in crate::server) fn apply_response_headers(
     );
     for header in &context.add_headers {
         if status_allows || header.always {
-            let value = eval_variables(&header.value, variables);
+            let value_bytes = eval_variables_bytes(&header.value, variables);
+            let value = crate::http::header_value_from_bytes(&value_bytes);
             let name = header.name.to_ascii_lowercase();
-            if value.is_empty() {
+            if value_bytes.is_empty() {
                 if matches!(name.as_str(), "etag" | "last-modified") {
                     response.remove_header(&header.name);
                 }

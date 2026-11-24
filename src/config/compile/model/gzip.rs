@@ -19,7 +19,7 @@ impl GzipHttpVersion {
     pub fn allows(self, request_version: &str) -> bool {
         match request_version {
             "HTTP/1.0" => self <= Self::Http10,
-            "HTTP/1.1" => self <= Self::Http11,
+            "HTTP/1.1" | "HTTP/2.0" => self <= Self::Http11,
             _ => false,
         }
     }

@@ -2,6 +2,34 @@ use super::super::support::*;
 use super::super::*;
 
 #[tokio::test]
+async fn merges_duplicate_cookie_headers_for_http1_upstreams() {
+    let (mut reader, mut writer) = tokio::io::duplex(64 * 1024);
+    let outgoing = ProxyRequestMessage {
+        method: "GET".into(),
+        path: "/".into(),
+        headers: vec![
+            ("Host".into(), "backend.test".into()),
+            ("Cookie".into(), "a=b".into()),
+            ("X-Test".into(), "present".into()),
+            ("cookie".into(), "c=d".into()),
+        ],
+        body: Vec::new(),
+        body_stream: None,
+        body_chunked: false,
+        body_limit: 0,
+    };
+    let task =
+        tokio::spawn(async move { write_proxy_request(&mut writer, &outgoing, "1.1").await });
+
+    let mut request = Vec::new();
+    reader.read_to_end(&mut request).await.unwrap();
+    task.await.unwrap().unwrap();
+    let request = String::from_utf8(request).unwrap();
+    assert_eq!(request.matches("Cookie: ").count(), 1, "{request}");
+    assert!(request.contains("Cookie: a=b; c=d\r\n"), "{request}");
+}
+
+#[tokio::test]
 async fn writes_content_length_request_body_chunks_as_they_arrive() {
     let (mut reader, mut writer) = tokio::io::duplex(64 * 1024);
     let (sender, stream) = crate::http::RequestBodyStream::channel();

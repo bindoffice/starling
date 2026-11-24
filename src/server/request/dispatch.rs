@@ -20,6 +20,7 @@ pub(in crate::server) struct DispatchOutcome {
     pub(in crate::server) http2_chunk_size: usize,
     pub(in crate::server) close: ConnectionCloseConfig,
     pub(in crate::server) _body_file_guard: Option<Arc<RequestBodyFile>>,
+    pub(in crate::server) _connection_guard: Option<ConnectionLimitGuard>,
 }
 
 pub(in crate::server) struct DispatchRequestContext<'a> {
@@ -28,6 +29,7 @@ pub(in crate::server) struct DispatchRequestContext<'a> {
     pub(in crate::server) connection_request: ConnectionRequestState,
     pub(in crate::server) invalid_host: bool,
     pub(in crate::server) client_abort: Option<ClientAbortState>,
+    pub(in crate::server) request_length: Option<u64>,
 }
 
 pub(in crate::server) async fn dispatch_http_request(
@@ -42,6 +44,7 @@ pub(in crate::server) async fn dispatch_http_request(
         connection_request,
         invalid_host,
         client_abort,
+        request_length,
     } = context;
     let RuntimeSnapshot {
         config,
@@ -63,6 +66,7 @@ pub(in crate::server) async fn dispatch_http_request(
             http2_chunk_size: Http2Limits::default().chunk_size,
             close: ConnectionCloseConfig::default(),
             _body_file_guard: None,
+            _connection_guard: None,
         }));
     };
     let active_group = build_listener_groups(&config)
@@ -94,6 +98,11 @@ pub(in crate::server) async fn dispatch_http_request(
         &connection.local,
         &connection.remote,
     );
+    if let Some(header_length) = request_length {
+        variables.request_length = header_length
+            .saturating_add(request.buffered_body_len())
+            .to_string();
+    }
     variables.connection = connection_request.connection_id.to_string();
     variables.connection_requests = connection_request.served_requests.to_string();
     variables.connection_time =
@@ -203,6 +212,7 @@ pub(in crate::server) async fn dispatch_http_request(
                     http2_chunk_size: server.context.http2_limits.chunk_size,
                     close: ConnectionCloseConfig::from(&server.context),
                     _body_file_guard: None,
+                    _connection_guard: None,
                 }));
             }
         }
@@ -219,6 +229,11 @@ pub(in crate::server) async fn dispatch_http_request(
     );
     variables.scheme = if group.ssl { "https" } else { "http" }.into();
     variables.https = if group.ssl { "on" } else { "" }.into();
+    variables.http2 = if request.version == "HTTP/2.0" {
+        if group.ssl { "h2" } else { "h2c" }.into()
+    } else {
+        String::new()
+    };
     variables.limits = state.limits.clone();
     variables.stats = state.stats.clone();
     variables.upstream_keepalive = state.upstream_keepalive.clone();
@@ -227,6 +242,7 @@ pub(in crate::server) async fn dispatch_http_request(
     variables.client_tls_cache = state.client_tls_cache.clone();
 
     let post_action_env = env.clone();
+    let mut connection_guard = None;
     let mut processed = if invalid_host {
         let outcome = configured_error_page(
             http,
@@ -244,7 +260,16 @@ pub(in crate::server) async fn dispatch_http_request(
             tunnel: false,
         }
     } else {
-        process_request(http, server, &mut request, env, &mut variables, 0).await
+        process_request_with_connection_guard(
+            http,
+            server,
+            &mut request,
+            env,
+            &mut variables,
+            0,
+            &mut connection_guard,
+        )
+        .await
     };
     let processed_logger = variables.error_logger_for(&processed.context);
     variables.set_variable_warning_context(&processed.context, processed_logger);
@@ -261,6 +286,7 @@ pub(in crate::server) async fn dispatch_http_request(
             Ok(mut tunnel) => {
                 tunnel.error_logger =
                     Some(http_logger_for_context(state, &processed.context).await);
+                tunnel.connection_guard = connection_guard.take();
                 tunnel
             }
             Err(response) => {
@@ -280,6 +306,7 @@ pub(in crate::server) async fn dispatch_http_request(
                     http2_chunk_size: processed.context.http2_limits.chunk_size,
                     close: ConnectionCloseConfig::from(&processed.context),
                     _body_file_guard: None,
+                    _connection_guard: connection_guard.take(),
                 }));
             }
         };
@@ -418,5 +445,6 @@ pub(in crate::server) async fn dispatch_http_request(
         http2_chunk_size: processed.context.http2_limits.chunk_size,
         close: ConnectionCloseConfig::from(&processed.context),
         _body_file_guard: variables.request_body_file_guard.clone(),
+        _connection_guard: connection_guard,
     }))
 }

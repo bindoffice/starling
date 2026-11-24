@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn content_length_mismatch_resets_the_request_stream() {
+async fn content_length_mismatch_returns_bad_request() {
     let source = r#"
         worker_processes 1;
         events { worker_connections 64; }
@@ -19,48 +19,33 @@ async fn content_length_mismatch_resets_the_request_stream() {
     let state = test_state(&config);
     let local = group.address.clone();
     let remote: SocketAddr = "127.0.0.1:45686".parse().unwrap();
-    let (mut client, server) = tokio::io::duplex(64 * 1024);
+    let (client, server) = tokio::io::duplex(64 * 1024);
     let server_task = tokio::spawn(handle_http_connection(
         server,
         ConnectionAddresses::direct(ListenAddress::Inet(remote), local),
         group,
         state,
     ));
-
-    let mut headers = b"\x83\x86\x84\x01\x09localhost".to_vec();
-    // HPACK static-table entry 28 (content-length), value "5".
-    headers.extend_from_slice(b"\x0f\x0d\x015");
-    let mut frames = frame(FRAME_HEADERS, FLAG_END_HEADERS, 1, &headers);
-    frames.extend(frame(FRAME_DATA, FLAG_END_STREAM, 1, b"part"));
-    client
-        .write_all(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
-        .await
+    let (mut sender, connection) = h2::client::handshake(client).await.unwrap();
+    let driver = tokio::spawn(connection);
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("http://localhost/")
+        .header("content-length", "5")
+        .body(())
         .unwrap();
-    client
-        .write_all(&frame(FRAME_SETTINGS, 0, 0, &[]))
-        .await
+    let (response, mut request_body) = sender.send_request(request, false).unwrap();
+    request_body
+        .send_data(Bytes::from_static(b"part"), true)
         .unwrap();
-    client.write_all(&frames).await.unwrap();
-    client.flush().await.unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(2), response)
+        .await
+        .expect("content-length mismatch response should complete")
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-    let reason = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let (kind, _flags, stream_id, payload) = read_frame(&mut client).await;
-            if kind == FRAME_RST_STREAM && stream_id == 1 {
-                assert_eq!(payload.len(), 4, "truncated RST_STREAM payload");
-                return u32::from_be_bytes(payload.try_into().unwrap());
-            }
-        }
-    })
-    .await
-    .expect("server should reset the stream for the mismatched body");
-    assert_eq!(
-        reason,
-        u32::from(h2::Reason::PROTOCOL_ERROR),
-        "content-length mismatch must reset the request stream"
-    );
-
-    drop(client);
+    drop(sender);
+    driver.abort();
     tokio::time::timeout(Duration::from_secs(2), server_task)
         .await
         .expect("HTTP/2 server should stop after the bad request")
@@ -149,60 +134,50 @@ async fn oversized_individual_header_field_is_rejected_before_dispatch() {
 
 #[tokio::test]
 async fn hpack_encoded_field_is_rejected_even_when_decoded_value_fits() {
-    let source = r#"
-        worker_processes 1;
-        events { worker_connections 64; }
-        http {
-            large_client_header_buffers 4 96;
-            server {
-                listen 127.0.0.1:18464 http2;
-                location / { return 204; }
-            }
-        }
-    "#;
-    let (prefix, config) = test_config(source, &[]);
-    let group = build_listener_groups(&config)[0].clone();
-    let state = test_state(&config);
-    let local = group.address.clone();
-    let remote: SocketAddr = "127.0.0.1:45686".parse().unwrap();
-    let (client, server) = tokio::io::duplex(64 * 1024);
-    let server_task = tokio::spawn(handle_http_connection(
-        server,
-        ConnectionAddresses::direct(ListenAddress::Inet(remote), local),
-        group,
-        state,
-    ));
-    let (mut sender, connection) = h2::client::handshake(client).await.unwrap();
-    let driver = tokio::spawn(connection);
-
     // HPACK encodes '!' with a 10-bit Huffman code. The 90-byte decoded
     // value is under the 96-byte limit, but its 113-byte encoding is over it.
-    let request = http::Request::builder()
-        .uri("http://localhost/")
-        .header("x-expand", "!".repeat(90))
-        .body(())
-        .unwrap();
-    let (response, _request_body) = sender.send_request(request, true).unwrap();
-    tokio::time::timeout(Duration::from_secs(2), response)
-        .await
-        .expect("oversized encoded field should close the request")
-        .expect_err("oversized encoded field must not produce a normal response");
+    // Send the block directly so the client encoder cannot choose a raw literal.
+    let value = huffman_bang(90);
+    assert_eq!(value.len(), 113);
 
-    drop(sender);
-    let error = tokio::time::timeout(Duration::from_secs(2), driver)
-        .await
-        .expect("HTTP/2 client driver should observe the connection error")
-        .expect("HTTP/2 client driver task should not panic")
-        .expect_err("oversized encoded field must close the connection");
-    assert_eq!(
-        error.reason(),
-        Some(h2::Reason::ENHANCE_YOUR_CALM),
-        "encoded field limit should be a connection error: {error:?}"
-    );
+    let mut headers = b"\x82\x86\x84\x41\x09localhost".to_vec();
+    headers.extend_from_slice(&[0x00, 0x07]);
+    headers.extend_from_slice(b"x-expand");
+    headers.push(0x80 | value.len() as u8);
+    headers.extend_from_slice(&value);
 
-    tokio::time::timeout(Duration::from_secs(2), server_task)
-        .await
-        .expect("HTTP/2 server should stop")
-        .unwrap();
-    let _ = std::fs::remove_dir_all(prefix);
+    assert_goaway_with_http(
+        "large_client_header_buffers 4 96;",
+        frame(
+            FRAME_HEADERS,
+            FLAG_END_HEADERS | FLAG_END_STREAM,
+            1,
+            &headers,
+        ),
+        h2::Reason::ENHANCE_YOUR_CALM,
+    )
+    .await;
+}
+
+fn huffman_bang(count: usize) -> Vec<u8> {
+    const BANG_CODE: u32 = 0x3f8;
+    const BANG_BITS: u32 = 10;
+
+    let mut output = Vec::with_capacity((count * BANG_BITS as usize).div_ceil(8));
+    let mut bits = 0_u64;
+    let mut bit_count = 0_u32;
+    for _ in 0..count {
+        bits = (bits << BANG_BITS) | u64::from(BANG_CODE);
+        bit_count += BANG_BITS;
+        while bit_count >= 8 {
+            bit_count -= 8;
+            output.push((bits >> bit_count) as u8);
+            bits &= (1_u64 << bit_count) - 1;
+        }
+    }
+    if bit_count != 0 {
+        let padding = 8 - bit_count;
+        output.push(((bits << padding) | ((1_u64 << padding) - 1)) as u8);
+    }
+    output
 }

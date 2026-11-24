@@ -35,6 +35,9 @@ x509-parser = "0.18"
 [dev-dependencies]
 tokio = { version = "1.54", features = ["full", "test-util"] }
 
+[patch.crates-io]
+h2 = { path = "vendor/h2" }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

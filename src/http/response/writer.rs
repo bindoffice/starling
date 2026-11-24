@@ -54,7 +54,7 @@ pub async fn write_response<W: AsyncWrite + Unpin>(
             header
                 .name
                 .len()
-                .saturating_add(header.value.len())
+                .saturating_add(header_value_bytes(&header.value).len())
                 .saturating_add(4)
         })
         .sum::<usize>();
@@ -69,7 +69,7 @@ pub async fn write_response<W: AsyncWrite + Unpin>(
     for header in &response.headers {
         head.extend_from_slice(header.name.as_bytes());
         head.extend_from_slice(b": ");
-        extend_sanitized_header_value(&mut head, &header.value);
+        extend_sanitized_header_value(&mut head, &header_value_bytes(&header.value));
         head.extend_from_slice(b"\r\n");
     }
     head.extend_from_slice(b"\r\n");
@@ -92,16 +92,12 @@ pub async fn write_response<W: AsyncWrite + Unpin>(
     Ok(())
 }
 
-fn extend_sanitized_header_value(output: &mut Vec<u8>, value: &str) {
-    if !value
-        .as_bytes()
-        .iter()
-        .any(|byte| matches!(byte, b'\r' | b'\n'))
-    {
-        output.extend_from_slice(value.as_bytes());
+fn extend_sanitized_header_value(output: &mut Vec<u8>, value: &[u8]) {
+    if !value.iter().any(|byte| matches!(byte, b'\r' | b'\n')) {
+        output.extend_from_slice(value);
         return;
     }
-    output.extend(value.as_bytes().iter().map(|byte| match byte {
+    output.extend(value.iter().map(|byte| match byte {
         b'\r' | b'\n' => b' ',
         _ => *byte,
     }));
@@ -132,7 +128,7 @@ mod tests {
     fn appends_header_values_without_allocating_when_no_sanitizing_is_needed() {
         let mut output = b"Header: ".to_vec();
 
-        extend_sanitized_header_value(&mut output, "safe value");
+        extend_sanitized_header_value(&mut output, b"safe value");
 
         assert_eq!(output, b"Header: safe value");
     }
@@ -141,7 +137,7 @@ mod tests {
     fn replaces_line_breaks_in_header_values_with_spaces() {
         let mut output = Vec::new();
 
-        extend_sanitized_header_value(&mut output, "first\r\nsecond\nthird");
+        extend_sanitized_header_value(&mut output, b"first\r\nsecond\nthird");
 
         assert_eq!(output, b"first  second third");
     }

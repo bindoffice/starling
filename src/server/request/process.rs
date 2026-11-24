@@ -19,6 +19,28 @@ pub(in crate::server) async fn process_request(
     variables: &mut Variables,
     depth: usize,
 ) -> Processed {
+    let mut connection_guard = None;
+    process_request_with_connection_guard(
+        http,
+        server,
+        request,
+        env,
+        variables,
+        depth,
+        &mut connection_guard,
+    )
+    .await
+}
+
+pub(in crate::server) async fn process_request_with_connection_guard(
+    http: &HttpConfig,
+    server: &ServerConfig,
+    request: &mut Request,
+    env: RequestEnv,
+    variables: &mut Variables,
+    depth: usize,
+    connection_guard: &mut Option<ConnectionLimitGuard>,
+) -> Processed {
     Box::pin(process_request_inner(
         http,
         server,
@@ -28,6 +50,7 @@ pub(in crate::server) async fn process_request(
         depth,
         true,
         MAX_URI_CHANGES + 1,
+        connection_guard,
     ))
     .await
 }
@@ -42,6 +65,7 @@ async fn process_request_inner(
     depth: usize,
     run_server_rewrite: bool,
     mut uri_changes: usize,
+    connection_guard: &mut Option<ConnectionLimitGuard>,
 ) -> Processed {
     if depth > MAX_URI_CHANGES + 1 {
         return Processed {
@@ -71,6 +95,7 @@ async fn process_request_inner(
         depth,
         run_server_rewrite,
         uri_changes,
+        connection_guard,
     )
     .await
     {
@@ -79,7 +104,6 @@ async fn process_request_inner(
     };
     let mut env = prepared.env;
     let mut context = Box::new(prepared.context);
-    let _connections = prepared.connection_guard;
     let location = resolve_location(&server.locations, &env.uri);
 
     if let Some((response, tunnel)) = tunnel_request_outcome(request, &context) {
@@ -133,6 +157,7 @@ async fn process_request_inner(
                 depth + 1,
                 false,
                 uri_changes,
+                connection_guard,
             ))
             .await;
         }
@@ -174,6 +199,7 @@ async fn process_request_inner(
                 env: &env,
                 current: &context,
                 depth,
+                connection_guard,
             },
         )
         .await;

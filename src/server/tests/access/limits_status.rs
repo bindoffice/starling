@@ -202,6 +202,84 @@ fn tracks_connection_limit_guards() {
 }
 
 #[tokio::test]
+async fn keeps_connection_limit_guard_alive_after_request_processing() {
+    let (prefix, config) = test_config(
+        r#"
+                worker_processes 1;
+                events { worker_connections 64; }
+                http {
+                    limit_conn_zone $binary_remote_addr zone=perip:10m;
+                    limit_conn perip 1;
+                    server {
+                        listen 127.0.0.1:18119;
+                        location / { return 204; }
+                    }
+                }
+            "#,
+        &[],
+    );
+    let http = config.http.as_ref().expect("http config");
+    let server = &http.servers[0];
+    let request = Request {
+        method: "GET".into(),
+        target: "/".into(),
+        version: "HTTP/1.1".into(),
+        headers: vec![Header {
+            name: "Host".into(),
+            value: "localhost".into(),
+        }],
+        body_stream: None,
+        body: Vec::new(),
+        remote_addr: "127.0.0.1:45678".into(),
+        local_addr: "127.0.0.1:18119".into(),
+        keep_alive: false,
+    };
+    let remote: SocketAddr = "127.0.0.1:45678".parse().unwrap();
+    let local: SocketAddr = "127.0.0.1:18119".parse().unwrap();
+    let limits = Arc::new(Mutex::new(LimitState::default()));
+    let mut variables = Variables::new(&request, "localhost", server, &local, &remote);
+    variables.limits = limits.clone();
+    let env = RequestEnv {
+        uri: "/".into(),
+        args: None,
+        unparsed_uri: Some("/".into()),
+        valid_location: true,
+        internal: false,
+        bypass_try_files: false,
+        add_uri_to_alias: false,
+        limits_checked: false,
+        auth_request_checked: false,
+        mirror_checked: false,
+    };
+    let mut connection_guard = None;
+    let mut request = request;
+    let _processed = process_request_with_connection_guard(
+        http,
+        server,
+        &mut request,
+        env,
+        &mut variables,
+        0,
+        &mut connection_guard,
+    )
+    .await;
+    assert!(connection_guard.is_some());
+
+    let mut second = Variables::new(&request, "localhost", server, &local, &remote);
+    second.limits = limits.clone();
+    assert_eq!(
+        acquire_connection_limits(&server.locations[0].context, &mut second).err(),
+        Some(503)
+    );
+
+    drop(connection_guard);
+    let mut third = Variables::new(&request, "localhost", server, &local, &remote);
+    third.limits = limits;
+    assert!(acquire_connection_limits(&server.locations[0].context, &mut third).is_ok());
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
 async fn exposes_stub_status_connection_counters() {
     let (prefix, config) = test_config(
         r#"

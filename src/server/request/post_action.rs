@@ -87,6 +87,7 @@ pub(in crate::server) async fn execute_post_actions(
             ))
             .await
         } else {
+            let mut connection_guard = None;
             process_named_location(
                 http,
                 server,
@@ -96,6 +97,7 @@ pub(in crate::server) async fn execute_post_actions(
                 variables,
                 depth,
                 MAX_URI_CHANGES + 1,
+                &mut connection_guard,
             )
             .await?
         };

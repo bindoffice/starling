@@ -35,9 +35,10 @@ async fn http2_reload_pressure_keeps_cache_store_and_keepalive_consistent() {
     let (mut client, connection) = h2::client::handshake(stream)
         .await
         .expect("HTTP/2 pressure handshake");
-    let driver = tokio::spawn(async move {
+    let mut driver = tokio::spawn(async move {
         let _ = connection.await;
     });
+    let mut retired_drivers = Vec::new();
 
     for round in 0..ROUNDS {
         let mut streams = Vec::new();
@@ -87,7 +88,14 @@ async fn http2_reload_pressure_keeps_cache_store_and_keepalive_consistent() {
         if round + 1 < ROUNDS {
             server.write_config(&config(port, upstream.port, (round + 1) as u64));
             server.reload();
-            wait_for_h2_version(&mut client, port, &format!("rev-{}", round + 1), &root).await;
+            // Reload drains old HTTP/2 connections with GOAWAY, matching
+            // nginx worker replacement. New requests use a new connection.
+            let (next_client, next_driver) =
+                connect_and_wait_for_h2_version(port, &format!("rev-{}", round + 1), &root).await;
+            let previous_client = std::mem::replace(&mut client, next_client);
+            let previous_driver = std::mem::replace(&mut driver, next_driver);
+            drop(previous_client);
+            retired_drivers.push(previous_driver);
         }
         for stream in streams {
             if let Err(error) = stream.await {
@@ -96,6 +104,9 @@ async fn http2_reload_pressure_keeps_cache_store_and_keepalive_consistent() {
                     fs::read_to_string(root.join("logs/error.log")).unwrap_or_default()
                 );
             }
+        }
+        for retired in retired_drivers.drain(..) {
+            retired.abort();
         }
 
         for index in 0..STREAMS {
@@ -177,30 +188,35 @@ async fn h2_get(
     port: u16,
     target: &str,
 ) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
+    h2_get_result(client, port, target)
+        .await
+        .expect("HTTP/2 control request")
+}
+
+async fn h2_get_result(
+    client: &mut h2::client::SendRequest<bytes::Bytes>,
+    port: u16,
+    target: &str,
+) -> Result<(http::StatusCode, http::HeaderMap, Vec<u8>), h2::Error> {
     let request = http::Request::builder()
         .method("GET")
         .uri(format!("http://localhost:{port}{target}"))
         .body(())
         .unwrap();
-    let (response, _) = client
-        .send_request(request, true)
-        .expect("send HTTP/2 control request");
+    let (response, _) = client.send_request(request, true)?;
     let response = tokio::time::timeout(Duration::from_secs(5), response)
         .await
-        .expect("HTTP/2 control response timeout")
-        .expect("HTTP/2 control response");
+        .expect("HTTP/2 control response timeout")?;
     let status = response.status();
     let headers = response.headers().clone();
     let mut body = response.into_body();
     let mut received = Vec::new();
     while let Some(chunk) = body.data().await {
-        let chunk = chunk.expect("HTTP/2 control body");
-        body.flow_control()
-            .release_capacity(chunk.len())
-            .expect("release HTTP/2 control capacity");
+        let chunk = chunk?;
+        body.flow_control().release_capacity(chunk.len())?;
         received.extend_from_slice(&chunk);
     }
-    (status, headers, received)
+    Ok((status, headers, received))
 }
 
 async fn wait_for_h2_version(
@@ -221,6 +237,45 @@ async fn wait_for_h2_version(
             String::from_utf8_lossy(&body),
             fs::read_to_string(root.join("logs/error.log")).unwrap_or_default()
         );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+async fn connect_and_wait_for_h2_version(
+    port: u16,
+    expected: &str,
+    root: &Path,
+) -> (
+    h2::client::SendRequest<bytes::Bytes>,
+    tokio::task::JoinHandle<()>,
+) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let (mut client, driver) = client_for(port).await;
+        match h2_get_result(&mut client, port, "/version").await {
+            Ok((status, _, body))
+                if status == http::StatusCode::OK && body == expected.as_bytes() =>
+            {
+                return (client, driver);
+            }
+            Ok((status, _, body)) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "HTTP/2 reload did not publish {expected}: status={status} body={:?}\n{}",
+                    String::from_utf8_lossy(&body),
+                    fs::read_to_string(root.join("logs/error.log")).unwrap_or_default()
+                );
+            }
+            Err(_) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "HTTP/2 reload did not publish {expected}\n{}",
+                    fs::read_to_string(root.join("logs/error.log")).unwrap_or_default()
+                );
+            }
+        }
+        drop(client);
+        driver.abort();
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }

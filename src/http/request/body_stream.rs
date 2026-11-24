@@ -1,9 +1,10 @@
 use std::io;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
 use tokio::io::AsyncReadExt;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, watch};
 
 const REQUEST_BODY_CHANNEL_CAPACITY: usize = 2;
 const REQUEST_BODY_FILE_CHUNK_SIZE: usize = 64 * 1024;
@@ -14,8 +15,14 @@ pub struct RequestBodyStream {
 }
 
 enum RequestBodySource {
-    Channel(Mutex<Option<mpsc::Receiver<io::Result<Bytes>>>>),
+    Channel(ChannelBody),
     File(Arc<super::body_storage::RequestBodyFile>),
+}
+
+struct ChannelBody {
+    receiver: Mutex<Option<mpsc::Receiver<io::Result<Bytes>>>>,
+    h2_window: Option<watch::Sender<Option<u32>>>,
+    ended: Arc<AtomicBool>,
 }
 
 enum FileReader {
@@ -29,6 +36,7 @@ enum FileReader {
 
 pub(crate) struct RequestBodySender {
     sender: mpsc::Sender<io::Result<Bytes>>,
+    ended: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -58,11 +66,30 @@ impl Clone for RequestBodyStream {
 
 impl RequestBodyStream {
     pub(crate) fn channel() -> (RequestBodySender, Self) {
+        Self::channel_inner(None)
+    }
+
+    pub(crate) fn channel_with_h2_window() -> (RequestBodySender, Self, watch::Receiver<Option<u32>>)
+    {
+        let (window, receiver) = watch::channel(None);
+        let (sender, stream) = Self::channel_inner(Some(window));
+        (sender, stream, receiver)
+    }
+
+    fn channel_inner(h2_window: Option<watch::Sender<Option<u32>>>) -> (RequestBodySender, Self) {
         let (sender, receiver) = mpsc::channel(REQUEST_BODY_CHANNEL_CAPACITY);
+        let ended = Arc::new(AtomicBool::new(false));
         (
-            RequestBodySender { sender },
+            RequestBodySender {
+                sender,
+                ended: ended.clone(),
+            },
             Self {
-                source: Arc::new(RequestBodySource::Channel(Mutex::new(Some(receiver)))),
+                source: Arc::new(RequestBodySource::Channel(ChannelBody {
+                    receiver: Mutex::new(Some(receiver)),
+                    h2_window,
+                    ended,
+                })),
                 file_reader: Arc::new(Mutex::new(FileReader::NotStarted)),
             },
         )
@@ -92,8 +119,8 @@ impl RequestBodyStream {
 
     pub async fn next(&self) -> io::Result<Option<Bytes>> {
         match self.source.as_ref() {
-            RequestBodySource::Channel(receiver) => {
-                let mut receiver = receiver.lock().await;
+            RequestBodySource::Channel(channel) => {
+                let mut receiver = channel.receiver.lock().await;
                 let Some(channel) = receiver.as_mut() else {
                     return Ok(None);
                 };
@@ -171,12 +198,28 @@ impl RequestBodyStream {
 
     pub async fn close(&self) {
         match self.source.as_ref() {
-            RequestBodySource::Channel(receiver) => {
-                receiver.lock().await.take();
+            RequestBodySource::Channel(channel) => {
+                channel.receiver.lock().await.take();
             }
             RequestBodySource::File(_) => {
                 *self.file_reader.lock().await = FileReader::Done;
             }
+        }
+    }
+
+    pub(crate) fn set_h2_window_target(&self, target: u32) {
+        let RequestBodySource::Channel(channel) = self.source.as_ref() else {
+            return;
+        };
+        if let Some(window) = &channel.h2_window {
+            window.send_replace(Some(target));
+        }
+    }
+
+    pub(crate) fn is_ended(&self) -> bool {
+        match self.source.as_ref() {
+            RequestBodySource::Channel(channel) => channel.ended.load(Ordering::Acquire),
+            RequestBodySource::File(_) => true,
         }
     }
 }
@@ -244,6 +287,10 @@ impl RequestBodySender {
 
     pub(crate) async fn fail(&self, error: io::Error) {
         let _ = self.sender.send(Err(error)).await;
+    }
+
+    pub(crate) fn finish(&self) {
+        self.ended.store(true, Ordering::Release);
     }
 }
 

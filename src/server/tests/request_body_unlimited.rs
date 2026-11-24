@@ -40,9 +40,13 @@ async fn h2_body_task_treats_zero_limit_as_unlimited() {
         let stream = task.stream();
 
         let first = next_unlimited_h2_chunk(&stream, &mut connection).await;
-        assert_eq!(&first[..], b"part");
-        let rest = next_unlimited_h2_chunk(&stream, &mut connection).await;
-        assert_eq!(&rest[..], b"remain");
+        let body = if first.as_ref() == b"part" {
+            let rest = next_unlimited_h2_chunk(&stream, &mut connection).await;
+            [first.as_ref(), rest.as_ref()].concat()
+        } else {
+            first.to_vec()
+        };
+        assert_eq!(body, b"partremain");
         assert!(stream.next().await.unwrap().is_none());
         task.finish().await.unwrap();
 

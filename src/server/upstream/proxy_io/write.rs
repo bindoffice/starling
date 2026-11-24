@@ -22,7 +22,30 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut head = format!("{} {} HTTP/{version}\r\n", outgoing.method, outgoing.path);
+    let cookies: Vec<&str> = outgoing
+        .headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+        .map(|(_, value)| value.as_str())
+        .collect();
+    let mut wrote_cookies = false;
     for (name, value) in &outgoing.headers {
+        if name.eq_ignore_ascii_case("cookie") {
+            if wrote_cookies {
+                continue;
+            }
+            wrote_cookies = true;
+            head.push_str(name);
+            head.push_str(": ");
+            for (index, cookie) in cookies.iter().enumerate() {
+                if index != 0 {
+                    head.push_str("; ");
+                }
+                head.push_str(cookie);
+            }
+            head.push_str("\r\n");
+            continue;
+        }
         head.push_str(name);
         head.push_str(": ");
         head.push_str(value);
@@ -33,6 +56,9 @@ where
     if let Some(body) = &outgoing.body_stream {
         let mut total = 0_u64;
         while let Some(chunk) = body.next_limited(&mut total, outgoing.body_limit).await? {
+            if chunk.is_empty() {
+                continue;
+            }
             if outgoing.body_chunked {
                 write_all_timed(stream, format!("{:X}\r\n", chunk.len()).as_bytes(), timeout)
                     .await?;

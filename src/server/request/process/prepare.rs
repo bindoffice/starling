@@ -3,7 +3,6 @@ use super::*;
 pub(super) struct PreparedRequest {
     pub(super) env: RequestEnv,
     pub(super) context: EffectiveConfig,
-    pub(super) connection_guard: Option<ConnectionLimitGuard>,
 }
 
 pub(super) enum PrepareOutcome {
@@ -21,8 +20,8 @@ pub(super) async fn prepare_request(
     depth: usize,
     mut run_server_rewrite: bool,
     mut uri_changes: usize,
+    connection_guard: &mut Option<ConnectionLimitGuard>,
 ) -> PrepareOutcome {
-    let mut connection_guard = None;
     loop {
         env.add_uri_to_alias = false;
         let mut server_context = Box::new(server.context.clone());
@@ -30,7 +29,10 @@ pub(super) async fn prepare_request(
         variables.set_variable_warning_context(&server_context, server_logger.clone());
         prepare_userid_variables(&server_context, variables);
         refresh_variables(&env, None, variables, &server_context);
-        if run_server_rewrite && !server_may_stream_request_body(server) {
+        if run_server_rewrite
+            && !server_context.rewrite_actions.is_empty()
+            && !server_may_stream_request_body(server)
+        {
             if let Err(error) = buffer_request_body(request, &server_context).await {
                 request.keep_alive = false;
                 return response_outcome(*server_context, request_body_error_response(&error));
@@ -98,7 +100,9 @@ pub(super) async fn prepare_request(
         variables.set_variable_warning_context(&context, context_logger.clone());
         prepare_userid_variables(&context, variables);
         refresh_variables(&env, location, variables, &context);
-        if !request_body_stream_enabled(request, &context) {
+        if !request_body_stream_enabled(request, &context)
+            && should_buffer_request_body(request, &context)
+        {
             if let Err(error) = buffer_request_body(request, &context).await {
                 request.keep_alive = false;
                 return response_outcome(*context, request_body_error_response(&error));
@@ -113,7 +117,7 @@ pub(super) async fn prepare_request(
             }
             set_buffered_request_body_variable(request, variables);
         }
-        if let Some(processed) = pre_rewrite_response(
+        if let Some(processed) = Box::pin(pre_rewrite_response(
             http,
             server,
             request,
@@ -122,8 +126,8 @@ pub(super) async fn prepare_request(
             &context,
             location,
             variables,
-            &mut connection_guard,
-        )
+            connection_guard,
+        ))
         .await
         {
             return PrepareOutcome::Response(processed);
@@ -216,6 +220,7 @@ pub(super) async fn prepare_request(
                         variables,
                         depth,
                         uri_changes,
+                        connection_guard,
                     )
                     .await
                     {
@@ -229,7 +234,6 @@ pub(super) async fn prepare_request(
         return PrepareOutcome::Ready(PreparedRequest {
             env,
             context: *context,
-            connection_guard,
         });
     }
 }

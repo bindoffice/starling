@@ -100,6 +100,7 @@ fn tls_multihop_business_flow_survives_store_failures_and_denied_redirects() {
         b"",
     );
     if denied.is_empty() {
+        server.assert_running();
         panic!(
             "denied TLS request returned no response:\n{}",
             server.diagnostics()

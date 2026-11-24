@@ -55,6 +55,7 @@ async fn selects_the_inherited_or_overridden_http_error_logger() {
                 connection_request: ConnectionRequestState::new(0, std::time::Instant::now(), 0),
                 invalid_host: false,
                 client_abort: None,
+                request_length: None,
             },
             &state,
         )

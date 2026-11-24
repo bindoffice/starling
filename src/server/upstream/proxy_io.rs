@@ -116,22 +116,39 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
     ProxyFailure,
 > {
     connection.requests = connection.requests.saturating_add(1);
-    write_proxy_request_timed(
+    let write_result = write_proxy_request_timed(
         &mut connection.reader,
         outgoing,
         version,
         Some(context.proxy_send_timeout),
     )
-    .await
-    .map_err(proxy_failure_from_io)?;
-    let head = {
+    .await;
+    let mut write_error = None;
+    let write_incomplete = match write_result {
+        Ok(()) => false,
+        Err(error) if crate::http::request_body_error_status(&error).is_some() => {
+            return Err(proxy_failure_from_io(error));
+        }
+        Err(error) if outgoing.body_stream.is_none() => {
+            return Err(proxy_failure_from_io(error));
+        }
+        Err(error) => {
+            write_error = Some(error);
+            true
+        }
+    };
+    let head_result = {
         let mut reader = TimedReader::new(&mut connection.reader, context.proxy_read_timeout);
-        read_upstream_response_head(&mut reader, context.proxy_buffering.buffer_size)
-            .await
-            .map_err(proxy_failure_from_io)?
+        read_upstream_response_head(&mut reader, context.proxy_buffering.buffer_size).await
+    };
+    let head = match head_result {
+        Ok(head) => head,
+        Err(error) => return Err(proxy_failure_from_io(write_error.unwrap_or(error))),
     };
     let header_time = head.header_time;
-    let stream_reuse = stream_reuse_allowed && can_reuse_stream_head(outgoing, version, &head);
+    let stream_reuse = stream_reuse_allowed
+        && !write_incomplete
+        && can_reuse_stream_head(outgoing, version, &head);
     let body_streaming_allowed = streaming_allowed && !outgoing.method.eq_ignore_ascii_case("HEAD");
     if body_streaming_allowed && can_stream_response(context, head.status, &head.headers) {
         let (reuse_tx, reuse_rx) = deferred_stream_connection(stream_reuse);

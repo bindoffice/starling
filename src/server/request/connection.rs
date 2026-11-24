@@ -304,6 +304,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 ),
                 invalid_host,
                 client_abort: Some(client_abort.clone()),
+                request_length: None,
             },
             &state,
         );

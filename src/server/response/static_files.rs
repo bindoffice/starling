@@ -147,6 +147,9 @@ pub(in crate::server) fn map_request_path(
                 _ => "",
             },
         };
+        if suffix.trim_start_matches('/').is_empty() {
+            return alias;
+        }
         return alias.join(suffix.trim_start_matches('/'));
     }
     context.root.join(uri.trim_start_matches('/'))

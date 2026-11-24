@@ -109,6 +109,7 @@ pub(in crate::server) fn variable_value(
         "is_request_port" => variables.is_request_port.clone(),
         "scheme" => variables.scheme.clone(),
         "https" => variables.https.clone(),
+        "http2" => variables.http2.clone(),
         "connection" => variables.connection.clone(),
         "connection_requests" => variables.connection_requests.clone(),
         "connection_time" => variables.connection_time.clone(),

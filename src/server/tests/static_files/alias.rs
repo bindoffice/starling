@@ -65,3 +65,34 @@ async fn evaluates_regex_alias_captures_for_files_and_request_filename() {
     assert!(tried.ends_with("tried"), "{tried}");
     let _ = std::fs::remove_dir_all(prefix);
 }
+
+#[tokio::test]
+async fn serves_an_exact_alias_file_without_appending_the_uri() {
+    let (prefix, config) = test_config(
+        r#"
+                worker_processes 1;
+                events { worker_connections 64; }
+                http {
+                    server {
+                        listen 127.0.0.1:18158;
+                        server_name localhost;
+                        location /alias-file {
+                            alias data/file.txt;
+                        }
+                    }
+                }
+            "#,
+        &[],
+    );
+    std::fs::create_dir_all(prefix.join("data")).unwrap();
+    std::fs::write(prefix.join("data/file.txt"), b"aliased").unwrap();
+
+    let response = request_body(
+        &config,
+        "GET /alias-file HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    assert!(response.ends_with("aliased"), "{response}");
+    let _ = std::fs::remove_dir_all(prefix);
+}

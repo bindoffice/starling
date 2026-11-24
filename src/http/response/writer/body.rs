@@ -297,9 +297,15 @@ pub(super) async fn write_chunked_trailers<W: AsyncWrite + Unpin>(
         }
         writer.write_all(trailer.name.as_bytes()).await?;
         writer.write_all(b": ").await?;
-        writer
-            .write_all(sanitize_header_value(&trailer.value).as_bytes())
-            .await?;
+        let value = header_value_bytes(&trailer.value);
+        let sanitized: Vec<u8> = value
+            .iter()
+            .map(|byte| match byte {
+                b'\r' | b'\n' => b' ',
+                byte => *byte,
+            })
+            .collect();
+        writer.write_all(&sanitized).await?;
         writer.write_all(b"\r\n").await?;
     }
     writer.write_all(b"\r\n").await

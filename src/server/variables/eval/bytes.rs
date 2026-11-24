@@ -13,7 +13,8 @@ pub(in crate::server) fn append_variable_bytes(
         output.extend_from_slice(&binary_address_bytes(&variables.remote_addr));
         return;
     }
-    output.extend_from_slice(variable_value(name, variables, stack).as_bytes());
+    let value = variable_value(name, variables, stack);
+    output.extend_from_slice(&crate::http::header_value_bytes(&value));
 }
 
 pub(in crate::server) fn binary_address_bytes(value: &str) -> Vec<u8> {

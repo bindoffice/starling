@@ -51,11 +51,13 @@ async fn completes_tls_handshake_and_serves_https() {
     assert!(server_config.default.ignore_client_order);
     let logger = Arc::new(Logger::new(&config.core.error_logs, &config.prefix).unwrap());
     let http_error_loggers = build_http_error_loggers(&config).unwrap();
+    let (reload, _) = watch::channel(0_u64);
     let state = SharedState {
         config: Arc::new(ArcSwap::from_pointee(RuntimeSnapshot {
             config: config.clone(),
             upstream_keepalive_generation: 0,
         })),
+        reload: Arc::new(reload),
         tls_configs: Arc::new(RwLock::new(HashMap::new())),
         stream_tls_configs: Arc::new(RwLock::new(HashMap::new())),
         logger,

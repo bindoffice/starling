@@ -1,4 +1,5 @@
 use super::support::*;
+use crate::config::GzipHttpVersion;
 
 #[tokio::test]
 async fn honors_request_version_and_user_agent_gzip_rules() {
@@ -96,4 +97,11 @@ async fn honors_request_version_and_user_agent_gzip_rules() {
     .await;
     assert!(compressed(&response), "HTTP/1.1 must support gzip");
     let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[test]
+fn http2_uses_http11_gzip_version_rules() {
+    assert!(GzipHttpVersion::Http11.allows("HTTP/2.0"));
+    assert!(GzipHttpVersion::Http10.allows("HTTP/2.0"));
+    assert!(!GzipHttpVersion::Http11.allows("HTTP/3.0"));
 }

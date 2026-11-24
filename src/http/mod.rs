@@ -164,6 +164,69 @@ pub struct Header {
     pub value: String,
 }
 
+const RAW_HEADER_PREFIX: &str = "\0starling-raw:";
+const RAW_HEADER_SUFFIX: char = '\0';
+
+pub(crate) fn header_value_from_bytes(bytes: &[u8]) -> String {
+    if let Ok(value) = std::str::from_utf8(bytes) {
+        return value.to_owned();
+    }
+
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut value = String::with_capacity(
+        RAW_HEADER_PREFIX
+            .len()
+            .saturating_add(bytes.len().saturating_mul(2))
+            .saturating_add(1),
+    );
+    value.push_str(RAW_HEADER_PREFIX);
+    for byte in bytes {
+        value.push(HEX[usize::from(byte >> 4)] as char);
+        value.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    value.push(RAW_HEADER_SUFFIX);
+    value
+}
+
+pub(crate) fn header_value_bytes(value: &str) -> Cow<'_, [u8]> {
+    if !value.contains(RAW_HEADER_PREFIX) {
+        return Cow::Borrowed(value.as_bytes());
+    }
+    let Some(decoded) = decode_raw_header_values(value) else {
+        return Cow::Borrowed(value.as_bytes());
+    };
+    Cow::Owned(decoded)
+}
+
+fn decode_raw_header_values(value: &str) -> Option<Vec<u8>> {
+    let mut output = Vec::with_capacity(value.len());
+    let mut remaining = value;
+    while let Some(start) = remaining.find(RAW_HEADER_PREFIX) {
+        output.extend_from_slice(&remaining.as_bytes()[..start]);
+        let encoded_with_suffix = &remaining[start + RAW_HEADER_PREFIX.len()..];
+        let end = encoded_with_suffix.find(RAW_HEADER_SUFFIX)?;
+        let encoded = &encoded_with_suffix[..end];
+        if !encoded.len().is_multiple_of(2) {
+            return None;
+        }
+        for pair in encoded.as_bytes().as_chunks::<2>().0 {
+            output.push((hex_digit(pair[0])? << 4) | hex_digit(pair[1])?);
+        }
+        remaining = &encoded_with_suffix[end + RAW_HEADER_SUFFIX.len_utf8()..];
+    }
+    output.extend_from_slice(remaining.as_bytes());
+    Some(output)
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 #[derive(Debug)]
 pub struct RequestHead {
     pub method: String,

@@ -77,7 +77,7 @@ pub(in crate::http) fn is_token_byte(byte: u8) -> bool {
         )
 }
 
-pub(in crate::http) fn valid_host(value: &str) -> bool {
+pub(crate) fn valid_host(value: &str) -> bool {
     if value.is_empty() {
         return false;
     }

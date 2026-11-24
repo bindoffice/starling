@@ -1,6 +1,14 @@
 use super::super::support::*;
 use super::super::*;
 
+async fn read_h2_body_without_window_updates(mut body: h2::RecvStream) -> Vec<u8> {
+    let mut output = Vec::new();
+    while let Some(data) = body.data().await {
+        output.extend_from_slice(&data.unwrap());
+    }
+    output
+}
+
 #[tokio::test]
 async fn enforces_keepalive_requests_on_http2_connections() {
     let source = r#"
@@ -27,9 +35,11 @@ async fn enforces_keepalive_requests_on_http2_connections() {
         group,
         state,
     ));
-    let (mut sender, connection) = h2::client::handshake(client).await.unwrap();
+    let mut builder = h2::client::Builder::new();
+    builder.initial_window_size(1 << 20);
+    let (mut sender, mut connection) = builder.handshake::<_, Bytes>(client).await.unwrap();
+    connection.set_target_window_size(1 << 21);
     let driver = tokio::spawn(connection);
-    eprintln!("handshake complete");
 
     for _ in 0..2 {
         let request = http::Request::builder()
@@ -67,6 +77,79 @@ async fn enforces_keepalive_requests_on_http2_connections() {
         .expect("HTTP/2 server should close after the request limit")
         .unwrap();
     driver.abort();
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
+async fn drains_large_responses_before_keepalive_goaway() {
+    let body = "SEE-THAT".repeat(50_000);
+    let static_path = std::env::temp_dir().join(format!(
+        "starling-h2-large-body-{}.html",
+        std::process::id()
+    ));
+    std::fs::write(&static_path, &body).unwrap();
+    let source = r#"
+        worker_processes 1;
+        events { worker_connections 64; }
+        http {
+            server {
+                listen 127.0.0.1:18468 http2;
+                keepalive_requests 2;
+                keepalive_timeout 5s;
+                location / { alias @FILE@; }
+            }
+        }
+    "#
+    .replace("@FILE@", &static_path.display().to_string());
+    let (prefix, config) = test_config(&source, &[]);
+    let group = build_listener_groups(&config)[0].clone();
+    let state = test_state(&config);
+    let local = group.address.clone();
+    let remote: SocketAddr = "127.0.0.1:45688".parse().unwrap();
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let server_task = tokio::spawn(handle_http_connection(
+        server,
+        ConnectionAddresses::direct(ListenAddress::Inet(remote), local),
+        group,
+        state,
+    ));
+    let mut builder = h2::client::Builder::new();
+    builder.initial_window_size(1 << 20);
+    let (mut sender, mut connection) = builder.handshake::<_, Bytes>(client).await.unwrap();
+    connection.set_target_window_size(1 << 21);
+    let driver = tokio::spawn(connection);
+
+    for request_number in 1..=2 {
+        let request = http::Request::builder()
+            .uri("http://localhost/")
+            .body(())
+            .unwrap();
+        let (response, _) = sender.send_request(request, true).unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(2), response)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = tokio::time::timeout(
+            Duration::from_secs(5),
+            read_h2_body_without_window_updates(response.into_body()),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("response {request_number} body timed out"));
+        assert_eq!(
+            body.len(),
+            400_000,
+            "response {request_number} was truncated"
+        );
+    }
+
+    drop(sender);
+    tokio::time::timeout(Duration::from_secs(5), server_task)
+        .await
+        .expect("HTTP/2 server should close after draining the second response")
+        .unwrap();
+    driver.abort();
+    let _ = std::fs::remove_file(static_path);
     let _ = std::fs::remove_dir_all(prefix);
 }
 

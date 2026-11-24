@@ -16,3 +16,4 @@ mod requests;
 mod streaming;
 mod streaming_errors;
 mod streaming_prefetch;
+mod upstream_early_response;

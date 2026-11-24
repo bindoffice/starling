@@ -36,12 +36,22 @@ pub(in crate::server) async fn write_fastcgi_request_with_stream<W: AsyncWrite +
         write_fastcgi_record_with_timeout(writer, FCGI_PARAMS, &parameter, send_timeout).await?;
     }
     write_fastcgi_record_with_timeout(writer, FCGI_PARAMS, &[], send_timeout).await?;
+    let mut sent_end_record = false;
     if let Some(body_stream) = stream {
         let mut total = 0_u64;
         while let Some(chunk) = body_stream.next_limited(&mut total, limit).await? {
-            for chunk in chunk.chunks(u16::MAX as usize) {
-                write_fastcgi_record_with_timeout(writer, FCGI_STDIN, chunk, send_timeout).await?;
+            if chunk.is_empty() {
+                continue;
             }
+            let mut records = Vec::with_capacity(chunk.len() + 64);
+            for chunk in chunk.chunks(u16::MAX as usize) {
+                encode_fastcgi_record(&mut records, FCGI_STDIN, chunk);
+            }
+            if body_stream.is_ended() {
+                encode_fastcgi_record(&mut records, FCGI_STDIN, &[]);
+                sent_end_record = true;
+            }
+            write_all_with_timeout(writer, &records, send_timeout).await?;
         }
     } else if context.fastcgi_pass_request_body {
         let body = request.body.as_slice();
@@ -49,7 +59,9 @@ pub(in crate::server) async fn write_fastcgi_request_with_stream<W: AsyncWrite +
             write_fastcgi_record_with_timeout(writer, FCGI_STDIN, chunk, send_timeout).await?;
         }
     }
-    write_fastcgi_record_with_timeout(writer, FCGI_STDIN, &[], send_timeout).await?;
+    if !sent_end_record {
+        write_fastcgi_record_with_timeout(writer, FCGI_STDIN, &[], send_timeout).await?;
+    }
     flush_with_timeout(writer, send_timeout).await
 }
 
@@ -76,6 +88,12 @@ pub(in crate::server) async fn write_fastcgi_record<W: AsyncWrite + Unpin>(
     record_type: u8,
     content: &[u8],
 ) -> io::Result<()> {
+    let mut record = Vec::with_capacity(content.len() + 15);
+    encode_fastcgi_record(&mut record, record_type, content);
+    writer.write_all(&record).await
+}
+
+fn encode_fastcgi_record(output: &mut Vec<u8>, record_type: u8, content: &[u8]) {
     let padding = (8 - content.len() % 8) % 8;
     let header = [
         1,
@@ -87,12 +105,11 @@ pub(in crate::server) async fn write_fastcgi_record<W: AsyncWrite + Unpin>(
         padding as u8,
         0,
     ];
-    writer.write_all(&header).await?;
-    writer.write_all(content).await?;
+    output.extend_from_slice(&header);
+    output.extend_from_slice(content);
     if padding > 0 {
-        writer.write_all(&[0_u8; 8][..padding]).await?;
+        output.resize(output.len() + padding, 0);
     }
-    Ok(())
 }
 
 pub(in crate::server) fn build_fastcgi_params(

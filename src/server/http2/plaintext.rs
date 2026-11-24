@@ -5,6 +5,8 @@ const HTTP2_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 enum PlaintextProtocol<S> {
     Http2(PrefixedStream<S>),
     Http1(PrefixedStream<S>),
+    InvalidHttp1(PrefixedStream<S>),
+    InvalidHttp2(PrefixedStream<S>),
 }
 
 pub(in crate::server) async fn handle_plaintext_http_connection<S>(
@@ -58,6 +60,15 @@ pub(in crate::server) async fn handle_plaintext_http_connection<S>(
             )
             .await;
         }
+        PlaintextProtocol::InvalidHttp1(mut stream)
+        | PlaintextProtocol::InvalidHttp2(mut stream) => {
+            let _ = stream
+                .write_all(
+                    b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+            let _ = stream.shutdown().await;
+        }
     }
 }
 
@@ -76,7 +87,20 @@ where
             )));
         }
         prefix.extend_from_slice(&buffer[offset..offset + read]);
+        if prefix
+            .first()
+            .is_some_and(|byte| !is_http_method_start(*byte))
+        {
+            return Ok(PlaintextProtocol::InvalidHttp1(PrefixedStream::new(
+                stream, prefix,
+            )));
+        }
         if !HTTP2_PREFACE.starts_with(&prefix) {
+            if prefix.starts_with(b"PRI * HTTP/2.0\r\n\r\n") {
+                return Ok(PlaintextProtocol::InvalidHttp2(PrefixedStream::new(
+                    stream, prefix,
+                )));
+            }
             return Ok(PlaintextProtocol::Http1(PrefixedStream::new(
                 stream, prefix,
             )));
@@ -85,6 +109,10 @@ where
     Ok(PlaintextProtocol::Http2(PrefixedStream::new(
         stream, prefix,
     )))
+}
+
+fn is_http_method_start(byte: u8) -> bool {
+    byte.is_ascii_uppercase() || matches!(byte, b'_' | b'-')
 }
 
 #[cfg(test)]
@@ -121,5 +149,30 @@ mod tests {
         let mut received = Vec::new();
         stream.read_to_end(&mut received).await.unwrap();
         assert_eq!(received, request);
+    }
+
+    #[tokio::test]
+    async fn rejects_lowercase_methods_without_waiting_for_a_line_end() {
+        let (mut client, server) = tokio::io::duplex(64);
+        client.write_all(b"xxxxxxxxxxxxxxxx").await.unwrap();
+
+        assert!(matches!(
+            detect_plaintext_protocol(server).await.unwrap(),
+            PlaintextProtocol::InvalidHttp1(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_a_malformed_http2_preface_as_http1() {
+        let (mut client, server) = tokio::io::duplex(64);
+        client
+            .write_all(b"PRI * HTTP/2.0\r\n\r\nxxxxxxxx")
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            detect_plaintext_protocol(server).await.unwrap(),
+            PlaintextProtocol::InvalidHttp2(_)
+        ));
     }
 }

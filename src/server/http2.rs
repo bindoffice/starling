@@ -3,6 +3,7 @@ use super::*;
 mod body;
 mod connection;
 mod fault;
+mod frame_timeout;
 mod frame_validation;
 mod hpack_validation;
 mod informational;
@@ -12,14 +13,22 @@ mod send;
 
 use connection::settings_for_connection;
 pub(in crate::server) use fault::H2ConnectionFault;
+use frame_timeout::{FrameTimeoutEvents, FrameTimeoutTracker};
 use frame_validation::FrameValidatedStream;
 pub(in crate::server) use informational::send_h2_early_hints;
 pub(in crate::server) use plaintext::handle_plaintext_http_connection;
 use request::{
     h2_content_length, h2_header_field_too_large, h2_header_list_too_large,
-    receive_header_list_limit, request_from_h2_parts,
+    invalid_h2_request_headers, receive_header_list_limit, request_from_h2_parts,
 };
-pub(super) use send::{is_h2_connection_header, send_h2_response};
+pub(super) use send::{
+    is_h2_connection_header, send_h2_response, send_h2_response_discarding_request_body,
+};
+
+// Let the frame-level tracker win the race for a partially received DATA
+// frame. The body pump has a generic timeout response path; a frame timeout
+// must instead emit RST_STREAM(PROTOCOL_ERROR) before that response is queued.
+const BODY_TIMEOUT_GRACE: Duration = Duration::from_millis(10);
 
 pub(super) async fn handle_h2<S>(
     stream: S,
@@ -36,11 +45,22 @@ pub(super) async fn handle_h2<S>(
         settings_for_connection(&config, &group, &addresses)
     };
     let limits = settings.limits;
-    let stream = FrameValidatedStream::new(stream, settings.max_header_field_size);
+    let (frame_timeouts, frame_timeout_events) =
+        FrameTimeoutTracker::new(settings.header_timeout, settings.body_timeout);
+    let settings_acked = Arc::new(AtomicBool::new(false));
+    let stream = FrameValidatedStream::new(
+        stream,
+        settings.max_header_field_size,
+        settings.max_frame_size as usize,
+        frame_timeouts.clone(),
+        settings_acked.clone(),
+    );
     let mut builder = h2_server::Builder::new();
     builder
         .max_concurrent_streams(limits.max_concurrent_streams)
+        .max_frame_size(settings.max_frame_size)
         .initial_window_size(limits.body_preread_size)
+        .initial_connection_window_size(limits.body_preread_size)
         .max_header_list_size(receive_header_list_limit(limits.max_header_list_size));
     let handshake = async {
         if settings.header_timeout == Duration::ZERO {
@@ -76,7 +96,18 @@ pub(super) async fn handle_h2<S>(
     };
 
     connection::serve_connection(
-        connection, settings, addresses, group, state, nodelay, shutdown,
+        connection,
+        connection::H2ConnectionContext {
+            settings,
+            addresses,
+            group,
+            state,
+            nodelay,
+            shutdown,
+            frame_timeouts,
+            frame_timeout_events,
+            settings_acked,
+        },
     )
     .await;
 }
@@ -94,6 +125,11 @@ pub(super) async fn handle_h2_request(
         max_header_field_size,
         max_header_list_size,
         nodelay,
+        connection_id,
+        connection_started,
+        served_requests,
+        body_preread_size,
+        settings_acked,
     } = options;
     let (parts, body) = request.into_parts();
     let method = parts.method.as_str().to_string();
@@ -113,6 +149,7 @@ pub(super) async fn handle_h2_request(
         )
         .await;
     }
+    let invalid_request_headers = invalid_h2_request_headers(&parts);
     let content_length = match h2_content_length(&parts.headers) {
         Ok(length) => length,
         Err(_) => {
@@ -127,6 +164,10 @@ pub(super) async fn handle_h2_request(
         }
     };
     let body_end = body.is_end_stream();
+    if !body_end && !settings_acked.load(Ordering::Relaxed) && body_preread_size < 65_535 {
+        respond.send_reset(h2::Reason::REFUSED_STREAM);
+        return Ok(());
+    }
     if body_end && content_length.is_some_and(|length| length != 0) {
         return send_h2_response(
             respond,
@@ -155,7 +196,7 @@ pub(super) async fn handle_h2_request(
     let snapshot = state.config_snapshot();
     let config = &snapshot.config;
     let header_count = parts.headers.len() as u64;
-    let mut request = request_from_h2_parts(
+    let (mut request, request_length) = request_from_h2_parts(
         parts,
         Vec::new(),
         connection.remote.variable_address(),
@@ -185,6 +226,11 @@ pub(super) async fn handle_h2_request(
     let body_timeout = server_context
         .map(|server| server.context.client_body_timeout)
         .unwrap_or_else(|| Duration::from_secs(60));
+    let body_timeout = if body_timeout.is_zero() {
+        body_timeout
+    } else {
+        body_timeout.saturating_add(BODY_TIMEOUT_GRACE)
+    };
     let body_task = (!body_end).then(|| {
         H2BodyTask::spawn_with_connection_fault_and_length(
             body,
@@ -206,9 +252,14 @@ pub(super) async fn handle_h2_request(
             DispatchRequestContext {
                 request: &request,
                 connection,
-                connection_request: ConnectionRequestState::new(0, Instant::now(), 0),
-                invalid_host: false,
+                connection_request: ConnectionRequestState::new(
+                    connection_id,
+                    connection_started,
+                    served_requests,
+                ),
+                invalid_host: invalid_request_headers,
                 client_abort: Some(client_abort.clone()),
+                request_length,
             },
             state,
         );
@@ -231,14 +282,14 @@ pub(super) async fn handle_h2_request(
     };
     let Some(action) = action else {
         if let Some(task) = body_task {
-            finish_or_detach_body_task(task).await;
+            let _ = finish_or_detach_body_task(task).await;
         }
         respond.send_reset(h2::Reason::CANCEL);
         return Ok(());
     };
     if client_closed {
         if let Some(task) = body_task {
-            finish_or_detach_body_task(task).await;
+            let _ = finish_or_detach_body_task(task).await;
         }
         match action {
             DispatchAction::Response(mut outcome) => {
@@ -252,7 +303,7 @@ pub(super) async fn handle_h2_request(
         DispatchAction::Response(outcome) => outcome,
         DispatchAction::Tunnel(_) => {
             if let Some(task) = body_task {
-                finish_or_detach_body_task(task).await;
+                let _ = finish_or_detach_body_task(task).await;
             }
             return send_h2_response(
                 respond,
@@ -264,38 +315,84 @@ pub(super) async fn handle_h2_request(
             .await;
         }
     };
-    if let Some(task) = body_task {
-        finish_or_detach_body_task(task).await;
+    let body_task_outcome = if let Some(task) = body_task {
+        finish_or_detach_body_task(task).await
+    } else {
+        BodyTaskOutcome::Finished(Ok(()))
+    };
+    if let BodyTaskOutcome::Finished(Err(error)) = &body_task_outcome {
+        let status = crate::http::request_body_error_status(error).unwrap_or(500);
+        return send_h2_response(
+            respond,
+            error_response(status),
+            &method,
+            server_tokens,
+            chunk_size,
+        )
+        .await;
     }
+    let discard_request_body = matches!(body_task_outcome, BodyTaskOutcome::Detached);
     if let Some(nodelay) = &nodelay {
         nodelay.apply_nodelay(outcome.tcp_nodelay)?;
     }
     send_h2_early_hints(&mut respond, outcome.response.early_hints())?;
-    timeout_io(
-        outcome.send_timeout,
-        send_h2_response(
-            respond,
-            outcome.response,
-            &request.method,
-            outcome.server_tokens,
-            outcome.http2_chunk_size,
-        ),
-    )
-    .await
+    let send = async {
+        if discard_request_body {
+            send_h2_response_discarding_request_body(
+                respond,
+                outcome.response,
+                &request.method,
+                outcome.server_tokens,
+                outcome.http2_chunk_size,
+            )
+            .await
+        } else {
+            send_h2_response(
+                respond,
+                outcome.response,
+                &request.method,
+                outcome.server_tokens,
+                outcome.http2_chunk_size,
+            )
+            .await
+        }
+    };
+    timeout_io(outcome.send_timeout, send).await
 }
 
 pub(super) struct H2RequestOptions {
     pub(super) max_header_field_size: usize,
     pub(super) max_header_list_size: usize,
     pub(super) nodelay: Option<ClientSocketControl>,
+    pub(super) connection_id: u64,
+    pub(super) connection_started: Instant,
+    pub(super) served_requests: u64,
+    pub(super) body_preread_size: u32,
+    pub(super) settings_acked: Arc<AtomicBool>,
 }
 
-async fn finish_or_detach_body_task(task: H2BodyTask) {
+enum BodyTaskOutcome {
+    Finished(io::Result<()>),
+    Detached,
+}
+
+async fn finish_or_detach_body_task(task: H2BodyTask) -> BodyTaskOutcome {
     task.close().await;
+    // A body task that has already received END_STREAM may still need one
+    // scheduling turn to publish a Content-Length/protocol error after its
+    // receiver is closed. Do not turn an already-complete request into an
+    // ordinary response.
+    for _ in 0..4 {
+        if task.is_finished() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
     if task.is_finished() {
-        let _ = task.finish().await;
+        BodyTaskOutcome::Finished(task.finish().await)
     } else {
         task.detach();
+        BodyTaskOutcome::Detached
     }
 }
 

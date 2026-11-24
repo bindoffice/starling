@@ -5,7 +5,7 @@ use std::io::BufReader as StdBufReader;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -167,6 +167,7 @@ pub(in crate::server) fn requested_shutdown_mode(
 #[derive(Clone)]
 pub struct SharedState {
     config: Arc<ArcSwap<RuntimeSnapshot>>,
+    reload: Arc<watch::Sender<u64>>,
     tls_configs: Arc<RwLock<HashMap<ListenAddress, Arc<HttpTlsConfigs>>>>,
     stream_tls_configs: Arc<RwLock<HashMap<ListenAddress, Arc<StreamTlsConfigs>>>>,
     logger: Arc<Logger>,
@@ -197,6 +198,15 @@ impl SharedState {
 
     pub(in crate::server) fn current_config(&self) -> Arc<RuntimeConfig> {
         self.config.load().config.clone()
+    }
+
+    pub(in crate::server) fn reload_receiver(&self) -> watch::Receiver<u64> {
+        self.reload.subscribe()
+    }
+
+    pub(in crate::server) fn notify_reload(&self) {
+        self.reload
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
     }
 }
 

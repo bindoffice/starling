@@ -183,6 +183,7 @@ async fn follow_error_page(
             auth_request_checked: true,
             mirror_checked: true,
         };
+        let mut connection_guard = None;
         let mut processed = process_named_location(
             http,
             server,
@@ -192,6 +193,7 @@ async fn follow_error_page(
             variables,
             depth,
             MAX_URI_CHANGES + 1,
+            &mut connection_guard,
         )
         .await?;
         apply_error_page_overwrite(&mut processed.response, page.overwrite, original_status);

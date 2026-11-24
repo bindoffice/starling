@@ -1,5 +1,6 @@
 use super::*;
 use crate::http::{BodySegment, ResponseStreamItem, is_forbidden_trailer_name};
+use bytes::{Buf, BytesMut};
 
 pub(super) async fn send_h2_body(
     send: &mut h2::SendStream<Bytes>,
@@ -260,36 +261,92 @@ impl H2BodySender<'_> {
                 "response body exceeds Content-Length",
             ));
         }
-        let mut remaining = length;
+        let mut file_remaining = length;
         let mut buffer = vec![0_u8; self.chunk_size];
-        while remaining > 0 {
-            let chunk_len = remaining.min(buffer.len() as u64) as usize;
-            let read = match file.read(&mut buffer[..chunk_len]).await {
-                Ok(0) => {
-                    self.send.send_reset(h2::Reason::INTERNAL_ERROR);
+        let mut pending = BytesMut::with_capacity(self.chunk_size);
+        while file_remaining > 0 || !pending.is_empty() {
+            while file_remaining > 0 && pending.len() < self.chunk_size {
+                let chunk_len =
+                    file_remaining.min((self.chunk_size - pending.len()) as u64) as usize;
+                let read = match file.read(&mut buffer[..chunk_len]).await {
+                    Ok(0) => {
+                        self.send.send_reset(h2::Reason::INTERNAL_ERROR);
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "static file ended before Content-Length",
+                        ));
+                    }
+                    Ok(read) => read,
+                    Err(err) => {
+                        self.send.send_reset(h2::Reason::INTERNAL_ERROR);
+                        return Err(err);
+                    }
+                };
+                file_remaining -= read as u64;
+                self.remaining -= read as u64;
+                pending.extend_from_slice(&buffer[..read]);
+            }
+
+            if pending.is_empty() {
+                break;
+            }
+            let end_of_stream = self.remaining == 0 && !self.has_trailers;
+            match h2_send_data_available(self.send, &pending, end_of_stream, self.chunk_size) {
+                Ok(0) => {}
+                Ok(sent) => {
+                    pending.advance(sent);
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
+
+            self.send.reserve_capacity(pending.len());
+            match std::future::poll_fn(|cx| self.send.poll_capacity(cx)).await {
+                Some(Ok(_)) => {}
+                Some(Err(err)) => return Err(io::Error::other(err)),
+                None => {
                     return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "static file ended before Content-Length",
+                        io::ErrorKind::BrokenPipe,
+                        "HTTP/2 stream closed",
                     ));
                 }
-                Ok(read) => read,
-                Err(err) => {
-                    self.send.send_reset(h2::Reason::INTERNAL_ERROR);
-                    return Err(err);
-                }
-            };
-            remaining -= read as u64;
-            self.remaining -= read as u64;
-            h2_send_data(
-                self.send,
-                Bytes::copy_from_slice(&buffer[..read]),
-                self.remaining == 0 && !self.has_trailers,
-                self.chunk_size,
-            )
-            .await?;
+            }
         }
         Ok(())
     }
+}
+
+fn h2_send_data_available(
+    send: &mut h2::SendStream<Bytes>,
+    data: &[u8],
+    end_of_stream: bool,
+    chunk_size: usize,
+) -> io::Result<usize> {
+    if data.is_empty() {
+        if end_of_stream {
+            send.send_data(Bytes::new(), true)
+                .map_err(io::Error::other)?;
+        }
+        return Ok(0);
+    }
+    let mut offset = 0;
+    while offset < data.len() {
+        let remaining = data.len() - offset;
+        send.reserve_capacity(remaining);
+        let capacity = send.capacity();
+        if capacity == 0 {
+            break;
+        }
+        let end = offset + remaining.min(capacity).min(chunk_size.max(1));
+        let last = end == data.len();
+        send.send_data(
+            Bytes::copy_from_slice(&data[offset..end]),
+            last && end_of_stream,
+        )
+        .map_err(io::Error::other)?;
+        offset = end;
+    }
+    Ok(offset)
 }
 
 fn response_body_len(body: &ResponseBody) -> u64 {
@@ -344,8 +401,7 @@ pub(super) fn send_h2_trailers(
         let Ok(name) = http::header::HeaderName::from_bytes(trailer.name.as_bytes()) else {
             continue;
         };
-        let value = sanitize_header_value(&trailer.value);
-        let Ok(value) = http::header::HeaderValue::from_str(&value) else {
+        let Ok(value) = super::send::h2_header_value(&trailer.value) else {
             continue;
         };
         fields.append(name, value);

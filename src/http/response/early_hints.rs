@@ -12,15 +12,22 @@ pub(crate) async fn write_early_hints<W: AsyncWrite + Unpin>(
         if headers.is_empty() {
             continue;
         }
-        let mut head = String::from("HTTP/1.1 103 Early Hints\r\n");
+        let mut head = b"HTTP/1.1 103 Early Hints\r\n".to_vec();
         for header in headers {
-            head.push_str(&header.name);
-            head.push_str(": ");
-            head.push_str(&sanitize_header_value(&header.value));
-            head.push_str("\r\n");
+            head.extend_from_slice(header.name.as_bytes());
+            head.extend_from_slice(b": ");
+            head.extend(
+                header_value_bytes(&header.value)
+                    .iter()
+                    .map(|byte| match byte {
+                        b'\r' | b'\n' => b' ',
+                        byte => *byte,
+                    }),
+            );
+            head.extend_from_slice(b"\r\n");
         }
-        head.push_str("\r\n");
-        writer.write_all(head.as_bytes()).await?;
+        head.extend_from_slice(b"\r\n");
+        writer.write_all(&head).await?;
         writer.flush().await?;
     }
     Ok(())

@@ -19,11 +19,13 @@ pub async fn run(config: RuntimeConfig, logger: Arc<Logger>) -> io::Result<()> {
     let stream_loggers = build_stream_loggers(&config)?;
     let proxy_cache = Arc::new(ProxyCacheRegistry::new(config.http.as_ref()));
     let upstream_keepalive = Arc::new(UpstreamKeepalivePool::default());
+    let (reload_tx, _) = watch::channel(0_u64);
     let state = SharedState {
         config: Arc::new(ArcSwap::from_pointee(RuntimeSnapshot {
             config,
             upstream_keepalive_generation: upstream_keepalive.generation(),
         })),
+        reload: Arc::new(reload_tx),
         tls_configs: Arc::new(RwLock::new(tls_configs)),
         stream_tls_configs: Arc::new(RwLock::new(stream_tls_configs)),
         logger,
@@ -346,6 +348,7 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
         config: new_config,
         upstream_keepalive_generation: generation,
     }));
+    state.notify_reload();
     for warning in warnings {
         state.logger.log(LogLevel::Warn, warning.to_string());
     }

@@ -98,10 +98,37 @@ pub(in crate::server) async fn prepare_request_body(
     if request_body_stream_enabled(request, context) {
         return Ok(());
     }
+    if !should_buffer_request_body(request, context) {
+        return Ok(());
+    }
     buffer_request_body(request, context).await?;
     validate_buffered_request_body_size(request, context.client_max_body_size)?;
     set_buffered_request_body_variable(request, variables);
     Ok(())
+}
+
+pub(super) fn should_buffer_request_body(request: &Request, context: &EffectiveConfig) -> bool {
+    request.header("content-length").is_some()
+        || request.body_stream.is_none()
+        || request_body_buffering_required(request, context)
+}
+
+fn request_body_buffering_required(request: &Request, context: &EffectiveConfig) -> bool {
+    let proxy = context.proxy_pass.is_some() && context.proxy_pass_request_body;
+    let fastcgi = context.fastcgi_pass.is_some() && context.fastcgi_pass_request_body;
+    let uwsgi = context.uwsgi_pass.is_some() && context.uwsgi_pass_request_body;
+    let scgi = context.scgi_pass.is_some() && context.scgi_pass_request_body;
+    let grpc = context.grpc.pass.is_some();
+    let mirror = !context.mirrors.is_empty() && context.mirror_request_body;
+    let dav_put = request.method == "PUT" && context.dav.allows(crate::config::DavMethod::Put);
+    context.client_body.in_file_only.enabled()
+        || proxy
+        || fastcgi
+        || uwsgi
+        || scgi
+        || grpc
+        || mirror
+        || dav_put
 }
 
 pub(in crate::server) async fn buffer_request_body(
@@ -117,6 +144,7 @@ pub(in crate::server) async fn buffer_request_body(
         return Ok(());
     }
     if let Some(stream) = request.body_stream.take() {
+        stream.set_h2_window_target(i32::MAX as u32);
         let spooled = crate::http::spool_request_body(
             Some(&stream),
             body_declared,

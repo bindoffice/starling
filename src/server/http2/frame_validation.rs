@@ -1,4 +1,5 @@
-use super::hpack_validation::HeaderBlockValidator;
+use super::frame_timeout::FrameTimeoutTracker;
+use super::hpack_validation::{HeaderBlockError, HeaderBlockValidator};
 use super::*;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -7,11 +8,13 @@ mod tests;
 
 const HTTP2_PREFACE_LEN: usize = 24;
 const FRAME_HEADER_LEN: usize = 9;
+#[cfg(test)]
 const DEFAULT_MAX_FRAME_SIZE: usize = 16 * 1024;
 
 const FRAME_PRIORITY: u8 = 0x2;
 const FRAME_RST_STREAM: u8 = 0x3;
 const FRAME_SETTINGS: u8 = 0x4;
+const FRAME_PUSH_PROMISE: u8 = 0x5;
 const FRAME_PING: u8 = 0x6;
 const FRAME_GOAWAY: u8 = 0x7;
 const FRAME_WINDOW_UPDATE: u8 = 0x8;
@@ -58,6 +61,7 @@ pub(super) struct FrameValidatedStream<S> {
     header: [u8; FRAME_HEADER_LEN],
     header_len: usize,
     payload_remaining: usize,
+    frame_buffer: Vec<u8>,
     ready: Vec<u8>,
     ready_position: usize,
     last_stream_id: u32,
@@ -69,16 +73,28 @@ pub(super) struct FrameValidatedStream<S> {
     hpack: HeaderBlockValidator,
     header_frame: Option<HeaderFrame>,
     header_stream_id: Option<u32>,
+    payload_kind: u8,
+    payload_stream_id: u32,
+    timeouts: FrameTimeoutTracker,
+    max_frame_size: usize,
+    settings_acked: Arc<AtomicBool>,
 }
 
 impl<S: Unpin> FrameValidatedStream<S> {
-    pub(super) fn new(inner: S, max_header_field_size: usize) -> Self {
+    pub(super) fn new(
+        inner: S,
+        max_header_field_size: usize,
+        max_frame_size: usize,
+        timeouts: FrameTimeoutTracker,
+        settings_acked: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             inner,
             preface_seen: 0,
             header: [0; FRAME_HEADER_LEN],
             header_len: 0,
             payload_remaining: 0,
+            frame_buffer: Vec::new(),
             ready: Vec::with_capacity(8192),
             ready_position: 0,
             last_stream_id: 0,
@@ -90,6 +106,11 @@ impl<S: Unpin> FrameValidatedStream<S> {
             hpack: HeaderBlockValidator::new(max_header_field_size),
             header_frame: None,
             header_stream_id: None,
+            payload_kind: 0,
+            payload_stream_id: 0,
+            timeouts,
+            max_frame_size,
+            settings_acked,
         }
     }
 
@@ -102,15 +123,26 @@ impl<S: Unpin> FrameValidatedStream<S> {
         }
 
         while !bytes.is_empty() && self.fatal.is_none() {
+            let discard = self.timeouts.discard_remaining();
+            if discard != 0 {
+                self.reset_partial_frame();
+                let length = discard.min(bytes.len());
+                self.timeouts.consume_discard(length);
+                bytes = &bytes[length..];
+                continue;
+            }
+
             if self.payload_remaining != 0 {
                 let length = self.payload_remaining.min(bytes.len());
-                if !self.inspect_payload(&bytes[..length]) {
-                    self.begin_goaway(h2::Reason::ENHANCE_YOUR_CALM);
+                if let Err(reason) = self.inspect_payload(&bytes[..length]) {
+                    self.begin_goaway(reason);
                     break;
                 }
-                self.ready.extend_from_slice(&bytes[..length]);
+                self.frame_buffer.extend_from_slice(&bytes[..length]);
                 self.payload_remaining -= length;
                 bytes = &bytes[length..];
+                self.record_frame_timeout();
+                self.finish_frame();
                 continue;
             }
 
@@ -127,16 +159,61 @@ impl<S: Unpin> FrameValidatedStream<S> {
             let kind = self.header[3];
             let flags = self.header[4];
             let stream_id = frame_stream_id(&self.header);
-            if let Some(reason) = invalid_frame_shape(kind, flags, frame_length) {
+            if let Some(reason) =
+                invalid_frame_shape(kind, flags, frame_length, self.max_frame_size)
+            {
                 self.begin_goaway(reason);
                 break;
             }
-
+            if kind == FRAME_PUSH_PROMISE {
+                self.begin_goaway(h2::Reason::PROTOCOL_ERROR);
+                break;
+            }
+            if kind == FRAME_SETTINGS && flags & FLAG_SETTINGS_ACK != 0 {
+                self.settings_acked.store(true, Ordering::Relaxed);
+            }
             self.last_stream_id = self.last_stream_id.max(stream_id);
-            self.ready.extend_from_slice(&self.header);
+            self.frame_buffer.clear();
+            self.frame_buffer.extend_from_slice(&self.header);
             self.header_len = 0;
             self.payload_remaining = frame_length;
+            self.payload_kind = kind;
+            self.payload_stream_id = stream_id;
             self.start_frame_payload(kind, flags, stream_id, frame_length);
+            self.record_frame_timeout();
+            self.finish_frame();
+        }
+    }
+
+    fn finish_frame(&mut self) {
+        if self.payload_remaining != 0 {
+            return;
+        }
+        self.ready.extend_from_slice(&self.frame_buffer);
+        self.frame_buffer.clear();
+        self.timeouts.frame_complete();
+    }
+
+    fn reset_partial_frame(&mut self) {
+        self.header_len = 0;
+        self.payload_remaining = 0;
+        self.frame_buffer.clear();
+        self.header_frame = None;
+        self.header_stream_id = None;
+        self.hpack.reset();
+        self.timeouts.frame_complete();
+    }
+
+    fn record_frame_timeout(&self) {
+        if self.payload_remaining == 0 {
+            self.timeouts.frame_complete();
+        } else {
+            self.timeouts.frame_incomplete(
+                self.payload_stream_id,
+                self.payload_kind,
+                self.payload_remaining,
+                std::time::Instant::now(),
+            );
         }
     }
 
@@ -153,14 +230,16 @@ impl<S: Unpin> FrameValidatedStream<S> {
             }
             _ => {}
         }
-        if length == 0 {
-            self.finish_header_frame();
+        if length == 0
+            && let Some(reason) = self.finish_header_frame()
+        {
+            self.begin_goaway(reason);
         }
     }
 
-    fn inspect_payload(&mut self, mut bytes: &[u8]) -> bool {
+    fn inspect_payload(&mut self, mut bytes: &[u8]) -> Result<(), h2::Reason> {
         let Some(mut frame) = self.header_frame.take() else {
-            return true;
+            return Ok(());
         };
         while !bytes.is_empty() && frame.remaining != 0 {
             if frame.prefix_remaining != 0 {
@@ -184,9 +263,9 @@ impl<S: Unpin> FrameValidatedStream<S> {
             };
             if header_remaining != 0 {
                 let length = header_remaining.min(bytes.len());
-                if self.hpack.validate(&bytes[..length]).is_err() {
-                    return false;
-                }
+                self.hpack
+                    .validate(&bytes[..length])
+                    .map_err(header_block_error_reason)?;
                 frame.header_remaining = Some(header_remaining - length);
                 frame.remaining -= length;
                 bytes = &bytes[length..];
@@ -200,16 +279,17 @@ impl<S: Unpin> FrameValidatedStream<S> {
 
         if frame.remaining == 0 {
             if frame.end_headers {
+                self.hpack.finish().map_err(header_block_error_reason)?;
                 self.hpack.reset();
                 self.header_stream_id = None;
             }
         } else {
             self.header_frame = Some(frame);
         }
-        true
+        Ok(())
     }
 
-    fn finish_header_frame(&mut self) {
+    fn finish_header_frame(&mut self) -> Option<h2::Reason> {
         if self
             .header_frame
             .as_ref()
@@ -221,13 +301,19 @@ impl<S: Unpin> FrameValidatedStream<S> {
                 .is_some_and(|frame| frame.end_headers);
             self.header_frame = None;
             if end_headers {
+                if let Err(error) = self.hpack.finish() {
+                    return Some(header_block_error_reason(error));
+                }
                 self.hpack.reset();
                 self.header_stream_id = None;
             }
         }
+        None
     }
 
     fn begin_goaway(&mut self, reason: h2::Reason) {
+        self.timeouts.frame_complete();
+        self.frame_buffer.clear();
         self.fatal = Some(reason);
         let mut frame = Vec::with_capacity(FRAME_HEADER_LEN + 8);
         frame.extend_from_slice(&[0, 0, 8, FRAME_GOAWAY, 0, 0, 0, 0, 0]);
@@ -342,6 +428,14 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for FrameValidatedStream<S> {
     }
 }
 
+fn header_block_error_reason(error: HeaderBlockError) -> h2::Reason {
+    match error {
+        HeaderBlockError::FrameSize => h2::Reason::FRAME_SIZE_ERROR,
+        HeaderBlockError::Compression => h2::Reason::COMPRESSION_ERROR,
+        HeaderBlockError::FieldLimit => h2::Reason::ENHANCE_YOUR_CALM,
+    }
+}
+
 fn frame_length(header: &[u8; FRAME_HEADER_LEN]) -> usize {
     ((header[0] as usize) << 16) | ((header[1] as usize) << 8) | header[2] as usize
 }
@@ -350,8 +444,13 @@ fn frame_stream_id(header: &[u8; FRAME_HEADER_LEN]) -> u32 {
     u32::from_be_bytes(header[5..9].try_into().expect("frame stream id")) & 0x7fff_ffff
 }
 
-fn invalid_frame_shape(kind: u8, flags: u8, length: usize) -> Option<h2::Reason> {
-    if length > DEFAULT_MAX_FRAME_SIZE {
+fn invalid_frame_shape(
+    kind: u8,
+    flags: u8,
+    length: usize,
+    max_frame_size: usize,
+) -> Option<h2::Reason> {
+    if length > max_frame_size {
         return Some(h2::Reason::FRAME_SIZE_ERROR);
     }
     let fixed_length = match kind {

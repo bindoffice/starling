@@ -10,6 +10,7 @@ pub(in crate::server) async fn process_named_location(
     variables: &mut Variables,
     depth: usize,
     mut uri_changes: usize,
+    connection_guard: &mut Option<ConnectionLimitGuard>,
 ) -> Option<Processed> {
     if !consume_uri_change(&mut uri_changes) {
         return Some(Processed {
@@ -32,7 +33,7 @@ pub(in crate::server) async fn process_named_location(
             tunnel: false,
         });
     }
-    let _connections = if !env.limits_checked {
+    if !env.limits_checked {
         env.limits_checked = true;
         if let Some(response) = apply_limit_req(&context, variables).await {
             let outcome =
@@ -45,7 +46,7 @@ pub(in crate::server) async fn process_named_location(
             });
         }
         match acquire_connection_limits(&context, variables) {
-            Ok(guard) => Some(guard),
+            Ok(guard) => *connection_guard = Some(guard),
             Err(status) => {
                 let outcome = configured_error_page(
                     http,
@@ -64,9 +65,7 @@ pub(in crate::server) async fn process_named_location(
                 });
             }
         }
-    } else {
-        None
-    };
+    }
     if !env.auth_request_checked
         && let Some(response) =
             auth_request_response(http, server, request, &context, variables, depth).await
@@ -114,6 +113,7 @@ pub(in crate::server) async fn process_named_location(
                     depth + 1,
                     false,
                     uri_changes,
+                    connection_guard,
                 ))
                 .await,
             );
@@ -170,6 +170,7 @@ pub(in crate::server) async fn process_named_location(
                     depth + 1,
                     false,
                     uri_changes,
+                    connection_guard,
                 ))
                 .await,
             );
@@ -214,6 +215,7 @@ pub(in crate::server) async fn process_named_location(
                 env: &env,
                 current: &context,
                 depth: depth + 1,
+                connection_guard,
             },
         )
         .await;

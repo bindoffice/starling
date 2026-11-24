@@ -8,6 +8,24 @@ use tokio::io::BufReader;
 static NEXT_BUFFER_TEMP: AtomicU64 = AtomicU64::new(1);
 
 #[test]
+fn preserves_opaque_header_value_bytes_without_lossy_utf8_conversion() {
+    let bytes: Vec<u8> = (0..=255)
+        .filter(|byte| !matches!(*byte, 0 | b'\r' | b'\n'))
+        .collect();
+    let value = header_value_from_bytes(&bytes);
+
+    assert_eq!(header_value_bytes(&value).as_ref(), bytes.as_slice());
+}
+
+#[test]
+fn leaves_utf8_header_values_unencoded() {
+    let value = header_value_from_bytes("plain ascii".as_bytes());
+
+    assert_eq!(value, "plain ascii");
+    assert_eq!(header_value_bytes(&value).as_ref(), b"plain ascii");
+}
+
+#[test]
 fn loads_small_static_files_into_memory_and_streams_large_files() {
     let id = NEXT_BUFFER_TEMP.fetch_add(1, Ordering::Relaxed);
     let temp_dir = std::env::temp_dir().join(format!(

@@ -104,6 +104,7 @@ async fn applies_rewrite_log_and_uninitialized_variable_warning_at_runtime() {
                 connection_request: ConnectionRequestState::new(0, std::time::Instant::now(), 0),
                 invalid_host: false,
                 client_abort: None,
+                request_length: None,
             },
             &state,
         )
