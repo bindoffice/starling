@@ -185,4 +185,27 @@ mod tests {
         upstream_client.shutdown().await.unwrap();
         task.await.unwrap().unwrap();
     }
+
+    #[tokio::test]
+    async fn write_timeout_stops_a_stalled_tunnel_direction() {
+        let (mut client, downstream) = tokio::io::duplex(64 * 1024);
+        let (_upstream_client, upstream) = tokio::io::duplex(1024);
+        let (mut reader, mut writer) = tokio::io::split(downstream);
+        let task = tokio::spawn(async move {
+            copy_bidirectional(
+                &mut reader,
+                &mut writer,
+                Box::new(upstream),
+                Duration::from_millis(20),
+                Duration::from_secs(2),
+                Duration::from_secs(2),
+                4096,
+            )
+            .await
+        });
+
+        client.write_all(&vec![0_u8; 8192]).await.unwrap();
+        let error = task.await.unwrap().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
 }

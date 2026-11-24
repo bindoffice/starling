@@ -373,6 +373,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                     tunnel,
                     &tunnel_logger,
                     &remote,
+                    control.as_ref(),
                 )
                 .await;
                 break;

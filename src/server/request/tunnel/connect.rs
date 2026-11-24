@@ -26,15 +26,7 @@ pub(super) async fn open(
             Ok(guard) => guard,
             Err(()) => continue,
         };
-        let result = open_gateway_io(
-            &target.host,
-            target.port,
-            dispatch.connect_timeout,
-            dispatch.socket_options,
-            dispatch.bind.as_deref(),
-            "tunnel_bind",
-        )
-        .await;
+        let result = open_target(target, dispatch).await;
         match result {
             Ok(io) => return Ok(OpenedTunnel { io, guard }),
             Err(ProxyFailure::Timeout) => {
@@ -58,4 +50,31 @@ pub(super) async fn open(
         }
     }
     Err(last_status)
+}
+
+async fn open_target(
+    target: &ResolvedUpstreamTarget,
+    dispatch: &TunnelDispatch,
+) -> Result<BoxedUpstreamIo, ProxyFailure> {
+    let io = open_gateway_io(
+        &target.host,
+        target.port,
+        dispatch.connect_timeout,
+        dispatch.socket_options,
+        dispatch.bind.as_deref(),
+        "tunnel_bind",
+    )
+    .await?;
+    let Some(tls) = dispatch.tls.as_deref() else {
+        return Ok(io);
+    };
+    match tokio::time::timeout(
+        dispatch.connect_timeout,
+        tls.upgrade(io, &target.host, &dispatch.client_tls_cache),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(ProxyFailure::Timeout),
+    }
 }

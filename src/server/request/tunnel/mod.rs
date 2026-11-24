@@ -2,6 +2,7 @@ use super::*;
 
 mod connect;
 mod relay;
+mod tls;
 
 pub(in crate::server) struct TunnelDispatch {
     pub(in crate::server) response: Response,
@@ -18,6 +19,8 @@ pub(in crate::server) struct TunnelDispatch {
     pub(super) server_tokens: ServerTokens,
     pub(super) tcp_nodelay: bool,
     pub(super) connection_guard: Option<ConnectionLimitGuard>,
+    pub(super) tls: Option<Box<tls::TunnelTlsConfig>>,
+    pub(super) client_tls_cache: Arc<ClientTlsConfigCache>,
 }
 
 pub(in crate::server) fn build_tunnel_dispatch(
@@ -31,17 +34,21 @@ pub(in crate::server) fn build_tunnel_dispatch(
         .as_ref()
         .expect("tunnel dispatch requires tunnel_pass");
     let value = eval_variables(&pass.raw, variables);
-    if value.is_empty() || value.contains("://") {
+    let (value, tls) = match split_tunnel_scheme(&value) {
+        Some(parsed) => parsed,
+        None => return Err(Box::new(error_response(500))),
+    };
+    if value.is_empty() {
         return Err(Box::new(error_response(500)));
     }
-    let targets = if let Some(upstream) = http.upstreams.get(&value) {
+    let targets = if let Some(upstream) = http.upstreams.get(value) {
         let hash_key = upstream
             .hash_key
             .as_deref()
             .map(|key| eval_variables(key, variables));
         resolve_upstream_config(upstream, request_peer_of(variables), hash_key.as_deref())
     } else {
-        parse_upstream_address(&value)
+        parse_upstream_address(value)
             .map(|(host, port)| {
                 vec![ResolvedUpstreamTarget {
                     host,
@@ -81,6 +88,8 @@ pub(in crate::server) fn build_tunnel_dispatch(
         server_tokens: context.server_tokens,
         tcp_nodelay: context.tcp_nodelay,
         connection_guard: None,
+        tls: tls.then(|| Box::new(tls::TunnelTlsConfig::from_context(context, variables))),
+        client_tls_cache: variables.client_tls_cache.clone(),
     })
 }
 
@@ -90,12 +99,25 @@ pub(in crate::server) async fn serve_tunnel<R, W>(
     dispatch: TunnelDispatch,
     logger: &Logger,
     remote: &ListenAddress,
+    control: Option<&ClientSocketControl>,
 ) -> io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let opened = match connect::open(&dispatch.targets, &dispatch).await {
+    let opened = match control {
+        Some(control) => {
+            tokio::select! {
+                opened = connect::open(&dispatch.targets, &dispatch) => Some(opened),
+                _ = wait_for_client_reset(control) => None,
+            }
+        }
+        None => Some(connect::open(&dispatch.targets, &dispatch).await),
+    };
+    let Some(opened) = opened else {
+        return Ok(());
+    };
+    let opened = match opened {
         Ok(opened) => opened,
         Err(status) => {
             let mut response = error_response(status);
@@ -135,6 +157,16 @@ where
         );
     }
     result
+}
+
+fn split_tunnel_scheme(value: &str) -> Option<(&str, bool)> {
+    if let Some(value) = value.strip_prefix("https://") {
+        return Some((value, true));
+    }
+    if let Some(value) = value.strip_prefix("http://") {
+        return Some((value, false));
+    }
+    (!value.contains("://")).then_some((value, false))
 }
 
 fn request_peer_of(variables: &Variables) -> Option<IpAddr> {

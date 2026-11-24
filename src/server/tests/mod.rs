@@ -115,6 +115,8 @@ mod support;
 mod tcp_nodelay;
 mod trailers;
 mod tunnel;
+mod tunnel_cancellation;
+mod tunnel_tls;
 mod upstream_balancing;
 mod upstream_buffering;
 mod upstream_buffering_window;
