@@ -1,0 +1,167 @@
+use super::*;
+
+#[tokio::test]
+
+async fn parses_request_and_content_length() {
+    let input =
+        b"GET /hello?name=x HTTP/1.1\r\nHost: example.test\r\nConnection: keep-alive\r\n\r\n";
+
+    let mut reader = BufReader::new(&input[..]);
+
+    let request = read_request(
+        &mut reader,
+        "127.0.0.1:1234".into(),
+        "127.0.0.1:80".into(),
+        Duration::from_secs(1),
+        1024,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(request.method, "GET");
+
+    assert_eq!(request.host_without_port(), "example.test");
+
+    assert!(request.keep_alive);
+}
+
+#[tokio::test]
+async fn parses_connect_authority_with_a_required_port() {
+    let input = b"CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n";
+    let mut reader = BufReader::new(&input[..]);
+
+    let head = read_request_head(&mut reader).await.unwrap().unwrap();
+
+    assert_eq!(head.method, "CONNECT");
+    assert_eq!(head.target, "example.test:443");
+
+    let missing_port = b"CONNECT example.test HTTP/1.1\r\nHost: example.test\r\n\r\n";
+    let mut reader = BufReader::new(&missing_port[..]);
+    let error = read_request_head(&mut reader).await.unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+}
+
+#[tokio::test]
+async fn exposes_request_line_ports_without_using_the_host_header() {
+    let absolute = b"GET http://example.test:8080/hello HTTP/1.1\r\nHost: proxy.test\r\n\r\n";
+    let mut reader = BufReader::new(&absolute[..]);
+    let request = read_request(
+        &mut reader,
+        "127.0.0.1:1234".into(),
+        "127.0.0.1:80".into(),
+        Duration::from_secs(1),
+        1024,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(request.host_without_port(), "example.test");
+    assert_eq!(request.request_port(), Some(8080));
+
+    let origin = b"GET /hello HTTP/1.1\r\nHost: example.test:8080\r\n\r\n";
+    let mut reader = BufReader::new(&origin[..]);
+    let request = read_request(
+        &mut reader,
+        "127.0.0.1:1234".into(),
+        "127.0.0.1:80".into(),
+        Duration::from_secs(1),
+        1024,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(request.request_port(), None);
+}
+
+#[tokio::test]
+async fn normalizes_and_validates_request_hosts_like_nginx() {
+    let cases = [
+        ("GET / HTTP/1.0\r\nHost: L.\r\n\r\n", Some("l"), None),
+        (
+            "GET / HTTP/1.0\r\nHost: abcd-ef.g02.xyz:\r\n\r\n",
+            Some("abcd-ef.g02.xyz"),
+            None,
+        ),
+        (
+            "GET http://AbC.Example.:8080/x?args HTTP/1.0\r\nHost: ignored\r\n\r\n",
+            Some("abc.example"),
+            Some(8080),
+        ),
+        (
+            "GET http://[::FFFF:12.30.67.89]:4321/ HTTP/1.0\r\nHost: ignored\r\n\r\n",
+            Some("[::ffff:12.30.67.89]"),
+            Some(4321),
+        ),
+    ];
+    for (input, host, port) in cases {
+        let mut reader = BufReader::new(input.as_bytes());
+        let request = read_request(
+            &mut reader,
+            "127.0.0.1:1234".into(),
+            "127.0.0.1:80".into(),
+            Duration::from_secs(1),
+            1024,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            request.host_without_port().as_ref(),
+            host.unwrap(),
+            "{input}"
+        );
+        assert_eq!(request.request_port(), port, "{input}");
+    }
+
+    let invalid_targets = [
+        "GET http:/// HTTP/1.0\r\nHost: localhost\r\n\r\n",
+        "GET http://example.com.:1.2/ HTTP/1.0\r\nHost: localhost\r\n\r\n",
+        "GET http://123.40.56.78:9000:80/ HTTP/1.0\r\nHost: localhost\r\n\r\n",
+        "GET http://extra[abcd::ef98:0:7654:321]/ HTTP/1.0\r\nHost: localhost\r\n\r\n",
+    ];
+    for input in invalid_targets {
+        let mut reader = BufReader::new(input.as_bytes());
+        let error = read_request_head(&mut reader).await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{input:?}");
+    }
+
+    let invalid_hosts = [
+        "GET / HTTP/1.0\r\nHost: [abcd::ef98:0:7654:321].\r\n\r\n",
+        "GET / HTTP/1.0\r\nHost: \u{2}\r\n\r\n",
+    ];
+    for input in invalid_hosts {
+        let mut reader = BufReader::new(input.as_bytes());
+        let request = read_request_head(&mut reader)
+            .await
+            .unwrap()
+            .expect("request head");
+        assert!(request.invalid_host, "{input:?}");
+    }
+}
+
+#[test]
+fn extracts_paths_and_args_from_absolute_targets() {
+    let cases = [
+        ("http://localhost", "/", None),
+        ("http://localhost?args", "/", Some("args")),
+        ("http://localhost?args#frag", "/", Some("args")),
+        ("http://localhost:8080/a/b?x=1#frag", "/a/b", Some("x=1")),
+        ("/foo/bar/.#frag", "/foo/bar/.", None),
+        ("/foo/bar/..#frag?ignored", "/foo/bar/..", None),
+    ];
+    for (target, path, args) in cases {
+        let request = Request {
+            method: "GET".into(),
+            target: target.into(),
+            version: "HTTP/1.1".into(),
+            headers: Vec::new(),
+            body: Vec::new(),
+            body_stream: None,
+            remote_addr: "127.0.0.1:1".into(),
+            local_addr: "127.0.0.1:2".into(),
+            keep_alive: false,
+        };
+        assert_eq!(request.path_and_query(), (path, args), "{target}");
+    }
+}
