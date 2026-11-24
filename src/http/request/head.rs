@@ -87,18 +87,25 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
     reader: &mut R,
     limits: RequestHeadLimits,
 ) -> io::Result<Option<RequestHead>> {
+    let mut line = Vec::new();
     let request_line = loop {
-        let Some(request_line) =
-            read_line_limited(reader, limits.max_line_bytes, "request line too long").await?
-        else {
+        if !read_line_limited_into(
+            reader,
+            limits.max_line_bytes,
+            "request line too long",
+            &mut line,
+        )
+        .await?
+        {
             return Ok(None);
-        };
+        }
+        let request_line = request_line_text(&line)?;
         if request_line == "\r\n" || request_line == "\n" {
             continue;
         }
         break request_line;
     };
-    let request_line_length = request_line.len();
+    let request_line_length = line.len();
     let request_line = request_line.trim_end_matches(['\r', '\n']);
     let mut parts = request_line.split_whitespace();
     let method = parts
@@ -129,24 +136,29 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
     {
         return Err(invalid_data("invalid request line"));
     }
+    let method = method.to_string();
+    let target = target.to_string();
+    let version = version.to_string();
 
     let mut headers = Vec::new();
     let mut invalid_headers = Vec::new();
     let mut total = request_line_length;
     loop {
-        let Some(line) = read_line_limited(
+        if !read_line_limited_into(
             reader,
             limits.max_line_bytes,
             "request header line too long",
+            &mut line,
         )
         .await?
-        else {
+        {
             return Err(invalid_data("client closed connection prematurely"));
-        };
+        }
         total += line.len();
         if total > limits.max_total_bytes {
             return Err(invalid_data("request headers too large"));
         }
+        let line = request_line_text(&line)?;
         if line == "\r\n" || line == "\n" {
             break;
         }
@@ -259,9 +271,9 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
         .is_some_and(|host| !valid_host(&host.value));
 
     Ok(Some(RequestHead {
-        method: method.to_string(),
-        target: target.to_string(),
-        version: version.to_string(),
+        method,
+        target,
+        version,
         headers,
         request_length: total as u64,
         invalid_headers,
@@ -315,21 +327,20 @@ pub(crate) fn parse_connect_authority(value: &str) -> Option<(&str, u16)> {
     Some((host, port.parse().ok()?))
 }
 
-async fn read_line_limited<R: AsyncBufReadExt + Unpin>(
+async fn read_line_limited_into<R: AsyncBufReadExt + Unpin>(
     reader: &mut R,
     limit: usize,
     too_long: &'static str,
-) -> io::Result<Option<String>> {
-    let mut line = Vec::new();
+    line: &mut Vec<u8>,
+) -> io::Result<bool> {
+    line.clear();
     loop {
         let available = reader.fill_buf().await?;
         if available.is_empty() {
             if line.is_empty() {
-                return Ok(None);
+                return Ok(false);
             }
-            return String::from_utf8(line)
-                .map(Some)
-                .map_err(|_| invalid_data("request header is not valid UTF-8"));
+            return Ok(true);
         }
         let newline = available.iter().position(|byte| *byte == b'\n');
         let consumed = newline.map_or(available.len(), |position| position + 1);
@@ -339,9 +350,11 @@ async fn read_line_limited<R: AsyncBufReadExt + Unpin>(
         line.extend_from_slice(&available[..consumed]);
         reader.consume(consumed);
         if newline.is_some() {
-            return String::from_utf8(line)
-                .map(Some)
-                .map_err(|_| invalid_data("request header is not valid UTF-8"));
+            return Ok(true);
         }
     }
+}
+
+fn request_line_text(line: &[u8]) -> io::Result<&str> {
+    std::str::from_utf8(line).map_err(|_| invalid_data("request header is not valid UTF-8"))
 }
