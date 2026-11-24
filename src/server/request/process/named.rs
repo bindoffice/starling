@@ -121,6 +121,87 @@ pub(in crate::server) async fn process_named_location(
         RewriteOutcome::Break | RewriteOutcome::None => {}
     }
     refresh_variables(&env, Some(location), variables, &context);
+    if !env.bypass_try_files
+        && let Some(try_files) = &context.try_files
+    {
+        match resolve_try_files(try_files, &context, Some(location), &env, variables).await {
+            TryFilesResult::Found { uri, is_dir } => {
+                env.uri = uri;
+                env.unparsed_uri = None;
+                env.bypass_try_files = true;
+                env.add_uri_to_alias =
+                    !is_dir && matches!(context.alias_uri_prefix.as_deref(), Some(""));
+                refresh_variables(&env, Some(location), variables, &context);
+            }
+            TryFilesResult::FallbackStatus(status) => {
+                let outcome = configured_error_page(
+                    http,
+                    server,
+                    request,
+                    error_response(status),
+                    &context,
+                    variables,
+                    depth,
+                )
+                .await;
+                return Some(Processed {
+                    response: outcome.response,
+                    context: outcome.context,
+                    tunnel: false,
+                });
+            }
+            TryFilesResult::FallbackUri(uri) => {
+                env.uri = normalize_uri(&uri).unwrap_or_else(|| uri.clone());
+                env.unparsed_uri = None;
+                env.internal = true;
+                env.bypass_try_files = false;
+                if !consume_uri_change(&mut uri_changes) {
+                    return Some(Processed {
+                        response: error_response(500),
+                        context: *context,
+                        tunnel: false,
+                    });
+                }
+                variables.uri = env.uri.clone();
+                return Some(
+                    Box::pin(process_request_inner(
+                        http,
+                        server,
+                        request,
+                        env,
+                        variables,
+                        depth + 1,
+                        false,
+                        uri_changes,
+                        connection_guard,
+                    ))
+                    .await,
+                );
+            }
+            TryFilesResult::Named(name) => {
+                if let Some(processed) = Box::pin(process_named_location(
+                    http,
+                    server,
+                    request,
+                    &name,
+                    env,
+                    variables,
+                    depth,
+                    uri_changes,
+                    connection_guard,
+                ))
+                .await
+                {
+                    return Some(processed);
+                }
+                return Some(Processed {
+                    response: error_response(500),
+                    context: *context,
+                    tunnel: false,
+                });
+            }
+        }
+    }
     if let Some((response, tunnel)) = tunnel_request_outcome(request, &context) {
         return Some(Processed {
             response,
