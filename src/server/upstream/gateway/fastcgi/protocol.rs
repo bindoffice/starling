@@ -88,10 +88,11 @@ pub(in crate::server) async fn write_fastcgi_request_with_stream<W: AsyncWrite +
             }
         }
     } else {
-        let body = context
-            .fastcgi_pass_request_body
-            .then_some(request.body.as_slice())
-            .unwrap_or_default();
+        let body = if context.fastcgi_pass_request_body {
+            request.body.as_slice()
+        } else {
+            &[]
+        };
         if body.len() <= 64 * 1024 {
             for chunk in body.chunks(u16::MAX as usize) {
                 encode_fastcgi_record(&mut prefix, FCGI_STDIN, chunk);

@@ -60,11 +60,14 @@ pub(super) fn try_apply_http2_directive(
         ));
     }
     validate_no_block(directive)?;
-    // Nginx 1.29+ treats both directives as obsolete compatibility aliases:
-    // they are accepted, warned about, and otherwise ignored.
-    if !matches!(name, "http2_max_field_size" | "http2_max_header_size") {
-        seen.http2.mark(name, &directive.location)?;
+    if is_obsolete(name) {
+        // Nginx parses only the argument count for obsolete directives. Values
+        // are intentionally ignored, including malformed sizes, flags, and
+        // numbers, and duplicates do not participate in the normal seen check.
+        one_arg(directive)?;
+        return Ok(true);
     }
+    seen.http2.mark(name, &directive.location)?;
 
     match name {
         "http2_max_concurrent_streams" => {
@@ -87,9 +90,6 @@ pub(super) fn try_apply_http2_directive(
         "http2_pool_size" => {
             parse_size(one_arg(directive)?, &directive.location)?;
         }
-        "http2_max_field_size" | "http2_max_header_size" => {
-            one_arg(directive)?;
-        }
         "http2_recv_buffer_size" => {
             parse_size(one_arg(directive)?, &directive.location)?;
         }
@@ -102,21 +102,23 @@ pub(super) fn try_apply_http2_directive(
                 ));
             }
         }
-        "http2_max_concurrent_pushes" | "http2_max_requests" => {
-            parse_usize(one_arg(directive)?, &directive.location, name)?;
-        }
-        "http2_recv_timeout" | "http2_idle_timeout" => {
-            parse_duration(one_arg(directive)?, &directive.location)?;
-        }
-        "http2_push_preload" => {
-            parse_flag(directive, name)?;
-        }
-        "http2_push" => {
-            one_arg(directive)?;
-        }
         _ => unreachable!("recognized http2 directive"),
     }
     Ok(true)
+}
+
+fn is_obsolete(name: &str) -> bool {
+    matches!(
+        name,
+        "http2_max_concurrent_pushes"
+            | "http2_max_requests"
+            | "http2_max_field_size"
+            | "http2_max_header_size"
+            | "http2_recv_timeout"
+            | "http2_idle_timeout"
+            | "http2_push_preload"
+            | "http2_push"
+    )
 }
 
 fn parse_u32(directive: &Directive) -> ConfigResult<u32> {

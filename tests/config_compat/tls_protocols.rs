@@ -89,7 +89,6 @@ fn compiles_http2_runtime_limits_with_scope_inheritance() {
                 http2_chunk_size 4k;
                 http2_max_field_size 4k;
                 http2_max_header_size 64k;
-                http2_max_requests 1000;
                 http2_streams_index_size 64;
                 server {
                     listen 127.0.0.1:18450 ssl http2;
@@ -179,7 +178,7 @@ fn compiles_http2_runtime_limits_with_scope_inheritance() {
 }
 
 #[test]
-fn accepts_obsolete_http2_header_directives_without_parsing_their_values() {
+fn accepts_obsolete_http2_directives_without_parsing_their_values() {
     let prefix = temp_prefix();
     fs::create_dir_all(&prefix).unwrap();
     let config_path = prefix.join("nginx.conf");
@@ -188,9 +187,23 @@ fn accepts_obsolete_http2_header_directives_without_parsing_their_values() {
         r#"
             events {}
             http {
+                http2_max_concurrent_pushes not-a-number;
+                http2_max_concurrent_pushes 3;
+                http2_max_requests not-a-number;
                 http2_max_field_size not-a-size;
                 http2_max_header_size 64k;
                 http2_max_header_size also-not-a-size;
+                http2_recv_timeout not-a-time;
+                http2_idle_timeout not-a-time;
+                http2_push_preload not-a-flag;
+                http2_push /main.css;
+                server {
+                    listen 127.0.0.1:18451;
+                    location / {
+                        http2_push_preload not-a-flag;
+                        http2_push /location.css;
+                    }
+                }
             }
         "#,
     )
@@ -199,11 +212,30 @@ fn accepts_obsolete_http2_header_directives_without_parsing_their_values() {
         .load(&config_path)
         .unwrap();
     let config = compile(document, prefix.clone(), config_path).unwrap();
-    assert_eq!(config.warnings.len(), 3);
-    assert!(config.warnings.iter().all(|warning| {
-        warning.message.contains("directive is obsolete")
-            && warning.message.contains("large_client_header_buffers")
-    }));
+    let expected = [
+        ("http2_max_concurrent_pushes", None),
+        ("http2_max_concurrent_pushes", None),
+        ("http2_max_requests", Some("keepalive_requests")),
+        ("http2_max_field_size", Some("large_client_header_buffers")),
+        ("http2_max_header_size", Some("large_client_header_buffers")),
+        ("http2_max_header_size", Some("large_client_header_buffers")),
+        ("http2_recv_timeout", Some("client_header_timeout")),
+        ("http2_idle_timeout", Some("keepalive_timeout")),
+        ("http2_push_preload", None),
+        ("http2_push", None),
+        ("http2_push_preload", None),
+        ("http2_push", None),
+    ];
+    assert_eq!(config.warnings.len(), expected.len());
+    for (warning, (directive, replacement)) in config.warnings.iter().zip(expected) {
+        let expected = match replacement {
+            Some(replacement) => format!(
+                "the \"{directive}\" directive is obsolete, use the \"{replacement}\" directive instead"
+            ),
+            None => format!("the \"{directive}\" directive is obsolete, ignored"),
+        };
+        assert_eq!(warning.message, expected, "{warning}");
+    }
     let _ = fs::remove_dir_all(prefix);
 }
 
