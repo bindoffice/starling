@@ -170,8 +170,14 @@ async fn exchanges_scgi_netstrings_and_maps_cgi_headers() {
             .unwrap();
         let mut parameters = vec![0_u8; length];
         backend.read_exact(&mut parameters).await.unwrap();
-        assert_eq!(parameters.last(), Some(&b','));
-        let values = parse_null_separated_params(&parameters[..parameters.len() - 1]);
+        let mut comma = [0_u8; 1];
+        backend.read_exact(&mut comma).await.unwrap();
+        assert_eq!(comma, [b',']);
+        assert!(
+            parameters.starts_with(b"CONTENT_LENGTH\0"),
+            "SCGI requires CONTENT_LENGTH first"
+        );
+        let values = parse_null_separated_params(&parameters);
         assert_eq!(
             values.get("REQUEST_METHOD").map(String::as_str),
             Some("POST")

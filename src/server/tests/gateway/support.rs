@@ -127,4 +127,7 @@ pub(super) async fn read_scgi_header<R: AsyncRead + Unpin>(reader: &mut R) {
     let length = std::str::from_utf8(&length).unwrap().parse().unwrap();
     let mut parameters = vec![0_u8; length];
     reader.read_exact(&mut parameters).await.unwrap();
+    let mut comma = [0_u8; 1];
+    reader.read_exact(&mut comma).await.unwrap();
+    assert_eq!(comma, [b',']);
 }

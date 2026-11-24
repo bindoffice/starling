@@ -93,6 +93,113 @@ async fn reuses_named_http1_upstream_after_a_streaming_response() {
 }
 
 #[tokio::test]
+async fn reuses_named_http1_upstream_after_head_and_not_modified_streaming() {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping no-body keepalive test: TCP binding is not permitted");
+            return;
+        }
+        Err(error) => panic!("bind no-body keepalive upstream: {error}"),
+    };
+    let upstream_address = listener.local_addr().unwrap();
+    let backend = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        for (request_line, response) in [
+            (
+                "HEAD /head HTTP/1.1\r\n",
+                "HTTP/1.1 200 OK\r\nX-Connection: 1\r\nContent-Length: 26\r\n\r\n",
+            ),
+            (
+                "GET /not-modified HTTP/1.1\r\n",
+                "HTTP/1.1 304 Not Modified\r\nX-Connection: 1\r\nContent-Length: 100\r\n\r\n",
+            ),
+            (
+                "GET /after HTTP/1.1\r\n",
+                "HTTP/1.1 200 OK\r\nX-Connection: 1\r\nContent-Length: 5\r\n\r\nthird",
+            ),
+        ] {
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                request.push_str(&line);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            assert!(request.starts_with(request_line), "{request}");
+            reader
+                .get_mut()
+                .write_all(response.as_bytes())
+                .await
+                .unwrap();
+        }
+    });
+
+    let (prefix, config) = test_config(
+        &format!(
+            r#"
+                worker_processes 1;
+                events {{ worker_connections 64; }}
+                http {{
+                    upstream backend {{
+                        server {upstream_address};
+                        keepalive 1;
+                    }}
+                    server {{
+                        listen 127.0.0.1:18574;
+                        location / {{
+                            proxy_pass http://backend;
+                            proxy_buffering off;
+                        }}
+                    }}
+                }}
+            "#
+        ),
+        &[],
+    );
+    let state = test_state(&config);
+    let head = request_body_with_state(
+        &config,
+        state.clone(),
+        "HEAD /head HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
+    assert!(head.contains("X-Connection: 1\r\n"), "{head}");
+
+    let not_modified = request_body_with_state(
+        &config,
+        state.clone(),
+        "GET /not-modified HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(
+        not_modified.starts_with("HTTP/1.1 304 Not Modified\r\n"),
+        "{not_modified}"
+    );
+    assert!(
+        not_modified.contains("X-Connection: 1\r\n"),
+        "{not_modified}"
+    );
+
+    let after = request_body_with_state(
+        &config,
+        state,
+        "GET /after HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(after.starts_with("HTTP/1.1 200 OK\r\n"), "{after}");
+    assert!(after.contains("X-Connection: 1\r\n"), "{after}");
+    assert!(after.ends_with("third"), "{after}");
+
+    backend.await.unwrap();
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
 async fn reuses_named_http1_upstream_after_a_prefetched_buffered_response() {
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,

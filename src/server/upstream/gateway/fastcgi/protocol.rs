@@ -20,49 +20,103 @@ pub(in crate::server) async fn write_fastcgi_request_with_stream<W: AsyncWrite +
         send_timeout,
     } = body;
     let flags = u8::from(context.fastcgi_keep_conn);
-    write_fastcgi_record_with_timeout(
-        writer,
+    let mut prefix = Vec::new();
+    encode_fastcgi_record(
+        &mut prefix,
         FCGI_BEGIN_REQUEST,
         &[0, 1, flags, 0, 0, 0, 0, 0],
-        send_timeout,
-    )
-    .await?;
+    );
     for (name, value) in build_fastcgi_params(request, env, context, variables) {
         let mut parameter = Vec::with_capacity(name.len() + value.len() + 8);
         write_fastcgi_length(&mut parameter, name.len());
         write_fastcgi_length(&mut parameter, value.len());
         parameter.extend_from_slice(name.as_bytes());
         parameter.extend_from_slice(value.as_bytes());
-        write_fastcgi_record_with_timeout(writer, FCGI_PARAMS, &parameter, send_timeout).await?;
+        encode_fastcgi_record(&mut prefix, FCGI_PARAMS, &parameter);
     }
-    write_fastcgi_record_with_timeout(writer, FCGI_PARAMS, &[], send_timeout).await?;
+    encode_fastcgi_record(&mut prefix, FCGI_PARAMS, &[]);
+
     let mut sent_end_record = false;
     if let Some(body_stream) = stream {
         let mut total = 0_u64;
+        let mut body_error = None;
+        loop {
+            match body_stream.try_next().await {
+                Ok(Some(chunk)) => {
+                    if chunk.is_empty() {
+                        continue;
+                    }
+                    total = total
+                        .checked_add(chunk.len() as u64)
+                        .ok_or_else(crate::http::request_body_too_large_error)?;
+                    if limit != 0 && total > limit {
+                        return Err(crate::http::request_body_too_large_error());
+                    }
+                    append_fastcgi_stdin_records(&mut prefix, &chunk);
+                }
+                Ok(None) => {
+                    if body_stream.channel_ended() {
+                        encode_fastcgi_record(&mut prefix, FCGI_STDIN, &[]);
+                        sent_end_record = true;
+                    }
+                    break;
+                }
+                Err(error) => {
+                    body_error = Some(error);
+                    break;
+                }
+            }
+        }
+        write_all_with_timeout(writer, &prefix, send_timeout).await?;
+        if let Some(error) = body_error {
+            return Err(error);
+        }
         while let Some(chunk) = body_stream.next_limited(&mut total, limit).await? {
             if chunk.is_empty() {
                 continue;
             }
             let mut records = Vec::with_capacity(chunk.len() + 64);
-            for chunk in chunk.chunks(u16::MAX as usize) {
-                encode_fastcgi_record(&mut records, FCGI_STDIN, chunk);
-            }
-            if body_stream.is_ended() {
+            append_fastcgi_stdin_records(&mut records, &chunk);
+            let ended = body_stream.channel_ended();
+            if ended {
                 encode_fastcgi_record(&mut records, FCGI_STDIN, &[]);
                 sent_end_record = true;
             }
             write_all_with_timeout(writer, &records, send_timeout).await?;
+            if ended {
+                break;
+            }
         }
-    } else if context.fastcgi_pass_request_body {
-        let body = request.body.as_slice();
-        for chunk in body.chunks(u16::MAX as usize) {
-            write_fastcgi_record_with_timeout(writer, FCGI_STDIN, chunk, send_timeout).await?;
+    } else {
+        let body = context
+            .fastcgi_pass_request_body
+            .then_some(request.body.as_slice())
+            .unwrap_or_default();
+        if body.len() <= 64 * 1024 {
+            for chunk in body.chunks(u16::MAX as usize) {
+                encode_fastcgi_record(&mut prefix, FCGI_STDIN, chunk);
+            }
+            encode_fastcgi_record(&mut prefix, FCGI_STDIN, &[]);
+            write_all_with_timeout(writer, &prefix, send_timeout).await?;
+        } else {
+            write_all_with_timeout(writer, &prefix, send_timeout).await?;
+            for chunk in body.chunks(u16::MAX as usize) {
+                let mut records = Vec::with_capacity(chunk.len() + 16);
+                encode_fastcgi_record(&mut records, FCGI_STDIN, chunk);
+                write_all_with_timeout(writer, &records, send_timeout).await?;
+            }
         }
     }
-    if !sent_end_record {
+    if (stream.is_some() && !sent_end_record) || request.body.len() > 64 * 1024 {
         write_fastcgi_record_with_timeout(writer, FCGI_STDIN, &[], send_timeout).await?;
     }
     flush_with_timeout(writer, send_timeout).await
+}
+
+fn append_fastcgi_stdin_records(output: &mut Vec<u8>, data: &[u8]) {
+    for chunk in data.chunks(u16::MAX as usize) {
+        encode_fastcgi_record(output, FCGI_STDIN, chunk);
+    }
 }
 
 async fn write_fastcgi_record_with_timeout<W: AsyncWrite + Unpin>(

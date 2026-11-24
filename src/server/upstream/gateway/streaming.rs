@@ -70,13 +70,13 @@ where
             .await
         }
         GatewayBodyHandling::CompleteBuffer => {
-            let response =
+            let (response, protocol_complete) =
                 finish_cgi_response(&mut reader, start, limit_rate, buffer_policy, read_timeout)
                     .await?;
             Ok(GatewayResponseRead::Buffered {
                 response,
                 reader,
-                protocol_complete: false,
+                protocol_complete,
             })
         }
     }
@@ -145,7 +145,7 @@ where
         return Ok(GatewayResponseRead::Buffered {
             response,
             reader,
-            protocol_complete: false,
+            protocol_complete: true,
         });
     }
     if length.is_some_and(|length| length > threshold as u64) || prefix.len() > threshold {
@@ -203,7 +203,7 @@ where
             return Ok(GatewayResponseRead::Buffered {
                 response,
                 reader,
-                protocol_complete: false,
+                protocol_complete: true,
             });
         }
         prefix.extend_from_slice(&read_buffer[..read]);
@@ -217,7 +217,7 @@ where
             return Ok(GatewayResponseRead::Buffered {
                 response,
                 reader,
-                protocol_complete: false,
+                protocol_complete: true,
             });
         }
     }

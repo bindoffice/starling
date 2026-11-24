@@ -74,6 +74,10 @@ pub(super) async fn finalize_proxy_response(
     }
     apply_proxy_redirect(&mut response, proxy, location, context, upstream_variables);
     apply_proxy_cookie_rewrites(&mut response, context, upstream_variables);
-    response.set_content_length();
+    if !upstream_variables.method.eq_ignore_ascii_case("HEAD")
+        || response.header("Content-Length").is_none()
+    {
+        response.set_content_length();
+    }
     response
 }

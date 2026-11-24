@@ -236,9 +236,8 @@ impl UpstreamKeepalivePool {
             let entry = &entries[index];
             let expired = now.saturating_duration_since(entry.idle_since()) >= config.timeout;
             let over_limit = entry.requests() >= config.requests;
-            let lifetime_expired = now.saturating_duration_since(entry.created()) >= config.time;
             let stale_generation = entry.key().generation != generation;
-            if expired || over_limit || lifetime_expired || stale_generation {
+            if expired || over_limit || stale_generation {
                 entries.remove(index);
                 continue;
             }
@@ -298,10 +297,7 @@ impl UpstreamKeepalivePool {
         }
         let entries = pools.entry(upstream.to_string()).or_default();
         let now = Instant::now();
-        entries.retain(|entry| {
-            now.saturating_duration_since(entry.idle_since()) < config.timeout
-                && now.saturating_duration_since(entry.created()) < config.time
-        });
+        entries.retain(|entry| now.saturating_duration_since(entry.idle_since()) < config.timeout);
         while entries.len() >= config.max_cached {
             entries.pop_back();
         }

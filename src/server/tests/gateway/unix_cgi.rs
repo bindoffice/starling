@@ -185,8 +185,10 @@ async fn proxies_scgi_over_a_unix_socket() {
             .unwrap();
         let mut parameters = vec![0_u8; length];
         stream.read_exact(&mut parameters).await.unwrap();
-        assert_eq!(parameters.last(), Some(&b','));
-        let values = parse_null_separated_params(&parameters[..parameters.len() - 1]);
+        let mut comma = [0_u8; 1];
+        stream.read_exact(&mut comma).await.unwrap();
+        assert_eq!(comma, [b',']);
+        let values = parse_null_separated_params(&parameters);
         assert_eq!(
             values.get("REQUEST_METHOD").map(String::as_str),
             Some("GET")

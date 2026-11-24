@@ -91,6 +91,7 @@ pub(in crate::server) async fn configured_error_page(
             context: context.clone(),
         };
     }
+    hydrate_error_page_body(request, variables).await;
     let auth_challenges = preserved_auth_challenges(&response);
     let redirect_location = response.header("Location").map(str::to_string);
     // Nginx sets r->error_page before searching and keeps it request-scoped.
@@ -136,6 +137,19 @@ pub(in crate::server) async fn configured_error_page(
         response: redirected.response,
         context: redirected.context,
     }
+}
+
+async fn hydrate_error_page_body(request: &Request, variables: &mut Variables) {
+    if !variables.request_body.is_empty() || !variables.request_body_file.is_empty() {
+        return;
+    }
+    let Some(stream) = request.body_stream.as_ref() else {
+        return;
+    };
+    let Some(body) = stream.captured_body().await else {
+        return;
+    };
+    variables.request_body = String::from_utf8_lossy(&body).into_owned();
 }
 
 fn preserved_auth_challenges(response: &Response) -> Vec<Header> {

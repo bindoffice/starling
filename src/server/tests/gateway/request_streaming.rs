@@ -485,6 +485,8 @@ async fn read_scgi_parameters<R: AsyncRead + Unpin>(reader: &mut R) -> HashMap<S
     let length = std::str::from_utf8(&length).unwrap().parse().unwrap();
     let mut parameters = vec![0_u8; length];
     reader.read_exact(&mut parameters).await.unwrap();
-    assert_eq!(parameters.last(), Some(&b','));
-    parse_null_separated_params(&parameters[..parameters.len() - 1])
+    let mut comma = [0_u8; 1];
+    reader.read_exact(&mut comma).await.unwrap();
+    assert_eq!(comma, [b',']);
+    parse_null_separated_params(&parameters)
 }

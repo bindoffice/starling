@@ -15,14 +15,14 @@ pub(in crate::server) fn resolve_gateway_targets(
     variables: &Variables,
     peer: Option<IpAddr>,
 ) -> Vec<ResolvedUpstreamTarget> {
-    if let Some(upstream) = http.upstreams.get(raw) {
+    let target = eval_variables(raw, variables);
+    if let Some(upstream) = http.upstreams.get(&target) {
         let hash_key = upstream
             .hash_key
             .as_deref()
             .map(|key| eval_variables(key, variables));
         return resolve_upstream_config(upstream, peer, hash_key.as_deref());
     }
-    let target = eval_variables(raw, variables);
     if target.starts_with("unix:") {
         return vec![ResolvedUpstreamTarget {
             host: target,
@@ -56,7 +56,7 @@ pub(in crate::server) fn resolve_uwsgi_targets(
     )
 }
 
-fn strip_uwsgi_scheme(raw: &str) -> (&str, bool) {
+pub(in crate::server) fn strip_uwsgi_scheme(raw: &str) -> (&str, bool) {
     if raw
         .get(..9)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("suwsgi://"))
@@ -78,4 +78,16 @@ pub(in crate::server) fn upstream_target_display(target: &ResolvedUpstreamTarget
     } else {
         format!("{}:{}", target.host, target.port)
     }
+}
+
+pub(in crate::server) fn gateway_keepalive_context(
+    raw: &str,
+    http: &HttpConfig,
+) -> Option<UpstreamKeepaliveContext> {
+    let upstream = http.upstreams.get(raw)?;
+    let config = upstream.keepalive.clone()?;
+    (config.max_cached != 0).then(|| UpstreamKeepaliveContext {
+        name: raw.to_string(),
+        config,
+    })
 }

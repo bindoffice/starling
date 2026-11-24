@@ -154,6 +154,8 @@ pub(in crate::server) fn variable_value(
         "date_gmt" => crate::server::response::default_date(true),
         "upstream_status" => variables.upstream_status.clone(),
         "upstream_cache_status" => variables.upstream_cache_status.clone(),
+        "upstream_cache_last_modified" => variables.upstream_cache_last_modified.clone(),
+        "upstream_cache_etag" => variables.upstream_cache_etag.clone(),
         "upstream_response_time" => variables.upstream_response_time.clone(),
         "limit_req_status" => variables.limit_req_status.clone(),
         "limit_conn_status" => variables.limit_conn_status.clone(),

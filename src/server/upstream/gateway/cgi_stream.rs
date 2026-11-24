@@ -19,7 +19,9 @@ pub(in crate::server) async fn read_cgi_stream_with_policy<R: AsyncRead + Unpin>
     buffer_policy: UpstreamBodyBufferPolicy,
 ) -> io::Result<Response> {
     let start = read_cgi_head(reader, max_header_bytes, Duration::ZERO).await?;
-    finish_cgi_response(reader, start, limit_rate, buffer_policy, Duration::ZERO).await
+    finish_cgi_response(reader, start, limit_rate, buffer_policy, Duration::ZERO)
+        .await
+        .map(|(response, _)| response)
 }
 
 pub(in crate::server) async fn read_cgi_head<R: AsyncRead + Unpin>(
@@ -47,7 +49,7 @@ pub(in crate::server) async fn finish_cgi_response<R: AsyncRead + Unpin>(
     limit_rate: u64,
     buffer_policy: UpstreamBodyBufferPolicy,
     read_timeout: Duration,
-) -> io::Result<Response> {
+) -> io::Result<(Response, bool)> {
     let mut reader = TimedReader::new(reader, read_timeout);
     let expected_length = start.head.content_length();
     let mut body = BodyBuffer::new(buffer_policy.options_for_headers(start.head.headers()));
@@ -69,10 +71,11 @@ pub(in crate::server) async fn finish_cgi_response<R: AsyncRead + Unpin>(
             let wanted = (length - body_length).min(buffer.len() as u64) as usize;
             let read = reader.read(&mut buffer[..wanted]).await?;
             if read == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "CGI response ended before Content-Length",
-                ));
+                let buffered = body.finish().await?;
+                return start
+                    .head
+                    .into_response(buffered.body, buffered.temp_file)
+                    .map(|response| (response, false));
             }
             if let Some(rate) = read_rate.as_mut() {
                 rate.account(read as u64).await;
@@ -94,5 +97,8 @@ pub(in crate::server) async fn finish_cgi_response<R: AsyncRead + Unpin>(
         }
     }
     let buffered = body.finish().await?;
-    start.head.into_response(buffered.body, buffered.temp_file)
+    start
+        .head
+        .into_response(buffered.body, buffered.temp_file)
+        .map(|response| (response, true))
 }

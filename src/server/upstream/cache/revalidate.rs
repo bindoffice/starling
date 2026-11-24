@@ -61,6 +61,14 @@ impl CacheRevalidation {
             });
         }
     }
+
+    pub(in crate::server) fn last_modified(&self) -> Option<&str> {
+        self.last_modified.as_deref()
+    }
+
+    pub(in crate::server) fn etag(&self) -> Option<&str> {
+        self.etag.as_deref()
+    }
 }
 
 pub(in crate::server) fn revalidated_validity(

@@ -45,12 +45,9 @@ pub(in crate::server) async fn fastcgi_request(
     if let Some(response) = immediate {
         return response;
     }
-    let revalidated_request = revalidation.map(|revalidation| {
-        let mut outgoing = request.clone();
-        revalidation.apply_to_request(&mut outgoing);
-        outgoing
-    });
-    let request = revalidated_request.as_ref().unwrap_or(request);
+    let upstream_request =
+        prepare_gateway_upstream_request(request, cache.is_some(), revalidation.as_ref());
+    let request = upstream_request.as_ref().unwrap_or(request);
     let targets = resolve_fastcgi_targets(fastcgi, http, variables, request_peer(request));
     let mut attempted = Vec::new();
     let mut last_failure = ProxyFailure::Failure;
@@ -215,12 +212,7 @@ fn fastcgi_keepalive_context(
     if !context.fastcgi_keep_conn {
         return None;
     }
-    let upstream = http.upstreams.get(&fastcgi.raw)?;
-    let config = upstream.keepalive.clone()?;
-    (config.max_cached != 0).then(|| UpstreamKeepaliveContext {
-        name: fastcgi.raw.clone(),
-        config,
-    })
+    gateway_keepalive_context(&fastcgi.raw, http)
 }
 
 pub(in crate::server) async fn fastcgi_attempt(
@@ -342,7 +334,7 @@ async fn fastcgi_exchange_connection(
         FastCgiResponseReadOptions {
             catch_stderr: &context.fastcgi_catch_stderr,
             limit_rate,
-            max_header_bytes: context.fastcgi_buffering.buffer_size,
+            max_header_bytes: cgi_header_limit(&context.fastcgi_buffering),
             buffer_policy: UpstreamBodyBufferPolicy::upstream(
                 &context.fastcgi_buffering,
                 !ignores_accel_buffering(&context.fastcgi_ignore_headers),
@@ -378,6 +370,13 @@ async fn fastcgi_exchange_connection(
             (response, reusable)
         }
         GatewayResponseRead::Streamed(response) => (response, None),
+    };
+    // Nginx does not consume a FastCGI response body for HEAD requests, so
+    // the connection cannot be returned to the keepalive pool.
+    let reusable = if request.method.eq_ignore_ascii_case("HEAD") {
+        None
+    } else {
+        reusable
     };
     filter_gateway_response_headers(
         &mut response,
@@ -454,7 +453,7 @@ where
         FastCgiResponseReadOptions {
             catch_stderr: &context.fastcgi_catch_stderr,
             limit_rate: 0,
-            max_header_bytes: context.fastcgi_buffering.buffer_size,
+            max_header_bytes: cgi_header_limit(&context.fastcgi_buffering),
             buffer_policy: UpstreamBodyBufferPolicy::upstream(
                 &context.fastcgi_buffering,
                 !ignores_accel_buffering(&context.fastcgi_ignore_headers),

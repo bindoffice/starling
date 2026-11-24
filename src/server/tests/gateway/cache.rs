@@ -439,7 +439,9 @@ where
     let length = read_scgi_length(stream).await;
     let mut packet = vec![0_u8; length];
     stream.read_exact(&mut packet).await.unwrap();
-    assert_eq!(packet.last(), Some(&b','));
+    let mut comma = [0_u8; 1];
+    stream.read_exact(&mut comma).await.unwrap();
+    assert_eq!(comma, [b',']);
 }
 
 async fn read_scgi_length<S>(stream: &mut S) -> usize

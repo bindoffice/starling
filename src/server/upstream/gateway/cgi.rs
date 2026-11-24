@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::UpstreamBufferingConfig;
 
 #[cfg(test)]
 pub(in crate::server) struct CgiResponseDecoder {
@@ -61,6 +62,10 @@ impl CgiResponseDecoder {
 pub(in crate::server) struct CgiHeadDecoder {
     header: Vec<u8>,
     max_header_bytes: usize,
+}
+
+pub(in crate::server) fn cgi_header_limit(config: &UpstreamBufferingConfig) -> usize {
+    config.buffer_size.max(config.total_buffers_size())
 }
 
 pub(in crate::server) struct CgiHeadStart {

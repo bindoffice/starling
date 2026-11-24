@@ -141,16 +141,22 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
         let mut reader = TimedReader::new(&mut connection.reader, context.proxy_read_timeout);
         read_upstream_response_head(&mut reader, context.proxy_buffering.buffer_size).await
     };
-    let head = match head_result {
+    let mut head = match head_result {
         Ok(head) => head,
         Err(error) => return Err(proxy_failure_from_io(write_error.unwrap_or(error))),
     };
+    if outgoing.method.eq_ignore_ascii_case("HEAD") {
+        head.body_kind = UpstreamBodyKind::None;
+    }
     let header_time = head.header_time;
     let stream_reuse = stream_reuse_allowed
         && !write_incomplete
         && can_reuse_stream_head(outgoing, version, &head);
     let body_streaming_allowed = streaming_allowed && !outgoing.method.eq_ignore_ascii_case("HEAD");
-    if body_streaming_allowed && can_stream_response(context, head.status, &head.headers) {
+    if body_streaming_allowed
+        && head.body_kind != UpstreamBodyKind::None
+        && can_stream_response(context, head.status, &head.headers)
+    {
         let (reuse_tx, reuse_rx) = deferred_stream_connection(stream_reuse);
         let body = spawn_http1_body_stream(
             connection,

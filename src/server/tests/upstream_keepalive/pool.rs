@@ -94,6 +94,35 @@ async fn upstream_keepalive_pool_enforces_capacity_and_request_limit() {
 }
 
 #[tokio::test]
+async fn upstream_keepalive_time_applies_when_returning_a_connection() {
+    let pool = UpstreamKeepalivePool::default();
+    let key = keepalive_test_key(8080);
+    let config = UpstreamKeepaliveConfig {
+        max_cached: 1,
+        requests: 1000,
+        time: Duration::from_secs(2),
+        timeout: Duration::from_secs(30),
+        local: false,
+    };
+    let (client, _server) = tokio::io::duplex(64);
+    let mut connection = UpstreamConnection::new(Box::new(client), key.clone());
+    connection.created = Instant::now().checked_sub(Duration::from_secs(3)).unwrap();
+    pool.entries
+        .lock()
+        .await
+        .entry("backend".into())
+        .or_default()
+        .push_front(connection.into());
+
+    let connection = pool
+        .take("backend", &key, &config)
+        .await
+        .expect("a previously pooled connection should be reusable once");
+    pool.put("backend", &config, connection).await;
+    assert_eq!(pool.len("backend").await, 0);
+}
+
+#[tokio::test]
 async fn reuses_an_upstream_connection_for_multiple_http_requests() {
     let key = keepalive_test_key(8080);
     let outgoing = ProxyRequestMessage {

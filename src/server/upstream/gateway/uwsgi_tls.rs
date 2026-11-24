@@ -9,12 +9,7 @@ pub(in crate::server) async fn upgrade_uwsgi_tls<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let raw_name = context
-        .uwsgi_ssl_name
-        .as_deref()
-        .map(|name| eval_variables(name, variables))
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| host.to_string());
+    let raw_name = uwsgi_tls_name(context, variables, host);
     upgrade_tls_client(
         stream,
         &raw_name,
@@ -36,4 +31,17 @@ where
     )
     .await
     .map_err(proxy_failure_from_io)
+}
+
+pub(in crate::server) fn uwsgi_tls_name(
+    context: &EffectiveConfig,
+    variables: &Variables,
+    host: &str,
+) -> String {
+    context
+        .uwsgi_ssl_name
+        .as_deref()
+        .map(|name| eval_variables(name, variables))
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| host.to_string())
 }

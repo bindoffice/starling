@@ -121,7 +121,9 @@ async fn read_gateway_request(
                 .unwrap();
             let mut params = vec![0_u8; length];
             stream.read_exact(&mut params).await.unwrap();
-            assert_eq!(params.pop(), Some(b','));
+            let mut comma = [0_u8; 1];
+            stream.read_exact(&mut comma).await.unwrap();
+            assert_eq!(comma, [b',']);
             params
         }
         _ => panic!("unsupported gateway {kind}"),

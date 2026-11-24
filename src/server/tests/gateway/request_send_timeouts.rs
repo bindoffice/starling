@@ -393,6 +393,8 @@ async fn read_scgi_header_slow<R: AsyncRead + Unpin>(reader: &mut R) {
     }
     let length = std::str::from_utf8(&length).unwrap().parse().unwrap();
     let _ = read_slow(reader, length).await;
+    let comma = read_slow(reader, 1).await;
+    assert_eq!(comma, b",");
 }
 
 async fn read_fastcgi_record_slow<R: AsyncRead + Unpin>(reader: &mut R) -> FastCgiRecord {

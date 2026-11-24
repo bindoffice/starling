@@ -35,12 +35,10 @@ pub(in crate::server) async fn uwsgi_request(
     if let Some(response) = immediate {
         return response;
     }
-    let revalidated_request = revalidation.map(|revalidation| {
-        let mut outgoing = request.clone();
-        revalidation.apply_to_request(&mut outgoing);
-        outgoing
-    });
-    let request = revalidated_request.as_ref().unwrap_or(request);
+    let upstream_request =
+        prepare_gateway_upstream_request(request, cache.is_some(), revalidation.as_ref());
+    let request = upstream_request.as_ref().unwrap_or(request);
+    let keepalive = gateway_keepalive_context(strip_uwsgi_scheme(&uwsgi.raw).0, http);
     let (targets, tls) = resolve_uwsgi_targets(uwsgi, http, variables, request_peer(request));
     let mut attempted = Vec::new();
     let mut last_failure = ProxyFailure::Failure;
@@ -58,16 +56,17 @@ pub(in crate::server) async fn uwsgi_request(
         }
         attempted.push(upstream_target_display(&target));
         let attempt_started = Instant::now();
-        match uwsgi_attempt_with_cache(
+        match uwsgi_attempt_with_keepalive(
             request,
             context,
             variables,
             (&target.host, target.port),
             tls,
+            keepalive.as_ref(),
         )
         .await
         {
-            Ok(mut response) => {
+            Ok((mut response, reusable)) => {
                 let response_time = attempt_started.elapsed();
                 upstream_statuses.push(response.status.to_string());
                 upstream_response_times.push(format!("{:.3}", response_time.as_secs_f64()));
@@ -124,6 +123,12 @@ pub(in crate::server) async fn uwsgi_request(
                 } else {
                     None
                 };
+                if let (Some(keepalive), Some(connection)) = (keepalive.as_ref(), reusable) {
+                    variables
+                        .upstream_keepalive
+                        .put(&keepalive.name, &keepalive.config, connection)
+                        .await;
+                }
                 variables.upstream_addr = attempted.join(", ");
                 variables.upstream_status = upstream_statuses.join(", ");
                 variables.upstream_response_time = upstream_response_times.join(", ");
@@ -198,55 +203,65 @@ pub(in crate::server) async fn uwsgi_attempt(
     target: (&str, u16),
     tls: bool,
 ) -> Result<Response, ProxyFailure> {
-    uwsgi_attempt_with_cache(request, context, variables, target, tls).await
+    uwsgi_attempt_with_keepalive(request, context, variables, target, tls, None)
+        .await
+        .map(|(response, _)| response)
 }
 
-async fn uwsgi_attempt_with_cache(
+async fn uwsgi_attempt_with_keepalive(
     request: &Request,
     context: &EffectiveConfig,
     variables: &Variables,
     target: (&str, u16),
     tls: bool,
-) -> Result<Response, ProxyFailure> {
+    keepalive: Option<&UpstreamKeepaliveContext>,
+) -> Result<(Response, Option<UpstreamConnection>), ProxyFailure> {
     let (host, port) = target;
-    let socket_options = UpstreamSocketOptions::for_uwsgi(context);
-    let local_bind = evaluate_uwsgi_bind(context, variables);
-    let stream = open_gateway_io(
-        host,
-        port,
-        context.uwsgi_connect_timeout,
-        socket_options,
-        local_bind.as_deref(),
-        "uwsgi_bind",
-    )
-    .await?;
-    if tls {
-        let stream = match tokio::time::timeout(
+    let key = uwsgi_upstream_pool_key(host, port, tls, context, variables);
+    let mut connection = match keepalive {
+        Some(keepalive) => {
+            variables
+                .upstream_keepalive
+                .take(&keepalive.name, &key, &keepalive.config)
+                .await
+        }
+        None => None,
+    };
+    if connection.is_none() {
+        let socket_options = UpstreamSocketOptions::for_uwsgi(context);
+        let local_bind = evaluate_uwsgi_bind(context, variables);
+        let stream = open_gateway_io(
+            host,
+            port,
             context.uwsgi_connect_timeout,
-            upgrade_uwsgi_tls(stream, host, context, variables),
+            socket_options,
+            local_bind.as_deref(),
+            "uwsgi_bind",
         )
-        .await
-        {
-            Ok(Ok(stream)) => stream,
-            Ok(Err(failure)) => return Err(failure),
-            Err(_) => return Err(ProxyFailure::Timeout),
+        .await?;
+        let stream: BoxedUpstreamIo = if tls {
+            match tokio::time::timeout(
+                context.uwsgi_connect_timeout,
+                upgrade_uwsgi_tls(stream, host, context, variables),
+            )
+            .await
+            {
+                Ok(Ok(stream)) => Box::new(stream),
+                Ok(Err(failure)) => return Err(failure),
+                Err(_) => return Err(ProxyFailure::Timeout),
+            }
+        } else {
+            stream
         };
-        uwsgi_exchange_with_timeout(stream, request, context, variables).await
-    } else {
-        uwsgi_exchange_with_timeout(stream, request, context, variables).await
+        connection = Some(UpstreamConnection::new(stream, key));
     }
-}
-
-async fn uwsgi_exchange_with_timeout<S>(
-    stream: S,
-    request: &Request,
-    context: &EffectiveConfig,
-    variables: &Variables,
-) -> Result<Response, ProxyFailure>
-where
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-{
-    uwsgi_exchange_with_cache(stream, request, context, variables).await
+    uwsgi_exchange_connection(
+        connection.expect("uWSGI connection"),
+        request,
+        context,
+        variables,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -262,6 +277,57 @@ where
     uwsgi_exchange_with_cache(stream, request, context, variables).await
 }
 
+async fn uwsgi_exchange_connection(
+    mut connection: UpstreamConnection,
+    request: &Request,
+    context: &EffectiveConfig,
+    variables: &Variables,
+) -> Result<(Response, Option<UpstreamConnection>), ProxyFailure> {
+    connection.requests = connection.requests.saturating_add(1);
+    write_uwsgi_request(&mut connection.reader, request, context, variables).await?;
+    let outcome = read_cgi_response(
+        connection.reader,
+        complex_size(context.uwsgi_limit_rate.as_deref(), variables),
+        cgi_header_limit(&context.uwsgi_buffering),
+        UpstreamBodyBufferPolicy::upstream(
+            &context.uwsgi_buffering,
+            !ignores_accel_buffering(&context.uwsgi_ignore_headers),
+        ),
+        Some(&GatewayStreamingPolicy {
+            buffering: &context.uwsgi_buffering,
+            ignore_headers: &context.uwsgi_ignore_headers,
+            force_ranges: context.uwsgi_force_ranges,
+            intercept_errors: context.uwsgi_intercept_errors,
+        }),
+        context,
+        context.uwsgi_read_timeout,
+    )
+    .await
+    .map_err(proxy_failure_from_io)?;
+    let (mut response, reusable) = match outcome {
+        GatewayResponseRead::Buffered {
+            response,
+            reader,
+            protocol_complete,
+        } => {
+            connection.reader = reader;
+            let reusable =
+                protocol_complete && request.method != "HEAD" && connection.idle_is_open();
+            (response, reusable.then_some(connection))
+        }
+        GatewayResponseRead::Streamed(response) => (response, None),
+    };
+    filter_gateway_response_headers(
+        &mut response,
+        UWSGI_DEFAULT_HIDE_HEADERS,
+        &context.uwsgi_hide_headers,
+        &context.uwsgi_pass_headers,
+        &context.uwsgi_ignore_headers,
+    );
+    Ok((response, reusable))
+}
+
+#[cfg(test)]
 async fn uwsgi_exchange_with_cache<S>(
     mut stream: S,
     request: &Request,
@@ -271,38 +337,7 @@ async fn uwsgi_exchange_with_cache<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let streaming_request_body = request_body_stream_enabled(request, context);
-    let packet = build_uwsgi_header(request, context, variables, streaming_request_body)
-        .map_err(|_| ProxyFailure::Failure)?;
-    {
-        write_all_with_timeout(&mut stream, &packet, context.uwsgi_send_timeout)
-            .await
-            .map_err(proxy_failure_from_io)?;
-        if let Some(body_stream) = context
-            .uwsgi_pass_request_body
-            .then(|| request_body_stream_for_upstream(request, context))
-            .flatten()
-            .cloned()
-        {
-            let mut total = 0_u64;
-            while let Some(chunk) = body_stream
-                .next_limited(&mut total, context.client_max_body_size)
-                .await
-                .map_err(proxy_failure_from_io)?
-            {
-                write_all_with_timeout(&mut stream, &chunk, context.uwsgi_send_timeout)
-                    .await
-                    .map_err(proxy_failure_from_io)?;
-            }
-        } else if context.uwsgi_pass_request_body {
-            write_all_with_timeout(&mut stream, &request.body, context.uwsgi_send_timeout)
-                .await
-                .map_err(proxy_failure_from_io)?;
-        }
-        flush_with_timeout(&mut stream, context.uwsgi_send_timeout)
-            .await
-            .map_err(proxy_failure_from_io)?;
-    }
+    write_uwsgi_request(&mut stream, request, context, variables).await?;
     let limit_rate = complex_size(context.uwsgi_limit_rate.as_deref(), variables);
     let policy = GatewayStreamingPolicy {
         buffering: &context.uwsgi_buffering,
@@ -313,7 +348,7 @@ where
     let outcome = read_cgi_response(
         stream,
         limit_rate,
-        context.uwsgi_buffering.buffer_size,
+        cgi_header_limit(&context.uwsgi_buffering),
         UpstreamBodyBufferPolicy::upstream(
             &context.uwsgi_buffering,
             !ignores_accel_buffering(&context.uwsgi_ignore_headers),
@@ -336,6 +371,80 @@ where
         &context.uwsgi_ignore_headers,
     );
     Ok(response)
+}
+
+async fn write_uwsgi_request<S>(
+    stream: &mut S,
+    request: &Request,
+    context: &EffectiveConfig,
+    variables: &Variables,
+) -> Result<(), ProxyFailure>
+where
+    S: AsyncWrite + Unpin,
+{
+    let streaming_request_body = request_body_stream_enabled(request, context);
+    let packet = build_uwsgi_header(request, context, variables, streaming_request_body)
+        .map_err(|_| ProxyFailure::Failure)?;
+    write_all_with_timeout(stream, &packet, context.uwsgi_send_timeout)
+        .await
+        .map_err(proxy_failure_from_io)?;
+    if let Some(body_stream) = context
+        .uwsgi_pass_request_body
+        .then(|| request_body_stream_for_upstream(request, context))
+        .flatten()
+        .cloned()
+    {
+        let mut total = 0_u64;
+        while let Some(chunk) = body_stream
+            .next_limited(&mut total, context.client_max_body_size)
+            .await
+            .map_err(proxy_failure_from_io)?
+        {
+            write_all_with_timeout(stream, &chunk, context.uwsgi_send_timeout)
+                .await
+                .map_err(proxy_failure_from_io)?;
+        }
+    } else if context.uwsgi_pass_request_body {
+        write_all_with_timeout(stream, &request.body, context.uwsgi_send_timeout)
+            .await
+            .map_err(proxy_failure_from_io)?;
+    }
+    flush_with_timeout(stream, context.uwsgi_send_timeout)
+        .await
+        .map_err(proxy_failure_from_io)
+}
+
+fn uwsgi_upstream_pool_key(
+    host: &str,
+    port: u16,
+    tls: bool,
+    context: &EffectiveConfig,
+    variables: &Variables,
+) -> UpstreamPoolKey {
+    UpstreamPoolKey {
+        generation: variables.upstream_keepalive_generation,
+        scheme: if tls { "suwsgi" } else { "uwsgi" }.into(),
+        host: host.to_string(),
+        port,
+        tls_name: tls.then(|| uwsgi_tls_name(context, variables, host)),
+        tls_verify: tls && context.uwsgi_ssl_verify,
+        tls_trusted_certificate: tls
+            .then(|| context.uwsgi_ssl_trusted_certificate.clone())
+            .flatten(),
+        tls_verify_depth: tls.then_some(context.uwsgi_ssl_verify_depth),
+        tls_crl: tls.then(|| context.uwsgi_ssl_crl.clone()).flatten(),
+        tls_client_certificate: tls.then(|| context.uwsgi_ssl_certificate.clone()).flatten(),
+        tls_client_certificate_key: tls
+            .then(|| context.uwsgi_ssl_certificate_key.clone())
+            .flatten(),
+        tls_protocols: tls.then_some(context.uwsgi_ssl_protocols),
+        tls_ciphers: tls.then(|| context.uwsgi_ssl_ciphers.clone()),
+        proxy_bind: evaluate_uwsgi_bind(context, variables),
+        socket_keepalive: context.uwsgi_socket_keepalive,
+        socket_rcvbuf: context.uwsgi_socket_rcvbuf,
+        socket_sndbuf: context.uwsgi_socket_sndbuf,
+        http_version: "uwsgi".into(),
+    }
 }
 
 pub(in crate::server) fn build_uwsgi_header(

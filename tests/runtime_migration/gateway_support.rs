@@ -81,7 +81,9 @@ fn read_scgi_params(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let mut params = vec![0_u8; length];
     stream.read_exact(&mut params)?;
-    if params.pop() != Some(b',') {
+    let mut comma = [0_u8; 1];
+    stream.read_exact(&mut comma)?;
+    if comma != [b','] {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "SCGI request does not end with a comma",

@@ -249,6 +249,9 @@ async fn read_scgi_header(stream: &mut TcpStream) {
         .unwrap();
     let mut parameters = vec![0_u8; length];
     stream.read_exact(&mut parameters).await.unwrap();
+    let mut comma = [0_u8; 1];
+    stream.read_exact(&mut comma).await.unwrap();
+    assert_eq!(comma, [b',']);
 }
 
 async fn read_gateway_header(kind: &str, stream: &mut TcpStream) {

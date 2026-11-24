@@ -122,6 +122,37 @@ pub(in crate::server) fn prepare_gateway_cache(
     })
 }
 
+const GATEWAY_CACHE_REQUEST_HEADERS: &[&str] = &[
+    "if-modified-since",
+    "if-unmodified-since",
+    "if-none-match",
+    "if-match",
+    "range",
+    "if-range",
+];
+
+pub(in crate::server) fn prepare_gateway_upstream_request(
+    request: &Request,
+    cacheable: bool,
+    revalidation: Option<&CacheRevalidation>,
+) -> Option<Request> {
+    if !cacheable && revalidation.is_none() {
+        return None;
+    }
+    let mut outgoing = request.clone();
+    if cacheable {
+        outgoing.headers.retain(|header| {
+            !GATEWAY_CACHE_REQUEST_HEADERS
+                .iter()
+                .any(|name| header.name.eq_ignore_ascii_case(name))
+        });
+    }
+    if let Some(revalidation) = revalidation {
+        revalidation.apply_to_request(&mut outgoing);
+    }
+    Some(outgoing)
+}
+
 impl GatewayCachePlan {
     pub(in crate::server) fn allows_store(&self, request: &Request) -> bool {
         !self.no_store && gateway_cache_allows_store(request, self.max_range_offset)
@@ -258,7 +289,13 @@ pub(in crate::server) async fn lookup_gateway_cache(
     if expired {
         variables.upstream_cache_status = "EXPIRED".into();
         if plan.revalidate {
-            state.revalidation = state.stale.as_ref().map(CacheRevalidation::from_cached);
+            state.revalidation = state.stale.as_ref().map(|cached| {
+                let revalidation = CacheRevalidation::from_cached(cached);
+                variables.upstream_cache_last_modified =
+                    revalidation.last_modified().unwrap_or_default().into();
+                variables.upstream_cache_etag = revalidation.etag().unwrap_or_default().into();
+                revalidation
+            });
         }
     } else {
         variables.upstream_cache_status = "MISS".into();

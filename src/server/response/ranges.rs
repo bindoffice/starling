@@ -17,7 +17,15 @@ pub(in crate::server) fn apply_response_range(
     if response.body.is_stream() {
         return;
     }
-    let Some(length) = response.body.content_length() else {
+    let content_length = request.method.eq_ignore_ascii_case("HEAD").then(|| {
+        response
+            .header("Content-Length")
+            .and_then(|value| value.trim().parse::<u64>().ok())
+    });
+    let Some(length) = content_length
+        .flatten()
+        .or_else(|| response.body.content_length())
+    else {
         return;
     };
     let range_requested = request.header("range").is_some();

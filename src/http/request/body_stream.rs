@@ -8,10 +8,12 @@ use tokio::sync::{Mutex, mpsc, watch};
 
 const REQUEST_BODY_CHANNEL_CAPACITY: usize = 2;
 const REQUEST_BODY_FILE_CHUNK_SIZE: usize = 64 * 1024;
+const REQUEST_BODY_CAPTURE_LIMIT: usize = 64 * 1024;
 
 pub struct RequestBodyStream {
     source: Arc<RequestBodySource>,
     file_reader: Arc<Mutex<FileReader>>,
+    captured: Arc<Mutex<Option<Vec<u8>>>>,
 }
 
 enum RequestBodySource {
@@ -60,6 +62,7 @@ impl Clone for RequestBodyStream {
             // File-backed streams are replayable: every clone starts at byte
             // zero. Live channel clones continue to share the receiver.
             file_reader: Arc::new(Mutex::new(FileReader::NotStarted)),
+            captured: self.captured.clone(),
         }
     }
 }
@@ -91,6 +94,7 @@ impl RequestBodyStream {
                     ended,
                 })),
                 file_reader: Arc::new(Mutex::new(FileReader::NotStarted)),
+                captured: Arc::new(Mutex::new(Some(Vec::new()))),
             },
         )
     }
@@ -99,6 +103,7 @@ impl RequestBodyStream {
         Self {
             source: Arc::new(RequestBodySource::File(file)),
             file_reader: Arc::new(Mutex::new(FileReader::NotStarted)),
+            captured: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -127,6 +132,9 @@ impl RequestBodyStream {
                 let item = channel.recv().await.transpose()?;
                 if item.is_none() {
                     *receiver = None;
+                }
+                if let Some(data) = &item {
+                    self.capture(data).await;
                 }
                 Ok(item)
             }
@@ -163,8 +171,47 @@ impl RequestBodyStream {
                 }
                 *remaining = remaining.saturating_sub(read as u64);
                 buffer.truncate(read);
-                Ok(Some(Bytes::from(buffer)))
+                let data = Bytes::from(buffer);
+                self.capture(&data).await;
+                Ok(Some(data))
             }
+        }
+    }
+
+    pub(crate) async fn try_next(&self) -> io::Result<Option<Bytes>> {
+        let RequestBodySource::Channel(channel) = self.source.as_ref() else {
+            return Ok(None);
+        };
+        let mut receiver = channel.receiver.lock().await;
+        let Some(channel) = receiver.as_mut() else {
+            return Ok(None);
+        };
+        let item = match channel.try_recv() {
+            Ok(item) => item.map_err(classify_request_body_error)?,
+            Err(mpsc::error::TryRecvError::Empty) => return Ok(None),
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                *receiver = None;
+                return Ok(None);
+            }
+        };
+        drop(receiver);
+        self.capture(&item).await;
+        Ok(Some(item))
+    }
+
+    pub(crate) async fn captured_body(&self) -> Option<Vec<u8>> {
+        self.captured.lock().await.clone()
+    }
+
+    async fn capture(&self, data: &[u8]) {
+        let mut captured = self.captured.lock().await;
+        let Some(body) = captured.as_mut() else {
+            return;
+        };
+        if body.len().saturating_add(data.len()) > REQUEST_BODY_CAPTURE_LIMIT {
+            *captured = None;
+        } else {
+            body.extend_from_slice(data);
         }
     }
 
@@ -216,10 +263,10 @@ impl RequestBodyStream {
         }
     }
 
-    pub(crate) fn is_ended(&self) -> bool {
+    pub(crate) fn channel_ended(&self) -> bool {
         match self.source.as_ref() {
             RequestBodySource::Channel(channel) => channel.ended.load(Ordering::Acquire),
-            RequestBodySource::File(_) => true,
+            RequestBodySource::File(_) => false,
         }
     }
 }
@@ -283,6 +330,10 @@ pub(crate) fn request_body_error_status(error: &io::Error) -> Option<u16> {
 impl RequestBodySender {
     pub(crate) async fn send(&self, data: Bytes) -> bool {
         self.sender.send(Ok(data)).await.is_ok()
+    }
+
+    pub(crate) fn try_send(&self, data: Bytes) -> bool {
+        self.sender.try_send(Ok(data)).is_ok()
     }
 
     pub(crate) async fn fail(&self, error: io::Error) {

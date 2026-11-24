@@ -35,12 +35,10 @@ pub(in crate::server) async fn scgi_request(
     if let Some(response) = immediate {
         return response;
     }
-    let revalidated_request = revalidation.map(|revalidation| {
-        let mut outgoing = request.clone();
-        revalidation.apply_to_request(&mut outgoing);
-        outgoing
-    });
-    let request = revalidated_request.as_ref().unwrap_or(request);
+    let upstream_request =
+        prepare_gateway_upstream_request(request, cache.is_some(), revalidation.as_ref());
+    let request = upstream_request.as_ref().unwrap_or(request);
+    let keepalive = gateway_keepalive_context(&scgi.raw, http);
     let targets = resolve_gateway_targets(&scgi.raw, http, variables, request_peer(request));
     let mut attempted = Vec::new();
     let mut last_failure = ProxyFailure::Failure;
@@ -58,10 +56,16 @@ pub(in crate::server) async fn scgi_request(
         }
         attempted.push(upstream_target_display(&target));
         let attempt_started = Instant::now();
-        match scgi_attempt_with_cache(request, context, variables, (&target.host, target.port))
-            .await
+        match scgi_attempt_with_keepalive(
+            request,
+            context,
+            variables,
+            (&target.host, target.port),
+            keepalive.as_ref(),
+        )
+        .await
         {
-            Ok(mut response) => {
+            Ok((mut response, _protocol_complete, reusable)) => {
                 let response_time = attempt_started.elapsed();
                 upstream_statuses.push(response.status.to_string());
                 upstream_response_times.push(format!("{:.3}", response_time.as_secs_f64()));
@@ -118,6 +122,12 @@ pub(in crate::server) async fn scgi_request(
                 } else {
                     None
                 };
+                if let (Some(keepalive), Some(connection)) = (keepalive.as_ref(), reusable) {
+                    variables
+                        .upstream_keepalive
+                        .put(&keepalive.name, &keepalive.config, connection)
+                        .await;
+                }
                 variables.upstream_addr = attempted.join(", ");
                 variables.upstream_status = upstream_statuses.join(", ");
                 variables.upstream_response_time = upstream_response_times.join(", ");
@@ -191,28 +201,50 @@ pub(in crate::server) async fn scgi_attempt(
     variables: &Variables,
     target: (&str, u16),
 ) -> Result<Response, ProxyFailure> {
-    scgi_attempt_with_cache(request, context, variables, target).await
+    scgi_attempt_with_keepalive(request, context, variables, target, None)
+        .await
+        .map(|(response, _, _)| response)
 }
 
-async fn scgi_attempt_with_cache(
+async fn scgi_attempt_with_keepalive(
     request: &Request,
     context: &EffectiveConfig,
     variables: &Variables,
     target: (&str, u16),
-) -> Result<Response, ProxyFailure> {
+    keepalive: Option<&UpstreamKeepaliveContext>,
+) -> Result<(Response, bool, Option<UpstreamConnection>), ProxyFailure> {
     let (host, port) = target;
-    let socket_options = UpstreamSocketOptions::for_scgi(context);
-    let local_bind = evaluate_scgi_bind(context, variables);
-    let stream = open_gateway_io(
-        host,
-        port,
-        context.scgi_connect_timeout,
-        socket_options,
-        local_bind.as_deref(),
-        "scgi_bind",
+    let key = scgi_upstream_pool_key(host, port, context, variables);
+    let mut connection = match keepalive {
+        Some(keepalive) => {
+            variables
+                .upstream_keepalive
+                .take(&keepalive.name, &key, &keepalive.config)
+                .await
+        }
+        None => None,
+    };
+    if connection.is_none() {
+        let socket_options = UpstreamSocketOptions::for_scgi(context);
+        let local_bind = evaluate_scgi_bind(context, variables);
+        let stream = open_gateway_io(
+            host,
+            port,
+            context.scgi_connect_timeout,
+            socket_options,
+            local_bind.as_deref(),
+            "scgi_bind",
+        )
+        .await?;
+        connection = Some(UpstreamConnection::new(stream, key));
+    }
+    scgi_exchange_connection(
+        connection.expect("SCGI connection"),
+        request,
+        context,
+        variables,
     )
-    .await?;
-    scgi_exchange_with_cache(stream, request, context, variables).await
+    .await
 }
 
 #[cfg(test)]
@@ -225,50 +257,72 @@ pub(in crate::server) async fn scgi_exchange<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    scgi_exchange_with_cache(stream, request, context, variables).await
+    scgi_exchange_with_cache(stream, request, context, variables)
+        .await
+        .map(|(response, _)| response)
 }
 
+async fn scgi_exchange_connection(
+    mut connection: UpstreamConnection,
+    request: &Request,
+    context: &EffectiveConfig,
+    variables: &Variables,
+) -> Result<(Response, bool, Option<UpstreamConnection>), ProxyFailure> {
+    connection.requests = connection.requests.saturating_add(1);
+    write_scgi_request(&mut connection.reader, request, context, variables).await?;
+    let outcome = read_cgi_response(
+        connection.reader,
+        complex_size(context.scgi_limit_rate.as_deref(), variables),
+        cgi_header_limit(&context.scgi_buffering),
+        UpstreamBodyBufferPolicy::upstream(
+            &context.scgi_buffering,
+            !ignores_accel_buffering(&context.scgi_ignore_headers),
+        ),
+        Some(&GatewayStreamingPolicy {
+            buffering: &context.scgi_buffering,
+            ignore_headers: &context.scgi_ignore_headers,
+            force_ranges: context.scgi_force_ranges,
+            intercept_errors: context.scgi_intercept_errors,
+        }),
+        context,
+        context.scgi_read_timeout,
+    )
+    .await
+    .map_err(proxy_failure_from_io)?;
+    let (mut response, protocol_complete, reusable) = match outcome {
+        GatewayResponseRead::Buffered {
+            response,
+            reader,
+            protocol_complete,
+        } => {
+            connection.reader = reader;
+            let reusable =
+                protocol_complete && request.method != "HEAD" && connection.idle_is_open();
+            (response, protocol_complete, reusable.then_some(connection))
+        }
+        GatewayResponseRead::Streamed(response) => (response, false, None),
+    };
+    filter_gateway_response_headers(
+        &mut response,
+        SCGI_DEFAULT_HIDE_HEADERS,
+        &context.scgi_hide_headers,
+        &context.scgi_pass_headers,
+        &context.scgi_ignore_headers,
+    );
+    Ok((response, protocol_complete, reusable))
+}
+
+#[cfg(test)]
 async fn scgi_exchange_with_cache<S>(
     mut stream: S,
     request: &Request,
     context: &EffectiveConfig,
     variables: &Variables,
-) -> Result<Response, ProxyFailure>
+) -> Result<(Response, bool), ProxyFailure>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let streaming_request_body = request_body_stream_enabled(request, context);
-    let packet = build_scgi_header(request, context, variables, streaming_request_body)
-        .map_err(|_| ProxyFailure::Failure)?;
-    {
-        write_all_with_timeout(&mut stream, &packet, context.scgi_send_timeout)
-            .await
-            .map_err(proxy_failure_from_io)?;
-        if let Some(body_stream) = context
-            .scgi_pass_request_body
-            .then(|| request_body_stream_for_upstream(request, context))
-            .flatten()
-            .cloned()
-        {
-            let mut total = 0_u64;
-            while let Some(chunk) = body_stream
-                .next_limited(&mut total, context.client_max_body_size)
-                .await
-                .map_err(proxy_failure_from_io)?
-            {
-                write_all_with_timeout(&mut stream, &chunk, context.scgi_send_timeout)
-                    .await
-                    .map_err(proxy_failure_from_io)?;
-            }
-        } else if context.scgi_pass_request_body {
-            write_all_with_timeout(&mut stream, &request.body, context.scgi_send_timeout)
-                .await
-                .map_err(proxy_failure_from_io)?;
-        }
-        flush_with_timeout(&mut stream, context.scgi_send_timeout)
-            .await
-            .map_err(proxy_failure_from_io)?;
-    }
+    write_scgi_request(&mut stream, request, context, variables).await?;
     let limit_rate = complex_size(context.scgi_limit_rate.as_deref(), variables);
     let policy = GatewayStreamingPolicy {
         buffering: &context.scgi_buffering,
@@ -279,7 +333,7 @@ where
     let outcome = read_cgi_response(
         stream,
         limit_rate,
-        context.scgi_buffering.buffer_size,
+        cgi_header_limit(&context.scgi_buffering),
         UpstreamBodyBufferPolicy::upstream(
             &context.scgi_buffering,
             !ignores_accel_buffering(&context.scgi_ignore_headers),
@@ -290,9 +344,13 @@ where
     )
     .await
     .map_err(proxy_failure_from_io)?;
-    let mut response = match outcome {
-        GatewayResponseRead::Buffered { response, .. } => response,
-        GatewayResponseRead::Streamed(response) => response,
+    let (mut response, protocol_complete) = match outcome {
+        GatewayResponseRead::Buffered {
+            response,
+            protocol_complete,
+            ..
+        } => (response, protocol_complete),
+        GatewayResponseRead::Streamed(response) => (response, false),
     };
     filter_gateway_response_headers(
         &mut response,
@@ -301,7 +359,76 @@ where
         &context.scgi_pass_headers,
         &context.scgi_ignore_headers,
     );
-    Ok(response)
+    Ok((response, protocol_complete))
+}
+
+async fn write_scgi_request<S>(
+    stream: &mut S,
+    request: &Request,
+    context: &EffectiveConfig,
+    variables: &Variables,
+) -> Result<(), ProxyFailure>
+where
+    S: AsyncWrite + Unpin,
+{
+    let streaming_request_body = request_body_stream_enabled(request, context);
+    let packet = build_scgi_header(request, context, variables, streaming_request_body)
+        .map_err(|_| ProxyFailure::Failure)?;
+    write_all_with_timeout(stream, &packet, context.scgi_send_timeout)
+        .await
+        .map_err(proxy_failure_from_io)?;
+    if let Some(body_stream) = context
+        .scgi_pass_request_body
+        .then(|| request_body_stream_for_upstream(request, context))
+        .flatten()
+        .cloned()
+    {
+        let mut total = 0_u64;
+        while let Some(chunk) = body_stream
+            .next_limited(&mut total, context.client_max_body_size)
+            .await
+            .map_err(proxy_failure_from_io)?
+        {
+            write_all_with_timeout(stream, &chunk, context.scgi_send_timeout)
+                .await
+                .map_err(proxy_failure_from_io)?;
+        }
+    } else if context.scgi_pass_request_body {
+        write_all_with_timeout(stream, &request.body, context.scgi_send_timeout)
+            .await
+            .map_err(proxy_failure_from_io)?;
+    }
+    flush_with_timeout(stream, context.scgi_send_timeout)
+        .await
+        .map_err(proxy_failure_from_io)
+}
+
+fn scgi_upstream_pool_key(
+    host: &str,
+    port: u16,
+    context: &EffectiveConfig,
+    variables: &Variables,
+) -> UpstreamPoolKey {
+    UpstreamPoolKey {
+        generation: variables.upstream_keepalive_generation,
+        scheme: "scgi".into(),
+        host: host.to_string(),
+        port,
+        tls_name: None,
+        tls_verify: false,
+        tls_trusted_certificate: None,
+        tls_verify_depth: None,
+        tls_crl: None,
+        tls_client_certificate: None,
+        tls_client_certificate_key: None,
+        tls_protocols: None,
+        tls_ciphers: None,
+        proxy_bind: evaluate_scgi_bind(context, variables),
+        socket_keepalive: context.scgi_socket_keepalive,
+        socket_rcvbuf: context.scgi_socket_rcvbuf,
+        socket_sndbuf: context.scgi_socket_sndbuf,
+        http_version: "scgi".into(),
+    }
 }
 
 pub(in crate::server) fn build_scgi_header(
@@ -310,7 +437,20 @@ pub(in crate::server) fn build_scgi_header(
     variables: &Variables,
     streaming_request_body: bool,
 ) -> io::Result<Vec<u8>> {
-    let mut parameters = Vec::new();
+    let content_length = request
+        .header("content-length")
+        .map(str::to_string)
+        .or_else(|| request.body_file().map(|file| file.len().to_string()))
+        .unwrap_or_else(|| {
+            if streaming_request_body {
+                String::new()
+            } else {
+                request.body.len().to_string()
+            }
+        });
+    // SCGI applications require CONTENT_LENGTH to be the first pair in the
+    // netstring. Nginx emits it before configured scgi_param entries.
+    let mut parameters = vec![("CONTENT_LENGTH".into(), content_length)];
     for parameter in &context.scgi_params {
         let value = eval_variables(&parameter.value, variables);
         if parameter.if_not_empty && value.is_empty() {
@@ -321,27 +461,11 @@ pub(in crate::server) fn build_scgi_header(
     if context.scgi_pass_request_headers {
         append_cgi_request_headers(&mut parameters, &request.headers);
     }
-    if !parameters
-        .iter()
-        .any(|(name, _)| name.eq_ignore_ascii_case("CONTENT_LENGTH"))
-    {
-        let content_length = request
-            .header("content-length")
-            .map(str::to_string)
-            .or_else(|| request.body_file().map(|file| file.len().to_string()))
-            .unwrap_or_else(|| {
-                if streaming_request_body {
-                    String::new()
-                } else {
-                    request.body.len().to_string()
-                }
-            });
-        parameters.push(("CONTENT_LENGTH".into(), content_length));
-    }
     let mut parameters = encode_null_separated_params(&parameters);
+    let packet_length = parameters.len();
     parameters.push(b',');
     let mut packet = Vec::with_capacity(parameters.len() + 24);
-    packet.extend_from_slice(parameters.len().to_string().as_bytes());
+    packet.extend_from_slice(packet_length.to_string().as_bytes());
     packet.push(b':');
     packet.extend_from_slice(&parameters);
     Ok(packet)
