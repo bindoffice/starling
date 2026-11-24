@@ -3,7 +3,10 @@ use super::*;
 
 mod response_write;
 mod upgrade;
+use error_response::write_request_error_response;
 use response_write::{DispatchWrite, write_dispatch_response};
+
+mod error_response;
 
 pub(in crate::server) async fn handle_io_with_shutdown<S>(
     stream: S,
@@ -37,44 +40,35 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             .is_some_and(|reader| !reader.buffer().is_empty());
         if let Some(policy) = keepalive_policy.take() {
             connection_stats.set_idle();
-            let initial = policy.initial_idle_timeout();
-            let wait = match wait_for_keepalive_input_or_shutdown(
+            match wait_for_keepalive_phase(
                 reader.as_mut().expect("HTTP/1 reader available"),
-                initial,
+                policy.initial_idle_timeout(),
                 &mut shutdown,
             )
             .await
             {
-                KeepaliveWaitOrShutdown::Input(wait) => wait,
-                KeepaliveWaitOrShutdown::Shutdown => break,
-            };
-            match wait {
-                Ok(KeepaliveWait::Data) => {}
-                Ok(KeepaliveWait::Closed) => break,
-                Ok(KeepaliveWait::TimedOut) => {
+                KeepalivePhase::Data => {}
+                KeepalivePhase::Closed | KeepalivePhase::Shutdown => break,
+                KeepalivePhase::TimedOut => {
                     if !policy.becomes_reusable() {
                         timed_out = true;
                         break;
                     }
                     connection_stats.set_waiting();
-                    let wait = match wait_for_keepalive_input_or_shutdown(
+                    match wait_for_keepalive_phase(
                         reader.as_mut().expect("HTTP/1 reader available"),
                         policy.remaining_idle_timeout(),
                         &mut shutdown,
                     )
                     .await
                     {
-                        KeepaliveWaitOrShutdown::Input(wait) => wait,
-                        KeepaliveWaitOrShutdown::Shutdown => break,
-                    };
-                    match wait {
-                        Ok(KeepaliveWait::Data) => {}
-                        Ok(KeepaliveWait::Closed) => break,
-                        Ok(KeepaliveWait::TimedOut) => {
+                        KeepalivePhase::Data => {}
+                        KeepalivePhase::Closed | KeepalivePhase::Shutdown => break,
+                        KeepalivePhase::TimedOut => {
                             timed_out = true;
                             break;
                         }
-                        Err(err) => {
+                        KeepalivePhase::Failed(err) => {
                             state.logger.log(
                                 LogLevel::Info,
                                 format!("client keepalive read from {remote} failed: {err}"),
@@ -83,7 +77,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                         }
                     }
                 }
-                Err(err) => {
+                KeepalivePhase::Failed(err) => {
                     state.logger.log(
                         LogLevel::Info,
                         format!("client keepalive read from {remote} failed: {err}"),
@@ -145,23 +139,16 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                     LogLevel::Info,
                     format!("client request header error from {remote}: {err}"),
                 );
-                let mut response = error_response(status);
                 let send_timeout = default_context
                     .map(|server| server.context.send_timeout)
                     .unwrap_or_else(|| Duration::from_secs(60));
-                let mut writer = TimedWriter::new(&mut write_half, send_timeout);
-                let _ = write_response(
-                    &mut writer,
-                    &mut response,
-                    ResponseWriteOptions {
-                        request_method: "GET",
-                        request_version: "HTTP/1.1",
-                        keep_alive: false,
-                        keep_alive_header: None,
-                        server_tokens: ServerTokens::On,
-                        chunked_transfer_encoding: true,
-                        rate: ResponseRate::default(),
-                    },
+                let _ = write_request_error_response(
+                    &mut write_half,
+                    status,
+                    send_timeout,
+                    "GET",
+                    "HTTP/1.1",
+                    ServerTokens::On,
                 )
                 .await;
                 break;
@@ -190,22 +177,15 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             let send_timeout = request_context
                 .map(|server| server.context.send_timeout)
                 .unwrap_or_else(|| Duration::from_secs(60));
-            let mut response = error_response(400);
-            let mut writer = TimedWriter::new(&mut write_half, send_timeout);
-            let _ = write_response(
-                &mut writer,
-                &mut response,
-                ResponseWriteOptions {
-                    request_method: &head.method,
-                    request_version: &head.version,
-                    keep_alive: false,
-                    keep_alive_header: None,
-                    server_tokens: request_context
-                        .map(|server| server.context.server_tokens)
-                        .unwrap_or(ServerTokens::On),
-                    chunked_transfer_encoding: true,
-                    rate: ResponseRate::default(),
-                },
+            let _ = write_request_error_response(
+                &mut write_half,
+                400,
+                send_timeout,
+                &head.method,
+                &head.version,
+                request_context
+                    .map(|server| server.context.server_tokens)
+                    .unwrap_or(ServerTokens::On),
             )
             .await;
             break;
@@ -228,22 +208,15 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 LogLevel::Info,
                 format!("client request from {remote} sent too many header lines"),
             );
-            let mut response = error_response(400);
-            let mut writer = TimedWriter::new(&mut write_half, send_timeout);
-            let _ = write_response(
-                &mut writer,
-                &mut response,
-                ResponseWriteOptions {
-                    request_method: &head.method,
-                    request_version: &head.version,
-                    keep_alive: false,
-                    keep_alive_header: None,
-                    server_tokens: request_context
-                        .map(|server| server.context.server_tokens)
-                        .unwrap_or(ServerTokens::On),
-                    chunked_transfer_encoding: true,
-                    rate: ResponseRate::default(),
-                },
+            let _ = write_request_error_response(
+                &mut write_half,
+                400,
+                send_timeout,
+                &head.method,
+                &head.version,
+                request_context
+                    .map(|server| server.context.server_tokens)
+                    .unwrap_or(ServerTokens::On),
             )
             .await;
             break;
@@ -390,71 +363,18 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             break 'connection;
         }
         if let Some(proxy_upgrade) = outcome.upgrade.take() {
-            if let Some(task) = body_task.take() {
-                task.close().await;
-                match task.finish().await {
-                    Ok((restored, Ok(()))) => reader = Some(restored),
-                    Ok((_, Err(err))) => {
-                        request_logger.log(
-                            LogLevel::Info,
-                            format!(
-                                "client request body for \"{} {}\" from {remote} failed: {err}",
-                                request.method, request.target
-                            ),
-                        );
-                        break;
-                    }
-                    Err(err) => {
-                        request_logger.log(
-                            LogLevel::Error,
-                            format!(
-                                "client request body task for \"{} {}\" failed: {err}",
-                                request.method, request.target
-                            ),
-                        );
-                        break;
-                    }
-                }
-            }
-            let Some(reader) = reader.take() else {
-                break;
-            };
-            if let Some(control) = &control
-                && let Err(err) = control.apply_nodelay(outcome.tcp_nodelay)
-            {
-                request_logger.log(
-                    LogLevel::Alert,
-                    format!("setsockopt(TCP_NODELAY) failed: {err}"),
-                );
-                break;
-            }
-            match upgrade::serve_proxy_upgrade(
-                reader,
+            upgrade::handle_proxy_upgrade(
+                &mut body_task,
+                &mut reader,
                 &mut write_half,
                 &mut outcome,
                 *proxy_upgrade,
                 &request,
                 control.as_ref(),
+                &request_logger,
+                &remote,
             )
-            .await
-            {
-                upgrade::UpgradeOutcome::ClientClosed => {}
-                upgrade::UpgradeOutcome::Finished {
-                    result,
-                    bytes_sent,
-                    body_bytes_sent,
-                } => {
-                    if let Some(log) = outcome.deferred_access_log.take() {
-                        log.write_upgraded(bytes_sent, body_bytes_sent);
-                    }
-                    if let Err(err) = result {
-                        request_logger.log(
-                            LogLevel::Info,
-                            format!("proxied upgraded connection from {remote} failed: {err}"),
-                        );
-                    }
-                }
-            }
+            .await;
             break;
         }
         if let Some(task) = body_task.as_ref() {

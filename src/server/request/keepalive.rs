@@ -73,6 +73,14 @@ pub(super) enum KeepaliveWaitOrShutdown {
     Shutdown,
 }
 
+pub(super) enum KeepalivePhase {
+    Data,
+    Closed,
+    TimedOut,
+    Shutdown,
+    Failed(io::Error),
+}
+
 pub(super) async fn wait_for_keepalive_input<R>(
     reader: &mut R,
     timeout: Duration,
@@ -107,6 +115,23 @@ where
             KeepaliveWaitOrShutdown::Input(result)
         }
         _ = wait_for_shutdown(shutdown) => KeepaliveWaitOrShutdown::Shutdown,
+    }
+}
+
+pub(super) async fn wait_for_keepalive_phase<R>(
+    reader: &mut R,
+    timeout: Duration,
+    shutdown: &mut Option<watch::Receiver<ShutdownMode>>,
+) -> KeepalivePhase
+where
+    R: AsyncBufRead + Unpin,
+{
+    match wait_for_keepalive_input_or_shutdown(reader, timeout, shutdown).await {
+        KeepaliveWaitOrShutdown::Input(Ok(KeepaliveWait::Data)) => KeepalivePhase::Data,
+        KeepaliveWaitOrShutdown::Input(Ok(KeepaliveWait::Closed)) => KeepalivePhase::Closed,
+        KeepaliveWaitOrShutdown::Input(Ok(KeepaliveWait::TimedOut)) => KeepalivePhase::TimedOut,
+        KeepaliveWaitOrShutdown::Input(Err(err)) => KeepalivePhase::Failed(err),
+        KeepaliveWaitOrShutdown::Shutdown => KeepalivePhase::Shutdown,
     }
 }
 

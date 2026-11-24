@@ -12,6 +12,79 @@ pub(super) enum UpgradeOutcome {
     },
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn handle_proxy_upgrade<S, W>(
+    body_task: &mut Option<Http1BodyTask<S>>,
+    reader: &mut Option<BufReader<tokio::io::ReadHalf<S>>>,
+    write_half: &mut W,
+    outcome: &mut DispatchOutcome,
+    proxy_upgrade: ProxyUpgrade,
+    request: &Request,
+    control: Option<&ClientSocketControl>,
+    request_logger: &Logger,
+    remote: &ListenAddress,
+) where
+    S: AsyncRead + Send + Unpin + 'static,
+    W: AsyncWrite + Unpin,
+{
+    if let Some(task) = body_task.take() {
+        task.close().await;
+        match task.finish().await {
+            Ok((restored, Ok(()))) => *reader = Some(restored),
+            Ok((_, Err(err))) => {
+                request_logger.log(
+                    LogLevel::Info,
+                    format!(
+                        "client request body for \"{} {}\" from {remote} failed: {err}",
+                        request.method, request.target
+                    ),
+                );
+                return;
+            }
+            Err(err) => {
+                request_logger.log(
+                    LogLevel::Error,
+                    format!(
+                        "client request body task for \"{} {}\" failed: {err}",
+                        request.method, request.target
+                    ),
+                );
+                return;
+            }
+        }
+    }
+    let Some(reader) = reader.take() else {
+        return;
+    };
+    if let Some(control) = control
+        && let Err(err) = control.apply_nodelay(outcome.tcp_nodelay)
+    {
+        request_logger.log(
+            LogLevel::Alert,
+            format!("setsockopt(TCP_NODELAY) failed: {err}"),
+        );
+        return;
+    }
+    match serve_proxy_upgrade(reader, write_half, outcome, proxy_upgrade, request, control).await {
+        UpgradeOutcome::ClientClosed => {}
+        UpgradeOutcome::Finished {
+            result,
+            bytes_sent,
+            body_bytes_sent,
+        } => {
+            if let Some(log) = outcome.deferred_access_log.take() {
+                log.write_upgraded(bytes_sent, body_bytes_sent);
+            }
+            if let Err(err) = result {
+                request_logger.log(
+                    LogLevel::Info,
+                    format!("proxied upgraded connection from {remote} failed: {err}"),
+                );
+            }
+        }
+    }
+}
+
 pub(super) async fn serve_proxy_upgrade<S, W>(
     reader: BufReader<tokio::io::ReadHalf<S>>,
     write_half: &mut W,
