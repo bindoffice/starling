@@ -125,6 +125,9 @@ pub(in crate::server) fn acquire_connection_limits(
     context: &EffectiveConfig,
     variables: &mut Variables,
 ) -> Result<ConnectionLimitGuard, u16> {
+    if context.limit_conns.is_empty() {
+        return Ok(ConnectionLimitGuard::default());
+    }
     let socket = variables
         .client_abort
         .as_ref()

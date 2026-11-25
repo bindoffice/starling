@@ -305,7 +305,8 @@ async fn pre_rewrite_response(
             });
         }
         match acquire_connection_limits(context, variables) {
-            Ok(guard) => *connection_guard = Some(guard),
+            Ok(guard) if guard.is_active() => *connection_guard = Some(guard),
+            Ok(_) => {}
             Err(status) => {
                 let outcome = configured_error_page(
                     http,

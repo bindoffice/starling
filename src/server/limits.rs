@@ -16,8 +16,9 @@ pub(super) struct RequestBucket {
     pub(super) excess: u64,
 }
 
+#[derive(Default)]
 pub(in crate::server) struct ConnectionLimitGuard {
-    inner: Arc<Mutex<ConnectionLimitGuardState>>,
+    inner: Option<Arc<Mutex<ConnectionLimitGuardState>>>,
 }
 
 struct ConnectionLimitGuardState {
@@ -56,18 +57,26 @@ impl ConnectionLimitGuard {
         socket: Option<ClientSocketControl>,
     ) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(ConnectionLimitGuardState {
+            inner: Some(Arc::new(Mutex::new(ConnectionLimitGuardState {
                 state,
                 socket,
                 entries: Vec::new(),
-            })),
+            }))),
         }
     }
 
     pub(in crate::server) fn handle(&self) -> ConnectionLimitGuardHandle {
         ConnectionLimitGuardHandle {
-            inner: self.inner.clone(),
+            inner: self
+                .inner
+                .as_ref()
+                .expect("connection limit guard is initialized")
+                .clone(),
         }
+    }
+
+    pub(in crate::server) fn is_active(&self) -> bool {
+        self.inner.is_some()
     }
 
     /// Returns `Ok(false)` when the limit is reached and `Err(())` when the
@@ -78,7 +87,10 @@ impl ConnectionLimitGuard {
         key: &[u8],
         connections: u64,
     ) -> Result<bool, ()> {
-        let mut inner = self.inner.lock().map_err(|_| ())?;
+        let Some(inner) = self.inner.as_ref() else {
+            return Err(());
+        };
+        let mut inner = inner.lock().map_err(|_| ())?;
         let mut state = inner.state.lock().map_err(|_| ())?;
         let state_key = (zone.to_string(), key.to_vec());
         let owners = state.connections.entry(state_key.clone()).or_default();
@@ -106,7 +118,10 @@ impl ConnectionLimitGuard {
     }
 
     pub(in crate::server) fn release_all(&self) {
-        let Ok(mut inner) = self.inner.lock() else {
+        let Some(inner) = self.inner.as_ref() else {
+            return;
+        };
+        let Ok(mut inner) = inner.lock() else {
             return;
         };
         let state = inner.state.clone();
