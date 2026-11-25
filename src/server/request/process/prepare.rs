@@ -222,7 +222,7 @@ pub(super) async fn prepare_request(
                     continue;
                 }
                 TryFilesResult::Named(name) => {
-                    if let Some(processed) = process_named_location(
+                    if let Some(processed) = Box::pin(process_named_location(
                         http,
                         server,
                         request,
@@ -232,7 +232,7 @@ pub(super) async fn prepare_request(
                         depth,
                         uri_changes,
                         connection_guard,
-                    )
+                    ))
                     .await
                     {
                         return PrepareOutcome::Response(processed);

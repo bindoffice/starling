@@ -136,43 +136,48 @@ pub(super) async fn serve_content(
     let mut response = match handler {
         Some(ContentHandlerKind::FastCgi) => {
             if let Some(pass) = &context.fastcgi_pass {
-                fastcgi_request(pass, http, request, env, context, variables).await
+                Box::pin(fastcgi_request(
+                    pass, http, request, env, context, variables,
+                ))
+                .await
             } else {
                 error_response(500)
             }
         }
         Some(ContentHandlerKind::Uwsgi) => {
             if let Some(pass) = &context.uwsgi_pass {
-                uwsgi_request(pass, http, request, context, variables).await
+                Box::pin(uwsgi_request(pass, http, request, context, variables)).await
             } else {
                 error_response(500)
             }
         }
         Some(ContentHandlerKind::Scgi) => {
             if let Some(pass) = &context.scgi_pass {
-                scgi_request(pass, http, request, context, variables).await
+                Box::pin(scgi_request(pass, http, request, context, variables)).await
             } else {
                 error_response(500)
             }
         }
         Some(ContentHandlerKind::Grpc) => {
             if let Some(pass) = &context.grpc.pass {
-                grpc_request(pass, http, request, env, context, variables).await
+                Box::pin(grpc_request(pass, http, request, env, context, variables)).await
             } else {
                 error_response(500)
             }
         }
         Some(ContentHandlerKind::Memcached) => {
             if let Some(pass) = &context.memcached_pass {
-                memcached_request(pass, http, request, context, variables).await
+                Box::pin(memcached_request(pass, http, request, context, variables)).await
             } else {
                 error_response(500)
             }
         }
         Some(ContentHandlerKind::Proxy) => {
             if let Some(proxy) = &context.proxy_pass {
-                let result =
-                    proxy_request(proxy, http, request, env, location, context, variables).await;
+                let result = Box::pin(proxy_request(
+                    proxy, http, request, env, location, context, variables,
+                ))
+                .await;
                 upgrade = result.upgrade.map(Box::new);
                 result.response
             } else {
@@ -203,7 +208,14 @@ pub(super) async fn serve_content(
         response.mark_preserve_on_client_abort();
     }
     if kind.gateway() {
-        serve_gateway_store(&mut response, env, location, context, variables).await;
+        Box::pin(serve_gateway_store(
+            &mut response,
+            env,
+            location,
+            context,
+            variables,
+        ))
+        .await;
         return (response, kind, None);
     }
     (response, kind, upgrade)
