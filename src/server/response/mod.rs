@@ -39,35 +39,44 @@ pub(super) async fn serve_static(
         return Some(response);
     }
 
-    let path = map_request_path(
-        context,
-        selected_location,
-        &env.uri,
-        env.add_uri_to_alias,
-        variables,
-    );
+    let mapped_path;
+    let path = if variables.uri == env.uri
+        && !env.bypass_try_files
+        && !variables.request_filename.as_os_str().is_empty()
+    {
+        variables.request_filename.as_path()
+    } else {
+        mapped_path = map_request_path(
+            context,
+            selected_location,
+            &env.uri,
+            env.add_uri_to_alias,
+            variables,
+        );
+        mapped_path.as_path()
+    };
     if request.method != "POST" {
-        match try_fast_static_file(&path, context) {
+        match try_fast_static_file(path, context) {
             Ok(Some(response)) => return Some(response),
             Ok(None) => {}
             Err(status) => return Some(error_response(status)),
         }
     }
     if request.method != "POST" && !env.uri.ends_with('/') {
-        match gzip_static_candidate(request, &path, context, variables).await {
+        match gzip_static_candidate(request, path, context, variables).await {
             GzipStaticCandidate::Served(response) => return Some(*response),
             GzipStaticCandidate::Denied(status) => return Some(error_response(status)),
             GzipStaticCandidate::Off | GzipStaticCandidate::Declined { .. } => {}
         }
     }
-    if let Err(status) = check_path_access(&path, context, variables).await {
+    if let Err(status) = check_path_access(path, context, variables).await {
         return Some(error_response(status));
     }
-    let metadata = match tokio::fs::metadata(&path).await {
+    let metadata = match tokio::fs::metadata(path).await {
         Ok(metadata) => metadata,
         Err(error) => {
             if error.kind() == io::ErrorKind::NotFound {
-                log_static_not_found(&path, context, variables);
+                log_static_not_found(path, context, variables);
             }
             return None;
         }
@@ -104,7 +113,7 @@ pub(super) async fn serve_static(
             }
         }
         if context.random_index
-            && let Some(candidate) = random_index_file(&path).await
+            && let Some(candidate) = random_index_file(path).await
             && let Ok(()) = check_path_access(&candidate, context, variables).await
             && let Ok(metadata) = tokio::fs::metadata(&candidate).await
         {
@@ -114,7 +123,7 @@ pub(super) async fn serve_static(
             if request.method == "POST" {
                 return Some(error_response(405));
             }
-            return Some(autoindex_response(request, &path, &env.uri, context).await);
+            return Some(autoindex_response(request, path, &env.uri, context).await);
         }
         return Some(error_response(403));
     }
@@ -126,7 +135,7 @@ pub(super) async fn serve_static(
         response.set_header("Allow", "GET, HEAD");
         return Some(response);
     }
-    static_file_response(request, &path, metadata, context, variables).await
+    static_file_response(request, path, metadata, context, variables).await
 }
 
 pub(super) async fn random_index_file(path: &Path) -> Option<PathBuf> {
