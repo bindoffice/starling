@@ -17,6 +17,11 @@ pub(in crate::server) fn apply_response_range(
     if response.body.is_stream() {
         return;
     }
+    let range_requested = request.header("range").is_some();
+    if !range_requested {
+        response.set_header_static("Accept-Ranges", "bytes");
+        return;
+    }
     let content_length = request.method.eq_ignore_ascii_case("HEAD").then(|| {
         response
             .header("Content-Length")
@@ -28,7 +33,6 @@ pub(in crate::server) fn apply_response_range(
     else {
         return;
     };
-    let range_requested = request.header("range").is_some();
     let ranges = if response.single_range { 1 } else { max_ranges };
     if let Some(ranged) = apply_range(response, request, length, ranges) {
         *response = ranged;

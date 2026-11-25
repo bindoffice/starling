@@ -16,22 +16,46 @@ pub(in crate::server) fn evaluate_conditional_request(
         return ConditionalResult::Full;
     }
 
+    let mut if_unmodified_since = None;
+    let mut if_match = None;
+    let mut if_modified_since = None;
+    let mut if_none_match = None;
+    for header in request.headers.iter() {
+        if if_unmodified_since.is_none() && header.name.eq_ignore_ascii_case("if-unmodified-since")
+        {
+            if_unmodified_since = Some(header.value.as_str());
+        } else if if_match.is_none() && header.name.eq_ignore_ascii_case("if-match") {
+            if_match = Some(header.value.as_str());
+        } else if if_modified_since.is_none()
+            && header.name.eq_ignore_ascii_case("if-modified-since")
+        {
+            if_modified_since = Some(header.value.as_str());
+        } else if if_none_match.is_none() && header.name.eq_ignore_ascii_case("if-none-match") {
+            if_none_match = Some(header.value.as_str());
+        }
+    }
+    if if_unmodified_since.is_none()
+        && if_match.is_none()
+        && if_modified_since.is_none()
+        && if_none_match.is_none()
+    {
+        return ConditionalResult::Full;
+    }
+
     let last_modified = response.header("Last-Modified").and_then(http_timestamp);
     let etag = response.header("ETag");
 
-    if let Some(value) = request.header("if-unmodified-since")
+    if let Some(value) = if_unmodified_since
         && !test_if_unmodified(last_modified, value)
     {
         return ConditionalResult::PreconditionFailed;
     }
-    if let Some(value) = request.header("if-match")
+    if let Some(value) = if_match
         && !matches_etag(etag, value, false)
     {
         return ConditionalResult::PreconditionFailed;
     }
 
-    let if_modified_since = request.header("if-modified-since");
-    let if_none_match = request.header("if-none-match");
     if if_modified_since.is_none() && if_none_match.is_none() {
         return ConditionalResult::Full;
     }

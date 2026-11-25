@@ -8,6 +8,9 @@ pub(in crate::server) fn apply_msie_compat(
     request: &Request,
     response: &mut Response,
 ) {
+    if !context.msie_refresh && !context.msie_padding {
+        return;
+    }
     let user_agent = request.header("user-agent").unwrap_or_default();
     if context.msie_refresh
         && super::super::user_agent::is_msie(user_agent)
