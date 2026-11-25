@@ -76,7 +76,7 @@ pub(in crate::http) async fn read_chunked_body_with_trailers<R: AsyncBufReadExt 
                     return Err(invalid_data("invalid chunked trailer"));
                 }
                 trailers.push(Header {
-                    name: name.to_string(),
+                    name: name.into(),
                     value: value.trim().to_string(),
                 });
             }

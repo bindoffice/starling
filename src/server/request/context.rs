@@ -301,7 +301,7 @@ pub(in crate::server) fn select_server<'a>(
     let mut wildcard_match: Option<(&ServerConfig, usize)> = None;
     for server_id in &group.server_ids {
         let server = &http.servers[*server_id];
-        for name in &server.names {
+        for name in server.names.iter() {
             let specificity = name.wildcard_specificity(host).unwrap_or(0);
             if specificity > 0 && wildcard_match.is_none_or(|(_, previous)| specificity > previous)
             {

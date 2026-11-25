@@ -67,7 +67,7 @@ pub(in crate::server) fn build_proxy_request(
             if skip_headers.contains(&header.name.to_ascii_lowercase()) {
                 continue;
             }
-            headers.push((header.name.clone(), header.value.clone()));
+            headers.push((header.name.to_string(), header.value.clone()));
         }
     }
     for header in &context.proxy_headers {
@@ -79,7 +79,7 @@ pub(in crate::server) fn build_proxy_request(
         if name_lower == "host" {
             host_header_set = true;
         }
-        headers.push((header.name.clone(), value));
+        headers.push((header.name.to_string(), value));
     }
     if !host_header_set {
         headers.push(("Host".into(), variables.proxy_host.clone()));

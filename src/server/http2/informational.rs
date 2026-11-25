@@ -10,7 +10,7 @@ pub(in crate::server) fn send_h2_early_hints(
             if is_h2_connection_header(&header.name) {
                 continue;
             }
-            let Ok(name) = http::header::HeaderName::from_bytes(header.name.as_bytes()) else {
+            let Some(name) = super::send::h2_header_name(&header.name) else {
                 continue;
             };
             let Ok(value) = super::send::h2_header_value(&header.value) else {

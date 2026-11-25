@@ -253,7 +253,9 @@ pub struct ServerConfig {
     pub id: usize,
     pub listens: Vec<ListenConfig>,
     pub http2: bool,
-    pub names: Vec<ServerName>,
+    pub names: Arc<[ServerName]>,
+    pub default_server_name: Arc<str>,
+    pub has_real_ip: bool,
     pub context: Arc<EffectiveConfig>,
     pub locations: Vec<LocationConfig>,
 }

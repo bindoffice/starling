@@ -87,7 +87,7 @@ pub(in crate::server) fn gateway_keepalive_context(
     let upstream = http.upstreams.get(raw)?;
     let config = upstream.keepalive.clone()?;
     (config.max_cached != 0).then(|| UpstreamKeepaliveContext {
-        name: raw.to_string(),
+        name: raw.into(),
         config,
     })
 }

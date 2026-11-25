@@ -164,7 +164,7 @@ pub(super) fn build_tls_config(
                 server_uses_http2(server, &group.address),
             )?)
         };
-        for name in &server.names {
+        for name in server.names.iter() {
             match name {
                 ServerName::Exact(name) if !name.is_empty() => {
                     exact

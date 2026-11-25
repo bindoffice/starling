@@ -98,22 +98,25 @@ pub(in crate::server) fn variable_value(
             variables.method, variables.request_target, variables.version
         ),
         "host" | "http_host" => variables.host.clone(),
-        "server_name" => variables.server_name.clone(),
-        "remote_addr" => variables.remote_addr.clone(),
-        "binary_remote_addr" => variables.remote_addr.clone(),
-        "binary_remote_port" => variables.remote_port.clone(),
-        "remote_port" => variables.remote_port.clone(),
-        "server_addr" => variables.server_addr.clone(),
-        "server_port" => variables.server_port.clone(),
-        "request_port" => variables.request_port.clone(),
-        "is_request_port" => variables.is_request_port.clone(),
-        "scheme" => variables.scheme.clone(),
-        "https" => variables.https.clone(),
-        "http2" => variables.http2.clone(),
-        "pipe" => variables.pipe.clone(),
-        "connection" => variables.connection.clone(),
-        "connection_requests" => variables.connection_requests.clone(),
-        "connection_time" => variables.connection_time.clone(),
+        "server_name" => variables.server_name.to_string(),
+        "remote_addr" => variables.remote_addr.to_string(),
+        "binary_remote_addr" => variables.remote_addr.to_string(),
+        "binary_remote_port" => variables.remote_port.to_string(),
+        "remote_port" => variables.remote_port.to_string(),
+        "server_addr" => variables.server_addr.to_string(),
+        "server_port" => variables.server_port.to_string(),
+        "request_port" => variables
+            .request_port
+            .map(|port| port.to_string())
+            .unwrap_or_default(),
+        "is_request_port" => if variables.is_request_port { ":" } else { "" }.to_owned(),
+        "scheme" => variables.scheme.to_owned(),
+        "https" => variables.https.to_owned(),
+        "http2" => variables.http2.to_owned(),
+        "pipe" => variables.pipe_value().to_owned(),
+        "connection" => variables.connection_value(),
+        "connection_requests" => variables.connection_requests_value(),
+        "connection_time" => variables.connection_time_value(),
         "ssl_protocol" => variables.ssl_protocol.clone(),
         "ssl_cipher" => variables.ssl_cipher.clone(),
         "ssl_server_name" => variables.ssl_server_name.clone(),
@@ -131,9 +134,17 @@ pub(in crate::server) fn variable_value(
         "ssl_client_v_end" => variables.ssl_client_v_end.clone(),
         "ssl_client_v_remain" => variables.ssl_client_v_remain.clone(),
         "hostname" => variables.hostname.to_string(),
-        "request_id" => variables.request_id.clone(),
-        "realip_remote_addr" => variables.realip_remote_addr.clone(),
-        "realip_remote_port" => variables.realip_remote_port.clone(),
+        "request_id" => variables.request_id_value().to_owned(),
+        "realip_remote_addr" => variables
+            .realip_remote_addr
+            .as_deref()
+            .unwrap_or_default()
+            .to_owned(),
+        "realip_remote_port" => variables
+            .realip_remote_port
+            .as_deref()
+            .unwrap_or_default()
+            .to_owned(),
         "proxy_protocol_addr" => variables.proxy_protocol_addr.clone(),
         "proxy_protocol_port" => variables.proxy_protocol_port.clone(),
         "proxy_protocol_server_addr" => variables.proxy_protocol_server_addr.clone(),
@@ -148,7 +159,10 @@ pub(in crate::server) fn variable_value(
         "content_type" => variables.content_type.clone(),
         "request_body" => variables.request_body.clone(),
         "request_body_file" => variables.request_body_file.clone(),
-        "request_length" => variables.request_length.clone(),
+        "request_length" => variables
+            .request_length
+            .map(|length| length.to_string())
+            .unwrap_or_default(),
         "request_time" => format!("{:.3}", variables.started.elapsed().as_secs_f64()),
         "date_local" => crate::server::response::default_date(false),
         "date_gmt" => crate::server::response::default_date(true),
@@ -188,7 +202,7 @@ pub(in crate::server) fn variable_value(
                 .map(|header| header.value.as_str())
                 .unwrap_or_default();
             if forwarded.is_empty() {
-                variables.remote_addr.clone()
+                variables.remote_addr.to_string()
             } else {
                 format!("{forwarded}, {}", variables.remote_addr)
             }

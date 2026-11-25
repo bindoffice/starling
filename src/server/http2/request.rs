@@ -159,7 +159,7 @@ pub(super) fn request_from_h2_parts(
         .headers
         .iter()
         .map(|(name, value)| Header {
-            name: name.as_str().to_string(),
+            name: name.as_str().into(),
             value: crate::http::header_value_from_bytes(value.as_bytes()),
         })
         .collect();

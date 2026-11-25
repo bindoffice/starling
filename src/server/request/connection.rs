@@ -4,7 +4,8 @@ use super::*;
 mod request_body;
 mod response_write;
 mod upgrade;
-use error_response::write_request_rejection;
+use error_response::{log_and_reject_request, write_request_rejection};
+use request_body::close_http1_body;
 use response_write::{DispatchWrite, write_dispatch_response};
 
 mod error_response;
@@ -32,6 +33,8 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
     let mut close_config = ConnectionCloseConfig::default();
     let connection_started = Instant::now();
     let mut head_parse_buffers = RequestHeadParseBuffers::default();
+    let mut response_head_scratch = Vec::with_capacity(512);
+    let client_abort = ClientAbortState::with_socket(control.clone());
     let shutdown_enabled = shutdown.is_some();
     'connection: loop {
         if shutdown_requested(&shutdown) {
@@ -141,20 +144,18 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 } else {
                     400
                 };
-                state.logger.log(
-                    LogLevel::Info,
-                    format!("client request header error from {remote}: {err}"),
-                );
                 let send_timeout = default_context
                     .map(|server| server.context.send_timeout)
                     .unwrap_or_else(|| Duration::from_secs(60));
-                write_request_rejection(
+                log_and_reject_request(
+                    &state.logger,
                     &mut write_half,
                     status,
                     send_timeout,
                     "GET",
                     "HTTP/1.1",
                     ServerTokens::On,
+                    format!("client request header error from {remote}: {err}"),
                 )
                 .await;
                 break;
@@ -176,14 +177,11 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             .map(|server| server.context.underscores_in_headers)
             .unwrap_or(false);
         if let Err(err) = head.apply_header_policy(ignore_invalid_headers, underscores_in_headers) {
-            state.logger.log(
-                LogLevel::Info,
-                format!("client request header error from {remote}: {err}"),
-            );
             let send_timeout = request_context
                 .map(|server| server.context.send_timeout)
                 .unwrap_or_else(|| Duration::from_secs(60));
-            write_request_rejection(
+            log_and_reject_request(
+                &state.logger,
                 &mut write_half,
                 400,
                 send_timeout,
@@ -192,6 +190,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 request_context
                     .map(|server| server.context.server_tokens)
                     .unwrap_or(ServerTokens::On),
+                format!("client request header error from {remote}: {err}"),
             )
             .await;
             break;
@@ -210,11 +209,8 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 .map(|server| server.context.max_headers)
                 .unwrap_or(1000)
         {
-            state.logger.log(
-                LogLevel::Info,
-                format!("client request from {remote} sent too many header lines"),
-            );
-            write_request_rejection(
+            log_and_reject_request(
+                &state.logger,
                 &mut write_half,
                 400,
                 send_timeout,
@@ -223,6 +219,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 request_context
                     .map(|server| server.context.server_tokens)
                     .unwrap_or(ServerTokens::On),
+                format!("client request from {remote} sent too many header lines"),
             )
             .await;
             break;
@@ -254,7 +251,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             keep_alive: head.keep_alive,
         };
 
-        let client_abort = ClientAbortState::with_socket(control.clone());
+        client_abort.reset_for_request();
         let dispatch = dispatch_http_request(
             snapshot,
             &group,
@@ -287,18 +284,12 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                              cancelling the upstream request"
                         ),
                     );
-                    if let Some(task) = body_task.take() {
-                        task.close().await;
-                        task.abort();
-                    }
+                    close_http1_body(&mut body_task).await;
                     break 'connection;
                 }
             };
         let Some(action) = action else {
-            if let Some(task) = body_task.take() {
-                task.close().await;
-                task.abort();
-            }
+            close_http1_body(&mut body_task).await;
             break;
         };
         let mut outcome;
@@ -314,10 +305,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                     .clone()
                     .unwrap_or_else(|| state.logger.clone());
                 request_logger = tunnel_logger.clone();
-                if let Some(task) = body_task.take() {
-                    task.close().await;
-                    task.abort();
-                }
+                close_http1_body(&mut body_task).await;
                 if let Some(control) = &control
                     && let Err(err) = control.apply_nodelay_once(tunnel.tcp_nodelay)
                 {
@@ -345,10 +333,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             }
         }
         if client_closed_during_dispatch {
-            if let Some(task) = body_task.take() {
-                task.close().await;
-                task.abort();
-            }
+            close_http1_body(&mut body_task).await;
             let mut response = outcome.response;
             let _ = drain_after_client_abort(&mut response);
             if let Some(log) = outcome.deferred_access_log.take() {
@@ -364,10 +349,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 LogLevel::Info,
                 format!("client request body error from {remote}: {error}"),
             );
-            if let Some(task) = body_task.take() {
-                task.close().await;
-                task.abort();
-            }
+            close_http1_body(&mut body_task).await;
             write_request_rejection(
                 &mut write_half,
                 400,
@@ -415,8 +397,14 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             outcome.keep_alive = false;
             outcome.keepalive_header = None;
         }
-        match write_dispatch_response(&mut write_half, &mut outcome, &request, control.as_ref())
-            .await
+        match write_dispatch_response(
+            &mut write_half,
+            &mut outcome,
+            &request,
+            control.as_ref(),
+            &mut response_head_scratch,
+        )
+        .await
         {
             DispatchWrite::Written => {}
             DispatchWrite::ClientClosed => {
@@ -485,10 +473,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             outcome.keepalive_min_timeout,
         ));
     }
-    if let Some(task) = body_task.take() {
-        task.close().await;
-        task.abort();
-    }
+    close_http1_body(&mut body_task).await;
     if timed_out && close_config.reset_timedout_connection {
         if let Some(reset_target) = reset_target
             && let Err(err) = reset_target.set_reset_on_close()

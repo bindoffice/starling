@@ -121,12 +121,19 @@ pub(super) fn compile_server(
         .into_iter()
         .map(|location| compile_location(location, &context, prefix))
         .collect::<ConfigResult<Vec<_>>>()?;
+    let has_real_ip = !context.real_ip_from.is_empty()
+        || locations
+            .iter()
+            .any(|location| !location.context.real_ip_from.is_empty());
+    let default_server_name = Arc::from(names.first().map(ServerName::display).unwrap_or_default());
 
     Ok(ServerConfig {
         id,
         listens,
         http2,
-        names,
+        names: Arc::from(names),
+        default_server_name,
+        has_real_ip,
         context: Arc::new(context),
         locations,
     })

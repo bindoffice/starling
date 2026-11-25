@@ -61,7 +61,8 @@ use crate::http::{
     UpstreamResponseHead, error_response, parse_accel_buffering, prepare_response_for_write,
     prepare_response_headers, read_request_head_with_limits_and_buffers,
     read_upstream_response_body, read_upstream_response_head, reason_phrase, response_head_length,
-    sanitize_header_value, store_request_body, write_prepared_response, write_response,
+    sanitize_header_value, store_request_body, write_prepared_response_with_scratch,
+    write_response,
 };
 use crate::logging::{
     Logger, append_access_log, flush_access_logs, log_filter_allows, nginx_access_timestamp,
@@ -339,6 +340,10 @@ struct ListenerGroup {
 struct ConnectionAddresses {
     remote: ListenAddress,
     local: ListenAddress,
+    remote_addr_text: Arc<str>,
+    remote_port_text: Arc<str>,
+    local_addr_text: Arc<str>,
+    local_port_text: Arc<str>,
     proxy_protocol_addr: Option<IpAddr>,
     proxy_protocol_port: Option<u16>,
     proxy_protocol_server_addr: Option<IpAddr>,
@@ -349,9 +354,15 @@ struct ConnectionAddresses {
 
 impl ConnectionAddresses {
     fn direct(remote: ListenAddress, local: ListenAddress) -> Self {
+        let (remote_addr_text, remote_port_text) = address_variable_text(&remote);
+        let (local_addr_text, local_port_text) = address_variable_text(&local);
         Self {
             remote,
             local,
+            remote_addr_text,
+            remote_port_text,
+            local_addr_text,
+            local_port_text,
             proxy_protocol_addr: None,
             proxy_protocol_port: None,
             proxy_protocol_server_addr: None,
@@ -360,6 +371,13 @@ impl ConnectionAddresses {
             tls: None,
         }
     }
+}
+
+fn address_variable_text(address: &ListenAddress) -> (Arc<str>, Arc<str>) {
+    (
+        Arc::from(address.variable_address()),
+        Arc::from(address.variable_port()),
+    )
 }
 
 type ListenerSignature = (

@@ -11,6 +11,7 @@ pub(super) async fn write_dispatch_response<W>(
     outcome: &mut DispatchOutcome,
     request: &Request,
     control: Option<&ClientSocketControl>,
+    scratch: &mut Vec<u8>,
 ) -> DispatchWrite
 where
     W: AsyncWrite + Unpin,
@@ -30,7 +31,13 @@ where
     } else {
         prepare_response_for_write(&mut outcome.response, &options)
     };
-    let write = write_prepared_response(&mut writer, &mut outcome.response, options, chunked);
+    let write = write_prepared_response_with_scratch(
+        &mut writer,
+        &mut outcome.response,
+        options,
+        chunked,
+        scratch,
+    );
     tokio::pin!(write);
     let result = if let Some(control) = control {
         tokio::select! {

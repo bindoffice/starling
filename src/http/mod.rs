@@ -144,9 +144,141 @@ fn lowercase_host(host: &str) -> Cow<'_, str> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeaderName(Cow<'static, str>);
+
+impl HeaderName {
+    pub fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl std::ops::Deref for HeaderName {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for HeaderName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::fmt::Display for HeaderName {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl From<&str> for HeaderName {
+    fn from(name: &str) -> Self {
+        canonical_header_name(name)
+            .map(|name| Self(Cow::Borrowed(name)))
+            .unwrap_or_else(|| Self(Cow::Owned(name.to_owned())))
+    }
+}
+
+impl From<String> for HeaderName {
+    fn from(name: String) -> Self {
+        canonical_header_name(&name)
+            .map(|name| Self(Cow::Borrowed(name)))
+            .unwrap_or(Self(Cow::Owned(name)))
+    }
+}
+
+impl From<&String> for HeaderName {
+    fn from(name: &String) -> Self {
+        Self::from(name.as_str())
+    }
+}
+
+impl From<HeaderName> for String {
+    fn from(name: HeaderName) -> Self {
+        name.0.into_owned()
+    }
+}
+
+impl PartialEq<str> for HeaderName {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for HeaderName {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<HeaderName> for str {
+    fn eq(&self, other: &HeaderName) -> bool {
+        self == other.as_str()
+    }
+}
+
+fn canonical_header_name(name: &str) -> Option<&'static str> {
+    const NAMES: &[&str] = &[
+        "Content-Type",
+        "Content-Length",
+        "Date",
+        "Server",
+        "Last-Modified",
+        "ETag",
+        "Connection",
+        "Keep-Alive",
+        "Transfer-Encoding",
+        "Cache-Control",
+        "Location",
+        "Set-Cookie",
+        "Vary",
+        "Host",
+        "User-Agent",
+        "Accept",
+        "Accept-Encoding",
+        "Accept-Language",
+        "Accept-Ranges",
+        "Authorization",
+        "Cookie",
+        "Referer",
+        "Range",
+        "If-Modified-Since",
+        "If-None-Match",
+        "Allow",
+        "Content-Disposition",
+        "Content-Encoding",
+        "Content-Language",
+        "Content-Location",
+        "Content-Range",
+        "Expect",
+        "Expires",
+        "Link",
+        "P3P",
+        "Proxy-Connection",
+        "TE",
+        "Trailer",
+        "Upgrade",
+        "Via",
+        "WWW-Authenticate",
+        "X-Accel-Buffering",
+        "X-Accel-Charset",
+        "X-Accel-Limit-Rate",
+        "X-Accel-Redirect",
+        "X-Forwarded-For",
+        "X-Forwarded-Proto",
+        "X-Real-IP",
+    ];
+    NAMES
+        .iter()
+        .copied()
+        .find(|candidate| name.eq_ignore_ascii_case(candidate))
+}
+
 #[derive(Debug, Clone)]
 pub struct Header {
-    pub name: String,
+    pub name: HeaderName,
     pub value: String,
 }
 
@@ -266,6 +398,7 @@ mod validation;
 
 pub(crate) use rate::ReadRate;
 pub use request::*;
+pub(crate) use response::write_prepared_response_with_scratch;
 pub use response::*;
 pub use temp_file::*;
 pub use upstream::*;

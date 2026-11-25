@@ -211,7 +211,7 @@ fn parse_cgi_head(bytes: &[u8]) -> io::Result<CgiHead> {
         } else if name.eq_ignore_ascii_case("content-type") {
             content_type = Some(value.clone());
             headers.push(Header {
-                name: name.to_string(),
+                name: name.into(),
                 value,
             });
         } else if !matches!(
@@ -220,7 +220,7 @@ fn parse_cgi_head(bytes: &[u8]) -> io::Result<CgiHead> {
         ) {
             has_location |= name.eq_ignore_ascii_case("location");
             headers.push(Header {
-                name: name.to_string(),
+                name: name.into(),
                 value,
             });
         }

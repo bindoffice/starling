@@ -398,7 +398,7 @@ pub(super) fn send_h2_trailers(
         {
             continue;
         }
-        let Ok(name) = http::header::HeaderName::from_bytes(trailer.name.as_bytes()) else {
+        let Some(name) = super::send::h2_header_name(&trailer.name) else {
             continue;
         };
         let Ok(value) = super::send::h2_header_value(&trailer.value) else {

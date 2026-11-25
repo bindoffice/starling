@@ -75,8 +75,7 @@ pub(in crate::server) async fn dispatch_http_request(
         request,
         &host,
         server,
-        &connection.local,
-        &connection.remote,
+        &connection,
         VariablesShared {
             limits: state.limits.clone(),
             stats: state.stats.clone(),
@@ -87,15 +86,10 @@ pub(in crate::server) async fn dispatch_http_request(
         },
         effective_request_length,
     );
-    variables.connection = connection_request.connection_id.to_string();
-    variables.connection_requests = connection_request.served_requests.to_string();
-    variables.pipe = if connection_request.pipelined {
-        "p".into()
-    } else {
-        ".".into()
-    };
-    variables.connection_time =
-        format!("{:.3}", connection_request.started.elapsed().as_secs_f64());
+    variables.connection_id = Some(connection_request.connection_id);
+    variables.served_requests = Some(connection_request.served_requests);
+    variables.pipelined = connection_request.pipelined;
+    variables.connection_started = Some(connection_request.started);
     if let Some((regex, captures)) = server.names.iter().find_map(|name| {
         let regex = name.regex()?;
         let captures = regex.captures(&host)?;
@@ -177,15 +171,18 @@ pub(in crate::server) async fn dispatch_http_request(
         request,
         &env.uri,
         connection.remote.socket_addr().map(|address| address.ip()),
-        &variables.realip_remote_addr,
+        variables
+            .realip_remote_addr
+            .as_ref()
+            .expect("connection variables always initialize the remote address"),
         connection.proxy_protocol_addr,
     );
-    variables.scheme = if group.ssl { "https" } else { "http" }.into();
-    variables.https = if group.ssl { "on" } else { "" }.into();
+    variables.scheme = if group.ssl { "https" } else { "http" };
+    variables.https = if group.ssl { "on" } else { "" };
     variables.http2 = if request.version == "HTTP/2.0" {
-        if group.ssl { "h2" } else { "h2c" }.into()
+        if group.ssl { "h2" } else { "h2c" }
     } else {
-        String::new()
+        ""
     };
     let post_action_env = env.clone();
     let mut connection_guard = None;

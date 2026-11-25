@@ -163,7 +163,15 @@ fn trusts_unix_peers_for_http_real_ip_rewrites() {
     };
 
     assert_eq!(
-        effective_real_ip(server, &request, "/", None, "unix:/tmp/client.sock", None,),
+        effective_real_ip(
+            server,
+            &request,
+            "/",
+            None,
+            &Arc::from("unix:/tmp/client.sock"),
+            None,
+        )
+        .as_ref(),
         "203.0.113.10"
     );
     let _ = std::fs::remove_dir_all(prefix);

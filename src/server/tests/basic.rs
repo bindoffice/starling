@@ -26,7 +26,9 @@ fn variable_expansion_supports_braces_and_headers() {
         id: 0,
         listens: Vec::new(),
         http2: false,
-        names: vec![ServerName::Exact("example.test".into())],
+        names: Arc::from(vec![ServerName::Exact("example.test".into())]),
+        default_server_name: Arc::from("example.test"),
+        has_real_ip: false,
         context: EffectiveConfig {
             prefix: PathBuf::new(),
             root: PathBuf::new(),

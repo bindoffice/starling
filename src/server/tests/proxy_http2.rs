@@ -76,7 +76,7 @@ async fn proxies_http2_early_hints_over_duplex() {
     backend.await.unwrap();
     assert_eq!(response.status, 200);
     assert_eq!(response.early_hints.len(), 1);
-    assert_eq!(response.early_hints[0][0].name, "link");
+    assert!(response.early_hints[0][0].name.eq_ignore_ascii_case("link"));
     assert_eq!(
         response.early_hints[0][0].value,
         "</style.css>; rel=preload"

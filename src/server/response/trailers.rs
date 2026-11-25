@@ -23,7 +23,7 @@ pub(in crate::server) fn apply_response_trailers(
         let value = eval_variables(&trailer.value, variables);
         if !value.is_empty() {
             response.trailers.push(Header {
-                name: trailer.name.clone(),
+                name: trailer.name.clone().into(),
                 value,
             });
             variables.sent_trailers.clone_from(&response.trailers);

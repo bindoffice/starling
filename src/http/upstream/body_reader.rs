@@ -106,7 +106,7 @@ pub(crate) async fn read_trailers<R: AsyncBufReadExt + Unpin>(
             return Err(invalid_data("invalid chunked trailer"));
         }
         trailers.push(Header {
-            name: name.to_string(),
+            name: name.into(),
             value: value.trim().to_string(),
         });
     }

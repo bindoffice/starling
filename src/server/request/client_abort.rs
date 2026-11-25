@@ -25,6 +25,14 @@ impl ClientAbortState {
         state
     }
 
+    pub(in crate::server) fn reset_for_request(&self) {
+        self.inner.preserve.store(false, Ordering::Release);
+        self.inner.upstream_active.store(false, Ordering::Release);
+        if let Ok(mut guard) = self.inner.connection_limit.lock() {
+            guard.take();
+        }
+    }
+
     pub(in crate::server) fn mark_preserve(&self) {
         self.inner.preserve.store(true, Ordering::Release);
     }

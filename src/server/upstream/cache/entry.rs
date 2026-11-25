@@ -243,7 +243,10 @@ pub(super) async fn read_entry(path: &Path) -> io::Result<Option<CacheEntry>> {
         let (Ok(name), Ok(value)) = (String::from_utf8(name), String::from_utf8(value)) else {
             return Ok(None);
         };
-        headers.push(Header { name, value });
+        headers.push(Header {
+            name: name.into(),
+            value,
+        });
     }
 
     let body_offset = file.stream_position().await?;

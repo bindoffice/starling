@@ -37,7 +37,7 @@ pub(super) fn convert_headers(headers: &http::HeaderMap) -> Result<Vec<Header>, 
         .map(|(name, value)| {
             let value = value.to_str().map_err(|_| ProxyFailure::InvalidHeader)?;
             Ok(Header {
-                name: name.as_str().to_string(),
+                name: name.as_str().into(),
                 value: value.to_string(),
             })
         })

@@ -49,3 +49,28 @@ pub(super) async fn write_request_rejection<W>(
     )
     .await;
 }
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn log_and_reject_request<W>(
+    logger: &Logger,
+    write_half: &mut W,
+    status: u16,
+    send_timeout: Duration,
+    request_method: &str,
+    request_version: &str,
+    server_tokens: ServerTokens,
+    message: String,
+) where
+    W: AsyncWrite + Unpin,
+{
+    logger.log(LogLevel::Info, message);
+    write_request_rejection(
+        write_half,
+        status,
+        send_timeout,
+        request_method,
+        request_version,
+        server_tokens,
+    )
+    .await;
+}

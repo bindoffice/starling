@@ -63,7 +63,7 @@ pub async fn read_upstream_response_head<R: AsyncBufReadExt + AsyncReadExt + Unp
                 return Err(invalid_data("invalid upstream header"));
             };
             headers.push(Header {
-                name: name.to_string(),
+                name: name.into(),
                 value: value.trim().to_string(),
             });
         }

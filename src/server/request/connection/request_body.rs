@@ -22,3 +22,13 @@ where
     // Location selection supplies the real client_max_body_size.
     Http1BodyTask::spawn(reader, head, body_timeout, 0)
 }
+
+pub(super) async fn close_http1_body<S>(task: &mut Option<Http1BodyTask<S>>)
+where
+    S: AsyncRead + Send + 'static,
+{
+    if let Some(task) = task.take() {
+        task.close().await;
+        task.abort();
+    }
+}

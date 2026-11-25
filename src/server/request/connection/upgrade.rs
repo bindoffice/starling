@@ -97,7 +97,8 @@ where
     S: AsyncRead + Send + Unpin,
     W: AsyncWrite + Unpin,
 {
-    match write_dispatch_response(write_half, outcome, request, control).await {
+    let mut scratch = Vec::with_capacity(512);
+    match write_dispatch_response(write_half, outcome, request, control, &mut scratch).await {
         DispatchWrite::ClientClosed => return UpgradeOutcome::ClientClosed,
         DispatchWrite::Failed(error) => {
             return UpgradeOutcome::Finished {

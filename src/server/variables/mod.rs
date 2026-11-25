@@ -18,21 +18,21 @@ pub(super) struct Variables {
     pub(super) request_target: String,
     pub(super) version: String,
     pub(super) host: String,
-    pub(super) server_name: String,
-    pub(super) remote_addr: String,
+    pub(super) server_name: Arc<str>,
+    pub(super) remote_addr: Arc<str>,
     pub(super) remote_user: String,
-    pub(super) remote_port: String,
-    pub(super) server_addr: String,
-    pub(super) server_port: String,
-    pub(super) request_port: String,
-    pub(super) is_request_port: String,
-    pub(super) scheme: String,
-    pub(super) https: String,
-    pub(super) http2: String,
-    pub(super) pipe: String,
-    pub(super) connection: String,
-    pub(super) connection_requests: String,
-    pub(super) connection_time: String,
+    pub(super) remote_port: Arc<str>,
+    pub(super) server_addr: Arc<str>,
+    pub(super) server_port: Arc<str>,
+    pub(super) request_port: Option<u16>,
+    pub(super) is_request_port: bool,
+    pub(super) scheme: &'static str,
+    pub(super) https: &'static str,
+    pub(super) http2: &'static str,
+    pub(super) pipelined: bool,
+    pub(super) connection_id: Option<u64>,
+    pub(super) served_requests: Option<u64>,
+    pub(super) connection_started: Option<Instant>,
     pub(super) ssl_protocol: String,
     pub(super) ssl_cipher: String,
     pub(super) ssl_server_name: String,
@@ -50,9 +50,9 @@ pub(super) struct Variables {
     pub(super) ssl_client_v_end: String,
     pub(super) ssl_client_v_remain: String,
     pub(super) hostname: Arc<str>,
-    pub(super) request_id: String,
-    pub(super) realip_remote_addr: String,
-    pub(super) realip_remote_port: String,
+    pub(super) request_id: Arc<OnceLock<String>>,
+    pub(super) realip_remote_addr: Option<Arc<str>>,
+    pub(super) realip_remote_port: Option<Arc<str>>,
     pub(super) proxy_protocol_addr: String,
     pub(super) proxy_protocol_port: String,
     pub(super) proxy_protocol_server_addr: String,
@@ -73,7 +73,7 @@ pub(super) struct Variables {
     pub(super) request_body_file: String,
     pub(super) request_body_file_guard: Option<Arc<RequestBodyFile>>,
     pub(super) request_body_prepared: bool,
-    pub(super) request_length: String,
+    pub(super) request_length: Option<u64>,
     pub(super) upstream_status: String,
     pub(super) upstream_cache_status: String,
     pub(super) upstream_cache_last_modified: String,
@@ -107,7 +107,7 @@ pub(super) struct Variables {
     pub(super) upstream_addr: String,
     pub(super) headers: Vec<Header>,
     pub(super) captures: Vec<String>,
-    pub(super) server_names: Vec<ServerName>,
+    pub(super) server_names: Arc<[ServerName]>,
     pub(super) custom: HashMap<String, String>,
     pub(super) maps: Arc<HashMap<String, Arc<MapVariable>>>,
     pub(super) geos: Arc<HashMap<String, Arc<GeoVariable>>>,
@@ -224,25 +224,22 @@ impl Variables {
             VariablesShared::default(),
             None,
             false,
+            None,
         );
         let (path, query) = request.path_and_query();
         variables.uri = path.to_string();
         variables.args = query.unwrap_or_default().to_string();
-        variables.realip_remote_addr = remote.variable_address();
-        variables.realip_remote_port = remote.variable_port();
-        variables.request_length = request_length(request).to_string();
+        variables.realip_remote_addr = Some(Arc::from(remote.variable_address()));
+        variables.realip_remote_port = Some(Arc::from(remote.variable_port()));
+        variables.request_length = Some(request_length(request));
         variables
     }
 
-    pub(in crate::server) fn new_for_dispatch<
-        L: AddressVariables + ?Sized,
-        R: AddressVariables + ?Sized,
-    >(
+    pub(in crate::server) fn new_for_dispatch(
         request: &Request,
         host: &str,
         server: &ServerConfig,
-        local: &L,
-        remote: &R,
+        connection: &ConnectionAddresses,
         shared: VariablesShared,
         request_length: Option<u64>,
     ) -> Self {
@@ -250,11 +247,12 @@ impl Variables {
             request,
             host,
             server,
-            local,
-            remote,
+            &connection.local,
+            &connection.remote,
             shared,
             request_length,
             true,
+            Some(connection),
         )
     }
 
@@ -268,40 +266,47 @@ impl Variables {
         shared: VariablesShared,
         request_length: Option<u64>,
         dispatch: bool,
+        addresses: Option<&ConnectionAddresses>,
     ) -> Self {
         let request_port = request.request_port();
         let (path, query) = request.path_and_query();
         let path_variables = !dispatch;
+        let remote_addr = addresses
+            .map(|addresses| addresses.remote_addr_text.clone())
+            .unwrap_or_else(|| Arc::from(remote.variable_address()));
+        let remote_port = addresses
+            .map(|addresses| addresses.remote_port_text.clone())
+            .unwrap_or_else(|| Arc::from(remote.variable_port()));
+        let server_addr = addresses
+            .map(|addresses| addresses.local_addr_text.clone())
+            .unwrap_or_else(|| Arc::from(local.variable_address()));
+        let server_port = addresses
+            .map(|addresses| addresses.local_port_text.clone())
+            .unwrap_or_else(|| Arc::from(local.variable_port()));
         Self {
             method: request.method.clone(),
             request_target: request.target.clone(),
             version: request.version.clone(),
             host: host.to_string(),
-            server_name: server
-                .names
-                .first()
-                .map(server_name_value)
-                .unwrap_or_default(),
-            remote_addr: remote.variable_address(),
+            server_name: server.default_server_name.clone(),
+            remote_addr,
             remote_user: request
                 .header("authorization")
                 .and_then(parse_authorization_header)
                 .map(|credentials| credentials.username)
                 .unwrap_or_default(),
-            remote_port: remote.variable_port(),
-            server_addr: local.variable_address(),
-            server_port: local.variable_port(),
-            request_port: request_port
-                .map(|port| port.to_string())
-                .unwrap_or_default(),
-            is_request_port: request_port.map(|_| ":").unwrap_or_default().into(),
-            scheme: "http".into(),
-            https: String::new(),
-            http2: String::new(),
-            pipe: ".".into(),
-            connection: String::new(),
-            connection_requests: String::new(),
-            connection_time: String::new(),
+            remote_port,
+            server_addr,
+            server_port,
+            request_port,
+            is_request_port: request_port.is_some(),
+            scheme: "http",
+            https: "",
+            http2: "",
+            pipelined: false,
+            connection_id: None,
+            served_requests: None,
+            connection_started: None,
             ssl_protocol: String::new(),
             ssl_cipher: String::new(),
             ssl_server_name: String::new(),
@@ -319,17 +324,9 @@ impl Variables {
             ssl_client_v_end: String::new(),
             ssl_client_v_remain: String::new(),
             hostname: hostname(),
-            request_id: next_request_id(),
-            realip_remote_addr: if dispatch {
-                String::new()
-            } else {
-                remote.variable_address()
-            },
-            realip_remote_port: if dispatch {
-                String::new()
-            } else {
-                remote.variable_port()
-            },
+            request_id: Arc::new(OnceLock::new()),
+            realip_remote_addr: (!dispatch).then(|| Arc::from(remote.variable_address())),
+            realip_remote_port: (!dispatch).then(|| Arc::from(remote.variable_port())),
             proxy_protocol_addr: String::new(),
             proxy_protocol_port: String::new(),
             proxy_protocol_server_addr: String::new(),
@@ -376,9 +373,7 @@ impl Variables {
             request_body_file: String::new(),
             request_body_file_guard: None,
             request_body_prepared: false,
-            request_length: request_length
-                .map(|length| length.to_string())
-                .unwrap_or_default(),
+            request_length,
             upstream_status: String::new(),
             upstream_cache_status: String::new(),
             upstream_cache_last_modified: String::new(),
@@ -452,6 +447,32 @@ impl Variables {
                 .rewrite_logger
                 .as_ref()
                 .is_some_and(|logger| logger.enabled(LogLevel::Debug))
+    }
+
+    pub(super) fn request_id_value(&self) -> &str {
+        self.request_id.get_or_init(next_request_id)
+    }
+
+    pub(super) fn pipe_value(&self) -> &'static str {
+        if self.pipelined { "p" } else { "." }
+    }
+
+    pub(super) fn connection_value(&self) -> String {
+        self.connection_id
+            .map(|value| value.to_string())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn connection_requests_value(&self) -> String {
+        self.served_requests
+            .map(|value| value.to_string())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn connection_time_value(&self) -> String {
+        self.connection_started
+            .map(|started| format!("{:.3}", started.elapsed().as_secs_f64()))
+            .unwrap_or_default()
     }
 }
 

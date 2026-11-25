@@ -28,9 +28,20 @@ pub(crate) async fn write_prepared_response<W: AsyncWrite + Unpin>(
     options: ResponseWriteOptions<'_>,
     chunked: bool,
 ) -> io::Result<()> {
+    let mut scratch = Vec::new();
+    write_prepared_response_with_scratch(writer, response, options, chunked, &mut scratch).await
+}
+
+pub(crate) async fn write_prepared_response_with_scratch<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    response: &mut Response,
+    options: ResponseWriteOptions<'_>,
+    chunked: bool,
+    scratch: &mut Vec<u8>,
+) -> io::Result<()> {
     write_early_hints(writer, response.early_hints(), options.request_version).await?;
-    let head = build_response_head(response);
-    writer.write_all(&head).await?;
+    build_response_head_into(response, scratch);
+    writer.write_all(scratch).await?;
 
     if options.request_method.eq_ignore_ascii_case("HEAD") {
         writer.flush().await?;
@@ -116,7 +127,7 @@ fn decimal_length(mut value: u16) -> usize {
     digits
 }
 
-fn build_response_head(response: &Response) -> Vec<u8> {
+fn build_response_head_into(response: &Response, head: &mut Vec<u8>) {
     let header_bytes = response
         .headers
         .iter()
@@ -128,9 +139,10 @@ fn build_response_head(response: &Response) -> Vec<u8> {
                 .saturating_add(4)
         })
         .sum::<usize>();
-    let mut head = Vec::with_capacity(header_bytes.saturating_add(64));
+    head.clear();
+    head.reserve(header_bytes.saturating_add(64));
     write!(
-        &mut head,
+        head,
         "HTTP/1.1 {} {}\r\n",
         response.status,
         reason_phrase(response.status)
@@ -139,11 +151,10 @@ fn build_response_head(response: &Response) -> Vec<u8> {
     for header in &response.headers {
         head.extend_from_slice(header.name.as_bytes());
         head.extend_from_slice(b": ");
-        extend_sanitized_header_value(&mut head, &header_value_bytes(&header.value));
+        extend_sanitized_header_value(&mut *head, &header_value_bytes(&header.value));
         head.extend_from_slice(b"\r\n");
     }
     head.extend_from_slice(b"\r\n");
-    head
 }
 
 fn extend_sanitized_header_value(output: &mut Vec<u8>, value: &[u8]) {

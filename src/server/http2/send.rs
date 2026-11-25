@@ -51,7 +51,7 @@ async fn send_h2_response_inner(
         if is_h2_connection_header(&header.name) {
             continue;
         }
-        let Ok(name) = http::header::HeaderName::from_bytes(header.name.as_bytes()) else {
+        let Some(name) = h2_header_name(&header.name) else {
             continue;
         };
         let Ok(value) = h2_header_value(&header.value) else {
@@ -121,10 +121,61 @@ pub(in crate::server) fn is_h2_connection_header(name: &str) -> bool {
     .any(|candidate| name.eq_ignore_ascii_case(candidate))
 }
 
+pub(super) fn h2_header_name(name: &str) -> Option<http::header::HeaderName> {
+    const STATIC_NAMES: &[&str] = &[
+        "content-type",
+        "content-length",
+        "date",
+        "server",
+        "last-modified",
+        "etag",
+        "cache-control",
+        "location",
+        "set-cookie",
+        "vary",
+        "accept-ranges",
+        "content-disposition",
+        "content-encoding",
+        "content-language",
+        "content-location",
+        "content-range",
+        "expires",
+        "p3p",
+        "www-authenticate",
+    ];
+    if let Some(static_name) = STATIC_NAMES
+        .iter()
+        .find(|candidate| name.eq_ignore_ascii_case(candidate))
+    {
+        return Some(http::header::HeaderName::from_static(static_name));
+    }
+    http::header::HeaderName::from_bytes(name.as_bytes()).ok()
+}
+
 pub(super) fn h2_header_value(
     value: &str,
 ) -> Result<http::header::HeaderValue, http::header::InvalidHeaderValue> {
     let bytes = crate::http::header_value_bytes(value);
+    if !bytes.iter().any(|byte| matches!(byte, b'\r' | b'\n')) {
+        if let Ok(value) = http::header::HeaderValue::from_bytes(&bytes) {
+            return Ok(value);
+        }
+        if !bytes.contains(&0) {
+            #[cfg(not(debug_assertions))]
+            {
+                return Ok(unsafe {
+                    http::header::HeaderValue::from_maybe_shared_unchecked(Bytes::copy_from_slice(
+                        &bytes,
+                    ))
+                });
+            }
+            #[cfg(debug_assertions)]
+            {
+                return http::header::HeaderValue::from_bytes(&bytes);
+            }
+        }
+        return http::header::HeaderValue::from_bytes(&bytes);
+    }
     let sanitized: Vec<u8> = bytes
         .iter()
         .map(|byte| match byte {

@@ -15,8 +15,10 @@ pub(crate) use tokens::prepare_response_headers;
 pub use writer::{ResponseWriteOptions, write_response};
 pub(crate) use writer::{
     prepare_response_for_write, response_head_length, response_uses_chunked_encoding,
-    write_prepared_response,
+    write_prepared_response_with_scratch,
 };
+
+const RESPONSE_HEADER_CAPACITY: usize = 8;
 
 pub struct Response {
     pub status: u16,
@@ -67,7 +69,7 @@ impl Response {
     pub fn new(status: u16) -> Self {
         Self {
             status,
-            headers: Vec::new(),
+            headers: Vec::with_capacity(RESPONSE_HEADER_CAPACITY),
             trailers: Vec::new(),
             chunked_expected: false,
             body: ResponseBody::Empty,
@@ -81,22 +83,9 @@ impl Response {
     }
 
     pub fn bytes(status: u16, content_type: &str, body: impl Into<Vec<u8>>) -> Self {
-        let mut response = Self {
-            status,
-            headers: vec![Header {
-                name: "Content-Type".into(),
-                value: content_type.into(),
-            }],
-            trailers: Vec::new(),
-            chunked_expected: false,
-            body: ResponseBody::Bytes(body.into()),
-            body_temp_file: None,
-            upstream: None,
-            builtin_error: false,
-            msie_padding: false,
-            allow_ranges: false,
-            single_range: false,
-        };
+        let mut response = Self::new(status);
+        response.body = ResponseBody::Bytes(body.into());
+        response.add_header("Content-Type", content_type);
         response.set_content_length();
         response
     }
@@ -121,7 +110,7 @@ impl Response {
             header.value = value;
         } else {
             self.headers.push(Header {
-                name: name.to_string(),
+                name: name.into(),
                 value,
             });
         }
@@ -129,7 +118,7 @@ impl Response {
 
     pub fn add_header(&mut self, name: &str, value: impl Into<String>) {
         self.headers.push(Header {
-            name: name.to_string(),
+            name: name.into(),
             value: value.into(),
         });
     }

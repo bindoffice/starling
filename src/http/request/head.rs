@@ -186,7 +186,7 @@ pub(crate) async fn read_request_head_with_limits_and_buffers<R: AsyncBufReadExt
         }
         let index = headers.len();
         headers.push(Header {
-            name: name.to_string(),
+            name: name.into(),
             value: value.trim().to_string(),
         });
         if name.as_bytes().contains(&b'_') {

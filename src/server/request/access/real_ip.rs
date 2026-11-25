@@ -5,12 +5,13 @@ pub(in crate::server) fn effective_real_ip(
     request: &Request,
     uri: &str,
     peer: Option<std::net::IpAddr>,
-    peer_address: &str,
+    peer_address: &Arc<str>,
     proxy_protocol_addr: Option<std::net::IpAddr>,
-) -> String {
-    let fallback = peer
-        .map(|peer| peer.to_string())
-        .unwrap_or_else(|| peer_address.to_string());
+) -> Arc<str> {
+    let fallback = peer_address.clone();
+    if !server.has_real_ip {
+        return fallback;
+    }
     let context = resolve_location(&server.locations, uri)
         .map(|location| &location.context)
         .unwrap_or(&server.context);
@@ -29,7 +30,7 @@ pub(in crate::server) fn effective_real_ip(
         .eq_ignore_ascii_case("proxy_protocol")
     {
         return proxy_protocol_addr
-            .map(|address| address.to_string())
+            .map(|address| Arc::from(address.to_string()))
             .unwrap_or(fallback);
     }
     let Some(value) = request
@@ -66,7 +67,7 @@ pub(in crate::server) fn effective_real_ip(
         candidates.first().copied()
     };
     selected
-        .map(|address| address.to_string())
+        .map(|address| Arc::from(address.to_string()))
         .unwrap_or(fallback)
 }
 
