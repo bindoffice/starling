@@ -30,6 +30,11 @@ impl RequestHeadLimits {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct RequestHeadParseBuffers {
+    line: Vec<u8>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum InvalidRequestHeader {
     Raw,
@@ -87,19 +92,23 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
     reader: &mut R,
     limits: RequestHeadLimits,
 ) -> io::Result<Option<RequestHead>> {
-    let mut line = Vec::new();
+    let mut buffers = RequestHeadParseBuffers::default();
+    read_request_head_with_limits_and_buffers(reader, limits, &mut buffers).await
+}
+
+pub(crate) async fn read_request_head_with_limits_and_buffers<R: AsyncBufReadExt + Unpin>(
+    reader: &mut R,
+    limits: RequestHeadLimits,
+    buffers: &mut RequestHeadParseBuffers,
+) -> io::Result<Option<RequestHead>> {
+    let line = &mut buffers.line;
     let request_line = loop {
-        if !read_line_limited_into(
-            reader,
-            limits.max_line_bytes,
-            "request line too long",
-            &mut line,
-        )
-        .await?
+        if !read_line_limited_into(reader, limits.max_line_bytes, "request line too long", line)
+            .await?
         {
             return Ok(None);
         }
-        let request_line = request_line_text(&line)?;
+        let request_line = request_line_text(line)?;
         if request_line == "\r\n" || request_line == "\n" {
             continue;
         }
@@ -148,7 +157,7 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
             reader,
             limits.max_line_bytes,
             "request header line too long",
-            &mut line,
+            line,
         )
         .await?
         {
@@ -158,16 +167,16 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
         if total > limits.max_total_bytes {
             return Err(invalid_data("request headers too large"));
         }
-        let line = request_line_text(&line)?;
-        if line == "\r\n" || line == "\n" {
+        let current_line = request_line_text(line)?;
+        if current_line == "\r\n" || current_line == "\n" {
             break;
         }
-        let line = line.trim_end_matches(['\r', '\n']);
-        if line.starts_with([' ', '\t']) {
+        let current_line = current_line.trim_end_matches(['\r', '\n']);
+        if current_line.starts_with([' ', '\t']) {
             invalid_headers.push(InvalidRequestHeader::Raw);
             continue;
         }
-        let Some((name, value)) = line.split_once(':') else {
+        let Some((name, value)) = current_line.split_once(':') else {
             invalid_headers.push(InvalidRequestHeader::Raw);
             continue;
         };
@@ -190,7 +199,8 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
     let mut chunked = false;
     let mut transfer_encoding_seen = false;
     let mut unsupported_transfer_encoding = false;
-    let mut connection_values = Vec::new();
+    let mut connection_close = false;
+    let mut connection_keep_alive = false;
     let mut expect_continue = false;
     let mut expect_seen = false;
     let mut unique_headers = 0_u16;
@@ -225,7 +235,10 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
                 unsupported_transfer_encoding = true;
             }
         } else if header.name.eq_ignore_ascii_case("connection") {
-            connection_values.push(header.value.to_ascii_lowercase());
+            for token in header.value.split(',').map(str::trim) {
+                connection_close |= token.eq_ignore_ascii_case("close");
+                connection_keep_alive |= token.eq_ignore_ascii_case("keep-alive");
+            }
         } else if header.name.eq_ignore_ascii_case("expect") {
             if expect_seen {
                 return Err(invalid_data("duplicate Expect header"));
@@ -245,15 +258,10 @@ pub async fn read_request_head_with_limits<R: AsyncBufReadExt + Unpin>(
         return Err(unsupported("unsupported transfer encoding"));
     }
 
-    let connection_tokens: HashSet<&str> = connection_values
-        .iter()
-        .flat_map(|value| value.split(','))
-        .map(str::trim)
-        .collect();
     let keep_alive = if version == "HTTP/1.1" {
-        !connection_tokens.contains("close")
+        !connection_close
     } else {
-        connection_tokens.contains("keep-alive")
+        connection_keep_alive
     };
     let host_headers = headers
         .iter()

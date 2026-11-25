@@ -49,7 +49,7 @@ pub(super) struct Variables {
     pub(super) ssl_client_v_start: String,
     pub(super) ssl_client_v_end: String,
     pub(super) ssl_client_v_remain: String,
-    pub(super) hostname: String,
+    pub(super) hostname: Arc<str>,
     pub(super) request_id: String,
     pub(super) realip_remote_addr: String,
     pub(super) realip_remote_port: String,
@@ -125,6 +125,28 @@ pub(super) struct Variables {
     pub(super) content_handler: Option<ContentHandlerKind>,
 }
 
+pub(in crate::server) struct VariablesShared {
+    pub(in crate::server) limits: Arc<Mutex<LimitState>>,
+    pub(in crate::server) stats: Arc<ConnectionStats>,
+    pub(in crate::server) upstream_keepalive: Arc<UpstreamKeepalivePool>,
+    pub(in crate::server) upstream_keepalive_generation: u64,
+    pub(in crate::server) proxy_cache: Arc<ProxyCacheRegistry>,
+    pub(in crate::server) client_tls_cache: Arc<ClientTlsConfigCache>,
+}
+
+impl Default for VariablesShared {
+    fn default() -> Self {
+        Self {
+            limits: Arc::new(Mutex::new(LimitState::default())),
+            stats: Arc::new(ConnectionStats::default()),
+            upstream_keepalive: Arc::new(UpstreamKeepalivePool::default()),
+            upstream_keepalive_generation: 0,
+            proxy_cache: Arc::new(ProxyCacheRegistry::default()),
+            client_tls_cache: Arc::new(ClientTlsConfigCache::default()),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct RequestErrorLogs {
     default: Arc<Logger>,
@@ -185,6 +207,7 @@ impl AddressVariables for ListenAddress {
 }
 
 impl Variables {
+    #[cfg(test)]
     pub(super) fn new<L: AddressVariables + ?Sized, R: AddressVariables + ?Sized>(
         request: &Request,
         host: &str,
@@ -192,8 +215,63 @@ impl Variables {
         local: &L,
         remote: &R,
     ) -> Self {
+        let mut variables = Self::new_with_shared(
+            request,
+            host,
+            server,
+            local,
+            remote,
+            VariablesShared::default(),
+            None,
+            false,
+        );
+        let (path, query) = request.path_and_query();
+        variables.uri = path.to_string();
+        variables.args = query.unwrap_or_default().to_string();
+        variables.realip_remote_addr = remote.variable_address();
+        variables.realip_remote_port = remote.variable_port();
+        variables.request_length = request_length(request).to_string();
+        variables
+    }
+
+    pub(in crate::server) fn new_for_dispatch<
+        L: AddressVariables + ?Sized,
+        R: AddressVariables + ?Sized,
+    >(
+        request: &Request,
+        host: &str,
+        server: &ServerConfig,
+        local: &L,
+        remote: &R,
+        shared: VariablesShared,
+        request_length: Option<u64>,
+    ) -> Self {
+        Self::new_with_shared(
+            request,
+            host,
+            server,
+            local,
+            remote,
+            shared,
+            request_length,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_shared<L: AddressVariables + ?Sized, R: AddressVariables + ?Sized>(
+        request: &Request,
+        host: &str,
+        server: &ServerConfig,
+        local: &L,
+        remote: &R,
+        shared: VariablesShared,
+        request_length: Option<u64>,
+        dispatch: bool,
+    ) -> Self {
         let request_port = request.request_port();
         let (path, query) = request.path_and_query();
+        let path_variables = !dispatch;
         Self {
             method: request.method.clone(),
             request_target: request.target.clone(),
@@ -242,19 +320,47 @@ impl Variables {
             ssl_client_v_remain: String::new(),
             hostname: hostname(),
             request_id: next_request_id(),
-            realip_remote_addr: remote.variable_address(),
-            realip_remote_port: remote.variable_port(),
+            realip_remote_addr: if dispatch {
+                String::new()
+            } else {
+                remote.variable_address()
+            },
+            realip_remote_port: if dispatch {
+                String::new()
+            } else {
+                remote.variable_port()
+            },
             proxy_protocol_addr: String::new(),
             proxy_protocol_port: String::new(),
             proxy_protocol_server_addr: String::new(),
             proxy_protocol_server_port: String::new(),
             proxy_protocol_tlvs: None,
-            uri: path.to_string(),
-            fastcgi_script_name: path.to_string(),
+            uri: if path_variables {
+                path.to_string()
+            } else {
+                String::new()
+            },
+            fastcgi_script_name: if path_variables {
+                path.to_string()
+            } else {
+                String::new()
+            },
             fastcgi_path_info: String::new(),
-            uwsgi_script_name: path.to_string(),
-            scgi_script_name: path.to_string(),
-            args: query.unwrap_or_default().to_string(),
+            uwsgi_script_name: if path_variables {
+                path.to_string()
+            } else {
+                String::new()
+            },
+            scgi_script_name: if path_variables {
+                path.to_string()
+            } else {
+                String::new()
+            },
+            args: if path_variables {
+                query.unwrap_or_default().to_string()
+            } else {
+                String::new()
+            },
             status: 0,
             bytes_sent: 0,
             body_bytes_sent: 0,
@@ -270,7 +376,9 @@ impl Variables {
             request_body_file: String::new(),
             request_body_file_guard: None,
             request_body_prepared: false,
-            request_length: request_length(request).to_string(),
+            request_length: request_length
+                .map(|length| length.to_string())
+                .unwrap_or_default(),
             upstream_status: String::new(),
             upstream_cache_status: String::new(),
             upstream_cache_last_modified: String::new(),
@@ -309,12 +417,12 @@ impl Variables {
             maps: server.context.maps.clone(),
             geos: server.context.geos.clone(),
             split_clients: server.context.split_clients.clone(),
-            limits: Arc::new(Mutex::new(LimitState::default())),
-            stats: Arc::new(ConnectionStats::default()),
-            upstream_keepalive: Arc::new(UpstreamKeepalivePool::default()),
-            upstream_keepalive_generation: 0,
-            proxy_cache: Arc::new(ProxyCacheRegistry::default()),
-            client_tls_cache: Arc::new(ClientTlsConfigCache::default()),
+            limits: shared.limits,
+            stats: shared.stats,
+            upstream_keepalive: shared.upstream_keepalive,
+            upstream_keepalive_generation: shared.upstream_keepalive_generation,
+            proxy_cache: shared.proxy_cache,
+            client_tls_cache: shared.client_tls_cache,
             error_logs: None,
             rewrite_logger: None,
             rewrite_log: false,

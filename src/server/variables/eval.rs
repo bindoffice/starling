@@ -130,7 +130,7 @@ pub(in crate::server) fn variable_value(
         "ssl_client_v_start" => variables.ssl_client_v_start.clone(),
         "ssl_client_v_end" => variables.ssl_client_v_end.clone(),
         "ssl_client_v_remain" => variables.ssl_client_v_remain.clone(),
-        "hostname" => variables.hostname.clone(),
+        "hostname" => variables.hostname.to_string(),
         "request_id" => variables.request_id.clone(),
         "realip_remote_addr" => variables.realip_remote_addr.clone(),
         "realip_remote_port" => variables.realip_remote_port.clone(),

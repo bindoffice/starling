@@ -16,19 +16,21 @@ where
     W: AsyncWrite + Unpin,
 {
     let mut writer = TimedWriter::new(write_half, outcome.send_timeout);
-    let write = write_response(
-        &mut writer,
-        &mut outcome.response,
-        ResponseWriteOptions {
-            request_method: &request.method,
-            request_version: &request.version,
-            keep_alive: outcome.keep_alive,
-            keep_alive_header: outcome.keepalive_header,
-            server_tokens: outcome.server_tokens,
-            chunked_transfer_encoding: outcome.chunked_transfer_encoding,
-            rate: outcome.limit_rate,
-        },
-    );
+    let options = ResponseWriteOptions {
+        request_method: &request.method,
+        request_version: &request.version,
+        keep_alive: outcome.keep_alive,
+        keep_alive_header: outcome.keepalive_header,
+        server_tokens: outcome.server_tokens,
+        chunked_transfer_encoding: outcome.chunked_transfer_encoding,
+        rate: outcome.limit_rate,
+    };
+    let chunked = if outcome.response_prepared {
+        outcome.response_chunked
+    } else {
+        prepare_response_for_write(&mut outcome.response, &options)
+    };
+    let write = write_prepared_response(&mut writer, &mut outcome.response, options, chunked);
     tokio::pin!(write);
     let result = if let Some(control) = control {
         tokio::select! {

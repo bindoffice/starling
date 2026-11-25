@@ -57,7 +57,7 @@ pub(super) async fn handle_proxy_upgrade<S, W>(
         return;
     };
     if let Some(control) = control
-        && let Err(err) = control.apply_nodelay(outcome.tcp_nodelay)
+        && let Err(err) = control.apply_nodelay_once(outcome.tcp_nodelay)
     {
         request_logger.log(
             LogLevel::Alert,

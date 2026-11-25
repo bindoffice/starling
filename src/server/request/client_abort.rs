@@ -3,49 +3,59 @@ use std::sync::atomic::AtomicBool;
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::server) struct ClientAbortState {
-    preserve: Arc<AtomicBool>,
-    upstream_active: Arc<AtomicBool>,
-    connection_limit: Arc<std::sync::Mutex<Option<ConnectionLimitGuardHandle>>>,
-    socket: Arc<std::sync::Mutex<Option<ClientSocketControl>>>,
+    inner: Arc<ClientAbortInner>,
+}
+
+#[derive(Debug, Default)]
+struct ClientAbortInner {
+    preserve: AtomicBool,
+    upstream_active: AtomicBool,
+    connection_limit: std::sync::Mutex<Option<ConnectionLimitGuardHandle>>,
+    socket: std::sync::Mutex<Option<ClientSocketControl>>,
 }
 
 impl ClientAbortState {
     pub(in crate::server) fn with_socket(socket: Option<ClientSocketControl>) -> Self {
         let state = Self::default();
-        if let (Some(socket), Ok(mut current)) = (socket, state.socket.lock()) {
+        if let (Some(socket), Ok(mut current)) = (socket, state.inner.socket.lock()) {
             *current = Some(socket);
         }
         state
     }
 
     pub(in crate::server) fn mark_preserve(&self) {
-        self.preserve.store(true, Ordering::Release);
+        self.inner.preserve.store(true, Ordering::Release);
     }
 
     pub(in crate::server) fn preserve(&self) -> bool {
-        self.preserve.load(Ordering::Acquire)
+        self.inner.preserve.load(Ordering::Acquire)
     }
 
     pub(in crate::server) fn mark_upstream_active(&self) {
-        self.upstream_active.store(true, Ordering::Release);
+        self.inner.upstream_active.store(true, Ordering::Release);
     }
 
     pub(in crate::server) fn upstream_active(&self) -> bool {
-        self.upstream_active.load(Ordering::Acquire)
+        self.inner.upstream_active.load(Ordering::Acquire)
     }
 
     pub(in crate::server) fn socket(&self) -> Option<ClientSocketControl> {
-        self.socket.lock().ok().and_then(|socket| socket.clone())
+        self.inner
+            .socket
+            .lock()
+            .ok()
+            .and_then(|socket| socket.clone())
     }
 
     pub(in crate::server) fn set_connection_limit(&self, guard: ConnectionLimitGuardHandle) {
-        if let Ok(mut connection_limit) = self.connection_limit.lock() {
+        if let Ok(mut connection_limit) = self.inner.connection_limit.lock() {
             *connection_limit = Some(guard);
         }
     }
 
     pub(in crate::server) fn release_connection_limit(&self) {
         let guard = self
+            .inner
             .connection_limit
             .lock()
             .ok()

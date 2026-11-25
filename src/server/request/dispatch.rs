@@ -31,6 +31,8 @@ pub(in crate::server) async fn dispatch_http_request(
     let Some(http) = config.http.as_ref() else {
         return Some(DispatchAction::Response(DispatchOutcome {
             response: error_response(404),
+            response_prepared: false,
+            response_chunked: false,
             error_logger: state.logger.clone(),
             keepalive_timeout: Duration::ZERO,
             keepalive_min_timeout: Duration::ZERO,
@@ -67,18 +69,24 @@ pub(in crate::server) async fn dispatch_http_request(
             .map(server_name_value)
             .unwrap_or_default(),
     };
-    let mut variables = Variables::new(
+    let effective_request_length =
+        request_length.map(|length| length.saturating_add(request.buffered_body_len()));
+    let mut variables = Variables::new_for_dispatch(
         request,
         &host,
         server,
         &connection.local,
         &connection.remote,
+        VariablesShared {
+            limits: state.limits.clone(),
+            stats: state.stats.clone(),
+            upstream_keepalive: state.upstream_keepalive.clone(),
+            upstream_keepalive_generation,
+            proxy_cache: state.proxy_cache.clone(),
+            client_tls_cache: state.client_tls_cache.clone(),
+        },
+        effective_request_length,
     );
-    if let Some(header_length) = request_length {
-        variables.request_length = header_length
-            .saturating_add(request.buffered_body_len())
-            .to_string();
-    }
     variables.connection = connection_request.connection_id.to_string();
     variables.connection_requests = connection_request.served_requests.to_string();
     variables.pipe = if connection_request.pipelined {
@@ -140,6 +148,8 @@ pub(in crate::server) async fn dispatch_http_request(
                 log_access(http, &server.context, &variables);
                 return Some(DispatchAction::Response(DispatchOutcome {
                     response,
+                    response_prepared: false,
+                    response_chunked: false,
                     error_logger,
                     keepalive_timeout: server.context.keepalive_timeout,
                     keepalive_min_timeout: server.context.keepalive_min_timeout,
@@ -177,13 +187,6 @@ pub(in crate::server) async fn dispatch_http_request(
     } else {
         String::new()
     };
-    variables.limits = state.limits.clone();
-    variables.stats = state.stats.clone();
-    variables.upstream_keepalive = state.upstream_keepalive.clone();
-    variables.upstream_keepalive_generation = upstream_keepalive_generation;
-    variables.proxy_cache = state.proxy_cache.clone();
-    variables.client_tls_cache = state.client_tls_cache.clone();
-
     let post_action_env = env.clone();
     let mut connection_guard = None;
     let mut processed = if invalid_host {
@@ -241,6 +244,8 @@ pub(in crate::server) async fn dispatch_http_request(
                     http_logger_for_context(state, &http_error_loggers, &processed.context);
                 return Some(DispatchAction::Response(DispatchOutcome {
                     response: *response,
+                    response_prepared: false,
+                    response_chunked: false,
                     error_logger,
                     keepalive_timeout: processed.context.keepalive_timeout,
                     keepalive_min_timeout: processed.context.keepalive_min_timeout,
@@ -292,6 +297,8 @@ pub(in crate::server) async fn dispatch_http_request(
         let error_logger = http_logger_for_context(state, &http_error_loggers, &processed.context);
         return Some(DispatchAction::Response(DispatchOutcome {
             response,
+            response_prepared: false,
+            response_chunked: false,
             error_logger,
             keepalive_timeout: processed.context.keepalive_timeout,
             keepalive_min_timeout: processed.context.keepalive_min_timeout,
@@ -444,6 +451,8 @@ pub(in crate::server) async fn dispatch_http_request(
     let error_logger = http_logger_for_context(state, &http_error_loggers, &processed.context);
     Some(DispatchAction::Response(DispatchOutcome {
         response,
+        response_prepared: true,
+        response_chunked: chunked,
         error_logger,
         keepalive_timeout: processed.context.keepalive_timeout,
         keepalive_min_timeout: processed.context.keepalive_min_timeout,

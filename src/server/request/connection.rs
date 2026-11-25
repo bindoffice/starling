@@ -31,6 +31,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
     let mut keepalive_policy: Option<KeepalivePolicy> = None;
     let mut close_config = ConnectionCloseConfig::default();
     let connection_started = Instant::now();
+    let mut head_parse_buffers = RequestHeadParseBuffers::default();
     let shutdown_enabled = shutdown.is_some();
     'connection: loop {
         if shutdown_requested(&shutdown) {
@@ -112,7 +113,11 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 reader.as_mut().expect("HTTP/1 reader available"),
                 header_timeout,
             );
-            let head = read_request_head_with_limits(&mut timed_reader, header_limits);
+            let head = read_request_head_with_limits_and_buffers(
+                &mut timed_reader,
+                header_limits,
+                &mut head_parse_buffers,
+            );
             tokio::select! {
                 head = head => head,
                 _ = wait_for_optional_shutdown(&mut shutdown), if shutdown_enabled => {
@@ -314,7 +319,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                     task.abort();
                 }
                 if let Some(control) = &control
-                    && let Err(err) = control.apply_nodelay(tunnel.tcp_nodelay)
+                    && let Err(err) = control.apply_nodelay_once(tunnel.tcp_nodelay)
                 {
                     request_logger.log(
                         LogLevel::Alert,
@@ -393,7 +398,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             task.close().await;
         }
         if let Some(control) = &control
-            && let Err(err) = control.apply_nodelay(outcome.tcp_nodelay)
+            && let Err(err) = control.apply_nodelay_once(outcome.tcp_nodelay)
         {
             request_logger.log(
                 LogLevel::Alert,
@@ -404,6 +409,9 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
         close_config = outcome.close;
         let keep_alive = outcome.keep_alive && !shutdown_requested(&shutdown);
         if !keep_alive {
+            if outcome.keep_alive {
+                outcome.response_prepared = false;
+            }
             outcome.keep_alive = false;
             outcome.keepalive_header = None;
         }

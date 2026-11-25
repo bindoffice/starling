@@ -258,7 +258,7 @@ pub(in crate::server) async fn handle_http_connection_with_shutdown<S>(
                     .map(|server| server.context.tcp_nodelay)
                     .unwrap_or(true)
             };
-            if let Err(err) = control.apply_nodelay(enabled) {
+            if let Err(err) = control.apply_nodelay_once(enabled) {
                 state.logger.log(
                     LogLevel::Alert,
                     format!("setsockopt(TCP_NODELAY) failed: {err}"),

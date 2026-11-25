@@ -119,6 +119,7 @@ pub(in crate::server) fn escape_nginx_uri(value: &str) -> String {
     encoded
 }
 
+#[cfg(test)]
 pub(in crate::server) fn request_length(request: &Request) -> u64 {
     let line = request.method.len() + request.target.len() + request.version.len() + 4; // two spaces and CRLF
     let headers = request
@@ -131,15 +132,16 @@ pub(in crate::server) fn request_length(request: &Request) -> u64 {
         .saturating_add(request.buffered_body_len() as usize) as u64
 }
 
-pub(in crate::server) fn hostname() -> String {
-    static HOSTNAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+pub(in crate::server) fn hostname() -> Arc<str> {
+    static HOSTNAME: std::sync::OnceLock<Arc<str>> = std::sync::OnceLock::new();
     HOSTNAME.get_or_init(compute_hostname).clone()
 }
 
-fn compute_hostname() -> String {
+fn compute_hostname() -> Arc<str> {
     std::env::var("HOSTNAME")
         .ok()
         .filter(|value| !value.is_empty())
+        .map(Arc::from)
         .unwrap_or_else(|| {
             #[cfg(unix)]
             {
@@ -150,18 +152,20 @@ fn compute_hostname() -> String {
                         .iter()
                         .position(|byte| *byte == 0)
                         .unwrap_or(buffer.len());
-                    return String::from_utf8_lossy(&buffer[..length]).into_owned();
+                    return Arc::from(String::from_utf8_lossy(&buffer[..length]));
                 }
             }
-            "localhost".into()
+            Arc::from("localhost")
         })
 }
 
 pub(in crate::server) fn next_request_id() -> String {
     static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+    static PID: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    let pid = *PID.get_or_init(std::process::id);
     format!(
         "{:016x}{:016x}",
-        std::process::id(),
+        pid,
         REQUEST_ID.fetch_add(1, Ordering::Relaxed)
     )
 }

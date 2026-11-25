@@ -338,7 +338,7 @@ pub(super) async fn handle_h2_request(
     }
     let discard_request_body = matches!(body_task_outcome, BodyTaskOutcome::Detached);
     if let Some(nodelay) = &nodelay {
-        nodelay.apply_nodelay(outcome.tcp_nodelay)?;
+        nodelay.apply_nodelay_once(outcome.tcp_nodelay)?;
     }
     send_h2_early_hints(&mut respond, outcome.response.early_hints())?;
     let send_timeout = outcome.send_timeout;

@@ -1,6 +1,7 @@
 use std::io;
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(unix)]
 use std::time::Duration;
 
@@ -18,9 +19,14 @@ enum Socket {
     Unix(std::os::unix::net::UnixStream),
 }
 
+struct ClientSocketControlInner {
+    socket: Socket,
+    nodelay_applied: AtomicBool,
+}
+
 #[derive(Clone)]
 pub(in crate::server) struct ClientSocketControl {
-    socket: Arc<Socket>,
+    inner: Arc<ClientSocketControlInner>,
     #[cfg(unix)]
     close_fd: Option<Arc<AsyncFd<OwnedFd>>>,
 }
@@ -66,7 +72,10 @@ impl ClientSocketControl {
         #[cfg(unix)]
         let close_fd = duplicate_async_fd(socket.as_raw_fd());
         Self {
-            socket: Arc::new(socket),
+            inner: Arc::new(ClientSocketControlInner {
+                socket,
+                nodelay_applied: AtomicBool::new(false),
+            }),
             #[cfg(unix)]
             close_fd,
         }
@@ -90,11 +99,30 @@ impl ClientSocketControl {
         std::future::pending().await
     }
 
-    pub(in crate::server) fn apply_nodelay(&self, enabled: bool) -> io::Result<()> {
+    fn apply_nodelay(&self, enabled: bool) -> io::Result<()> {
         // Nginx only calls ngx_tcp_nodelay() for "on"; "off" never clears an
         // option already enabled earlier on the same connection.
-        if enabled && let Socket::Tcp(socket) = self.socket.as_ref() {
+        if enabled && let Socket::Tcp(socket) = &self.inner.socket {
             socket.set_nodelay(true)?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::server) fn apply_nodelay_once(&self, enabled: bool) -> io::Result<()> {
+        if !enabled || self.inner.nodelay_applied.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        if self
+            .inner
+            .nodelay_applied
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Ok(());
+        }
+        if let Err(error) = self.apply_nodelay(true) {
+            self.inner.nodelay_applied.store(false, Ordering::Release);
+            return Err(error);
         }
         Ok(())
     }
@@ -107,7 +135,7 @@ impl ClientSocketControl {
     pub(in crate::server) fn close_state(&self) -> ClientCloseState {
         #[cfg(unix)]
         {
-            let fd: RawFd = match self.socket.as_ref() {
+            let fd: RawFd = match &self.inner.socket {
                 Socket::Tcp(socket) => socket.as_raw_fd(),
                 #[cfg(unix)]
                 Socket::Unix(socket) => socket.as_raw_fd(),
@@ -153,7 +181,7 @@ impl ClientSocketControl {
 
     #[cfg(test)]
     pub(in crate::server) fn enabled(&self) -> io::Result<bool> {
-        match self.socket.as_ref() {
+        match &self.inner.socket {
             Socket::Tcp(socket) => socket.nodelay(),
             #[cfg(unix)]
             Socket::Unix(_) => Ok(false),

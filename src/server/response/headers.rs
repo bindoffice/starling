@@ -7,32 +7,34 @@ pub(in crate::server) fn apply_response_headers(
     variables: &mut Variables,
 ) {
     variables.status = response.status;
-    variables.sent_headers.clone_from(&response.headers);
-    let status_allows = matches!(
-        response.status,
-        200 | 201 | 204 | 206 | 301 | 302 | 303 | 304 | 307 | 308
-    );
-    for header in &context.add_headers {
-        if status_allows || header.always {
-            let value_bytes = eval_variables_bytes(&header.value, variables);
-            let value = crate::http::header_value_from_bytes(&value_bytes);
-            let name = header.name.to_ascii_lowercase();
-            if value_bytes.is_empty() {
-                if matches!(name.as_str(), "etag" | "last-modified") {
-                    response.remove_header(&header.name);
+    if !context.add_headers.is_empty() {
+        variables.sent_headers.clone_from(&response.headers);
+        let status_allows = matches!(
+            response.status,
+            200 | 201 | 204 | 206 | 301 | 302 | 303 | 304 | 307 | 308
+        );
+        for header in &context.add_headers {
+            if status_allows || header.always {
+                let value_bytes = eval_variables_bytes(&header.value, variables);
+                let value = crate::http::header_value_from_bytes(&value_bytes);
+                let name = header.name.to_ascii_lowercase();
+                if value_bytes.is_empty() {
+                    if matches!(name.as_str(), "etag" | "last-modified") {
+                        response.remove_header(&header.name);
+                    }
+                } else if matches!(name.as_str(), "etag" | "last-modified") {
+                    response.set_header(&header.name, value);
+                } else {
+                    if name == "accept-ranges"
+                        && response.status == 200
+                        && value.eq_ignore_ascii_case("bytes")
+                    {
+                        response.enable_ranges(false);
+                    }
+                    response.add_header(&header.name, value);
                 }
-            } else if matches!(name.as_str(), "etag" | "last-modified") {
-                response.set_header(&header.name, value);
-            } else {
-                if name == "accept-ranges"
-                    && response.status == 200
-                    && value.eq_ignore_ascii_case("bytes")
-                {
-                    response.enable_ranges(false);
-                }
-                response.add_header(&header.name, value);
+                variables.sent_headers.clone_from(&response.headers);
             }
-            variables.sent_headers.clone_from(&response.headers);
         }
     }
     if request.method.eq_ignore_ascii_case("HEAD") && response.header("Content-Length").is_none() {

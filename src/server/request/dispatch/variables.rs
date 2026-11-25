@@ -29,6 +29,7 @@ pub(super) fn apply_connection_variables(
         }
     }
     variables.realip_remote_addr = connection.remote.variable_address();
+    variables.realip_remote_port = connection.remote.variable_port();
     variables.proxy_protocol_port = connection
         .proxy_protocol_port
         .map(|port| port.to_string())

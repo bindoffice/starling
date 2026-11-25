@@ -7,6 +7,8 @@ pub(in crate::server) enum DispatchAction {
 
 pub(in crate::server) struct DispatchOutcome {
     pub(in crate::server) response: Response,
+    pub(in crate::server) response_prepared: bool,
+    pub(in crate::server) response_chunked: bool,
     pub(in crate::server) error_logger: Arc<Logger>,
     pub(in crate::server) keepalive_timeout: Duration,
     pub(in crate::server) keepalive_min_timeout: Duration,

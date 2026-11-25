@@ -251,7 +251,7 @@ fn stream_variable_value(
                 _ => String::new(),
             })
             .unwrap_or_default(),
-        "hostname" => hostname(),
+        "hostname" => hostname().to_string(),
         "nginx_version" => "1.31.9".into(),
         "pid" => std::process::id().to_string(),
         "msec" => {

@@ -18,9 +18,17 @@ pub async fn write_response<W: AsyncWrite + Unpin>(
     response: &mut Response,
     options: ResponseWriteOptions<'_>,
 ) -> io::Result<()> {
-    write_early_hints(writer, response.early_hints(), options.request_version).await?;
     let chunked = prepare_response_for_write(response, &options);
+    write_prepared_response(writer, response, options, chunked).await
+}
 
+pub(crate) async fn write_prepared_response<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    response: &mut Response,
+    options: ResponseWriteOptions<'_>,
+    chunked: bool,
+) -> io::Result<()> {
+    write_early_hints(writer, response.early_hints(), options.request_version).await?;
     let head = build_response_head(response);
     writer.write_all(&head).await?;
 
@@ -84,7 +92,28 @@ pub(crate) fn prepare_response_for_write(
 }
 
 pub(crate) fn response_head_length(response: &Response) -> u64 {
-    build_response_head(response).len() as u64
+    let mut length = b"HTTP/1.1 ".len()
+        + decimal_length(response.status)
+        + 1
+        + reason_phrase(response.status).len()
+        + 2;
+    for header in &response.headers {
+        length = length
+            .saturating_add(header.name.len())
+            .saturating_add(2)
+            .saturating_add(header_value_bytes(&header.value).len())
+            .saturating_add(2);
+    }
+    length.saturating_add(2) as u64
+}
+
+fn decimal_length(mut value: u16) -> usize {
+    let mut digits = 1;
+    while value >= 10 {
+        value /= 10;
+        digits += 1;
+    }
+    digits
 }
 
 fn build_response_head(response: &Response) -> Vec<u8> {
