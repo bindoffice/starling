@@ -60,7 +60,7 @@ fn serve_one(
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let request = read_request_head(&mut stream)?;
     thread::sleep(delay);
-    write!(
+    let reply = write!(
         stream,
         "HTTP/1.1 {status} {}\r\n\
          Content-Type: text/plain\r\n\
@@ -71,8 +71,21 @@ fn serve_one(
         reason_phrase(status),
         body.len(),
         body
-    )?;
-    stream.flush()?;
+    )
+    .and_then(|_| stream.flush());
+    if let Err(error) = reply {
+        // The proxy may abort the exchange (e.g. after a request-body replay
+        // failure) and reset the upstream before we finish replying. The
+        // request was already captured, so a teardown reset is not a failure.
+        if !matches!(
+            error.kind(),
+            io::ErrorKind::ConnectionReset
+                | io::ErrorKind::BrokenPipe
+                | io::ErrorKind::ConnectionAborted
+        ) {
+            return Err(error);
+        }
+    }
     Ok(request)
 }
 

@@ -295,6 +295,20 @@ ssize_t pread64(int fd, void *buffer, size_t count, off64_t offset) {
     return real_pread64(fd, buffer, count, offset);
 }
 
+ssize_t sendfile(int out_fd, int in_fd, off_t *offset, size_t count) {
+    static ssize_t (*real_sendfile)(int, int, off_t *, size_t);
+    if (real_sendfile == NULL) {
+        real_sendfile = dlsym(RTLD_NEXT, "sendfile");
+    }
+    /* The read fault applies to the source file descriptor. */
+    int error = fault_errno_for_fd(in_fd, "read");
+    if (error != 0) {
+        errno = error;
+        return -1;
+    }
+    return real_sendfile(out_fd, in_fd, offset, count);
+}
+
 int rename(const char *old_path, const char *new_path) {
     static int (*real_rename)(const char *, const char *);
     if (real_rename == NULL) {

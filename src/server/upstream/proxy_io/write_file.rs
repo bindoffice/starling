@@ -39,13 +39,7 @@ pub(super) async fn write_proxy_request_to_upstream(
             .map_err(crate::http::request_body_file_error)?;
         sendfile_request_body(stream, &file, body_file.len(), context.proxy_send_timeout)
             .await
-            .map_err(|error| {
-                if error.kind() == io::ErrorKind::UnexpectedEof {
-                    crate::http::request_body_file_error(error)
-                } else {
-                    error
-                }
-            })?;
+            .map_err(classify_request_body_send_error)?;
         return flush_with_timeout(&mut connection.reader, context.proxy_send_timeout).await;
     }
 
@@ -57,6 +51,31 @@ pub(super) async fn write_proxy_request_to_upstream(
         Some(context.proxy_send_timeout),
     )
     .await
+}
+
+/// Map a `sendfile` failure onto the correct error domain.
+///
+/// `sendfile` cannot report whether a failure came from reading the source
+/// file or writing the socket, so distinguish them by errno. A closed or reset
+/// upstream is a gateway failure (502/504); anything else is a local
+/// request-body file failure that nginx surfaces as a 500.
+#[cfg(unix)]
+fn classify_request_body_send_error(error: io::Error) -> io::Error {
+    let upstream_side = error.kind() == io::ErrorKind::TimedOut
+        || matches!(
+            error.raw_os_error(),
+            Some(libc::EPIPE)
+                | Some(libc::ECONNRESET)
+                | Some(libc::ECONNABORTED)
+                | Some(libc::ENOTCONN)
+                | Some(libc::ESHUTDOWN)
+                | Some(libc::EPROTOTYPE)
+        );
+    if upstream_side {
+        error
+    } else {
+        crate::http::request_body_file_error(error)
+    }
 }
 
 #[cfg(unix)]
