@@ -224,8 +224,12 @@ impl Variables {
         dispatch: bool,
         addresses: Option<&ConnectionAddresses>,
     ) -> Self {
-        let (path, query) = request.path_and_query();
         let path_variables = !dispatch;
+        let (path, query) = if path_variables {
+            request.path_and_query()
+        } else {
+            ("", None)
+        };
         let remote_addr = addresses
             .map(|addresses| addresses.remote_addr_text.clone())
             .unwrap_or_else(|| Arc::from(remote.variable_address()));
