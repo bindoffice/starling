@@ -106,3 +106,44 @@ async fn records_settings_acknowledgements() {
     assert_eq!(received, preface);
     assert!(settings_acked.load(Ordering::Relaxed));
 }
+
+#[tokio::test]
+async fn withholds_an_incomplete_data_frame() {
+    let (mut client, server) = tokio::io::duplex(256);
+    let (timeouts, _) = FrameTimeoutTracker::new(
+        std::time::Duration::from_secs(1),
+        std::time::Duration::from_secs(1),
+    );
+    let mut stream = FrameValidatedStream::new(
+        server,
+        8 * 1024,
+        DEFAULT_MAX_FRAME_SIZE,
+        timeouts,
+        Arc::new(AtomicBool::new(false)),
+    );
+
+    let preface = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+    let frame_header = [0, 0, 8, FRAME_DATA, 0, 0, 0, 0, 1];
+    client.write_all(preface).await.unwrap();
+    client.write_all(&frame_header).await.unwrap();
+    client.write_all(b"half").await.unwrap();
+
+    let mut received_preface = vec![0_u8; preface.len()];
+    stream.read_exact(&mut received_preface).await.unwrap();
+    assert_eq!(received_preface, preface);
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            stream.read(&mut [0_u8; 1])
+        )
+        .await
+        .is_err(),
+        "an incomplete DATA frame must not be exposed to h2"
+    );
+
+    client.write_all(b"more").await.unwrap();
+    let mut received_frame = vec![0_u8; frame_header.len() + 8];
+    stream.read_exact(&mut received_frame).await.unwrap();
+    assert_eq!(&received_frame[..frame_header.len()], &frame_header);
+    assert_eq!(&received_frame[frame_header.len()..], b"halfmore");
+}
