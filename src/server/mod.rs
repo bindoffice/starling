@@ -89,7 +89,7 @@ use upstream::*;
 mod variables;
 use variables::*;
 mod http2;
-mod http2_body_budget;
+mod http2_budget;
 mod http_error_log;
 mod listener_socket;
 mod prefixed;
@@ -100,7 +100,7 @@ mod socket_control;
 mod temp_cleanup;
 use http_error_log::*;
 use http2::*;
-use http2_body_budget::Http2BodyBudget;
+use http2_budget::Http2Budget;
 use listener_socket::*;
 use prefixed::*;
 use request::*;
@@ -181,7 +181,7 @@ pub struct SharedState {
     upstream_keepalive: Arc<UpstreamKeepalivePool>,
     proxy_cache: Arc<ProxyCacheRegistry>,
     client_tls_cache: Arc<ClientTlsConfigCache>,
-    http2_body_budget: Arc<Http2BodyBudget>,
+    http2_budget: Arc<Http2Budget>,
 }
 
 #[derive(Clone)]

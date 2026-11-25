@@ -38,7 +38,7 @@ async fn handles_expect_continue_and_pipelined_keepalive_requests() {
         upstream_keepalive: Arc::new(UpstreamKeepalivePool::default()),
         proxy_cache: Arc::new(ProxyCacheRegistry::new(config.http.as_ref())),
         client_tls_cache: Arc::new(ClientTlsConfigCache::default()),
-        http2_body_budget: Arc::new(Http2BodyBudget::new()),
+        http2_budget: Arc::new(Http2Budget::new()),
     };
     let (mut client, server) = tokio::io::duplex(64 * 1024);
     let task = tokio::spawn(handle_io(

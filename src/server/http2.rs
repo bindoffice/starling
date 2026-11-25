@@ -236,10 +236,13 @@ pub(super) async fn handle_h2_request(
     } else {
         body_timeout.saturating_add(BODY_TIMEOUT_GRACE)
     };
-    // Keep queued streams at their initial flow-control window. Otherwise the
-    // client can fill every stream buffer before descriptor admission runs.
+    // Bound concurrent streams before dispatch so both plain responses and
+    // upstream connections stay within the process descriptor budget.
+    let _http2_request_budget = state.http2_budget.acquire_request().await;
+    // Keep queued body streams at their initial flow-control window. Otherwise
+    // the client can fill every stream buffer before body admission runs.
     let _http2_body_budget = if !body_end || content_length.is_some_and(|length| length > 0) {
-        Some(state.http2_body_budget.acquire().await)
+        Some(state.http2_budget.acquire_body().await)
     } else {
         None
     };
