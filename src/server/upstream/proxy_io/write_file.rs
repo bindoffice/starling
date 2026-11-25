@@ -29,15 +29,14 @@ pub(super) async fn write_proxy_request_to_upstream(
         .await;
     };
 
-    let file = body_file
-        .open()
-        .await
-        .map_err(crate::http::request_body_file_error)?;
     let head = proxy_request_head(outgoing, version);
     write_all_with_timeout(&mut connection.reader, &head, context.proxy_send_timeout).await?;
 
     #[cfg(unix)]
     if let Some(stream) = connection.reader.get_mut().as_tcp_stream() {
+        let file = body_file
+            .open_sync()
+            .map_err(crate::http::request_body_file_error)?;
         sendfile_request_body(stream, &file, body_file.len(), context.proxy_send_timeout)
             .await
             .map_err(|error| {
@@ -63,7 +62,7 @@ pub(super) async fn write_proxy_request_to_upstream(
 #[cfg(unix)]
 async fn sendfile_request_body(
     stream: &mut tokio::net::TcpStream,
-    file: &tokio::fs::File,
+    file: &std::fs::File,
     length: u64,
     timeout: Duration,
 ) -> io::Result<()> {

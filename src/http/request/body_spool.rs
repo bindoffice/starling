@@ -1,4 +1,5 @@
 use std::io;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -33,13 +34,13 @@ pub async fn spool_request_body(
             if spool.is_none() && body.len().saturating_add(chunk.len()) > buffer_size {
                 let mut file = SpoolFile::create(temp_path)?;
                 if !body.is_empty() {
-                    file.write_all(&body).await?;
+                    file.write_all(&body)?;
                     body.clear();
                 }
                 spool = Some(file);
             }
             if let Some(spool) = &mut spool {
-                spool.write_all(&chunk).await?;
+                spool.write_all(&chunk)?;
             } else {
                 body.extend_from_slice(&chunk);
             }
@@ -48,7 +49,7 @@ pub async fn spool_request_body(
 
     let file = match spool {
         Some(spool) => {
-            let path = spool.finish().await?;
+            let path = spool.finish()?;
             Some(Arc::new(RequestBodyFile::new(
                 TempFileGuard::new(path, file_only.remove_on_drop()),
                 total,
@@ -76,33 +77,36 @@ impl SpoolFile {
         })
     }
 
-    async fn write_all(&mut self, data: &[u8]) -> io::Result<()> {
+    fn write_all(&mut self, data: &[u8]) -> io::Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
         if data.len() >= SPOOL_WRITE_BATCH {
-            self.flush_pending().await?;
-            return std::io::Write::write_all(&mut self.file, data);
+            self.flush_pending()?;
+            return self.file.write_all(data);
         }
         if self.pending.len().saturating_add(data.len()) > SPOOL_WRITE_BATCH {
-            self.flush_pending().await?;
+            self.flush_pending()?;
         }
         self.pending.extend_from_slice(data);
         if self.pending.len() >= SPOOL_WRITE_BATCH {
-            self.flush_pending().await?;
+            self.flush_pending()?;
         }
         Ok(())
     }
 
-    async fn flush_pending(&mut self) -> io::Result<()> {
+    fn flush_pending(&mut self) -> io::Result<()> {
         if self.pending.is_empty() {
             return Ok(());
         }
-        let result = std::io::Write::write_all(&mut self.file, &self.pending);
+        let result = self.file.write_all(&self.pending);
         self.pending.clear();
         result
     }
 
-    async fn finish(mut self) -> io::Result<PathBuf> {
-        self.flush_pending().await?;
-        std::io::Write::flush(&mut self.file)?;
+    fn finish(mut self) -> io::Result<PathBuf> {
+        self.flush_pending()?;
+        self.file.flush()?;
         Ok(self.path.take().expect("request body spool path"))
     }
 }

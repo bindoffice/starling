@@ -32,6 +32,10 @@ impl RequestBodyFile {
     pub async fn open(&self) -> io::Result<tokio::fs::File> {
         tokio::fs::File::open(self.path()).await
     }
+
+    pub(crate) fn open_sync(&self) -> io::Result<std::fs::File> {
+        std::fs::File::open(self.path())
+    }
 }
 
 pub fn store_request_body(
@@ -47,24 +51,13 @@ pub fn store_request_body(
     }
 
     let (path, mut file) = create_temp_file(temp_path, "request body")?;
-    let result = (|| {
-        if let Err(err) = file.write_all(body) {
-            drop(file);
-            let _ = std::fs::remove_file(&path);
-            return Err(err);
-        }
-        if let Err(err) = file.flush() {
-            drop(file);
-            let _ = std::fs::remove_file(&path);
-            return Err(err);
-        }
-        Ok(())
-    })();
-    match result {
-        Ok(()) => Ok(Some(Arc::new(RequestBodyFile::new(
-            TempFileGuard::new(path, file_only.remove_on_drop()),
-            body.len() as u64,
-        )))),
-        Err(err) => Err(err),
+    if let Err(err) = file.write_all(body).and_then(|()| file.flush()) {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err(err);
     }
+    Ok(Some(Arc::new(RequestBodyFile::new(
+        TempFileGuard::new(path, file_only.remove_on_drop()),
+        body.len() as u64,
+    ))))
 }
