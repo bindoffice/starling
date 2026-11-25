@@ -124,7 +124,7 @@ async fn applies_rewrite_log_and_uninitialized_variable_warning_at_runtime() {
             .into(),
             body_stream: None,
             body: Vec::new(),
-            remote_addr: remote.to_string(),
+            remote_addr: remote.to_string().into(),
             local_addr: "127.0.0.1:18391".into(),
             keep_alive: false,
         };

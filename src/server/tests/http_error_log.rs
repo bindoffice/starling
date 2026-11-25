@@ -42,7 +42,7 @@ async fn selects_the_inherited_or_overridden_http_error_logger() {
             .into(),
             body_stream: None,
             body: Vec::new(),
-            remote_addr: remote.to_string(),
+            remote_addr: remote.to_string().into(),
             local_addr: "127.0.0.1:18362".into(),
             keep_alive: false,
         };

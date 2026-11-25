@@ -22,7 +22,6 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     let remote = connection.remote.clone();
-    let local = connection.local.clone();
     let (read_half, mut write_half) = tokio::io::split(stream);
     let mut reader = Some(BufReader::new(read_half));
     let mut body_task: Option<Http1BodyTask<S>> = None;
@@ -246,8 +245,8 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             headers: head.headers.into(),
             body: Vec::new(),
             body_stream,
-            remote_addr: remote.to_string(),
-            local_addr: local.to_string(),
+            remote_addr: connection.remote_addr_text.clone(),
+            local_addr: connection.local_addr_text.clone(),
             keep_alive: head.keep_alive,
         };
 

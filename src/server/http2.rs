@@ -199,8 +199,8 @@ pub(super) async fn handle_h2_request(
     let (mut request, request_length) = request_from_h2_parts(
         parts,
         Vec::new(),
-        connection.remote.variable_address(),
-        connection.local.variable_address(),
+        connection.remote_addr_text.clone(),
+        connection.local_addr_text.clone(),
     );
     let server_context = request_server_context(
         config,

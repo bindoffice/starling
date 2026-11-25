@@ -148,8 +148,8 @@ pub(super) fn receive_header_list_limit(limit: u32) -> u32 {
 pub(super) fn request_from_h2_parts(
     parts: http::request::Parts,
     body: Vec<u8>,
-    remote_addr: String,
-    local_addr: String,
+    remote_addr: Arc<str>,
+    local_addr: Arc<str>,
 ) -> (Request, Option<u64>) {
     let header_block_size = parts
         .extensions

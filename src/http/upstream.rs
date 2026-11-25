@@ -137,8 +137,8 @@ pub async fn read_upstream_response_body<R: AsyncBufReadExt + AsyncReadExt + Unp
 
 pub async fn read_request<R: AsyncBufReadExt + AsyncReadExt + Unpin>(
     reader: &mut R,
-    remote_addr: String,
-    local_addr: String,
+    remote_addr: Arc<str>,
+    local_addr: Arc<str>,
     header_timeout: Duration,
     max_body: u64,
 ) -> io::Result<Option<Request>> {

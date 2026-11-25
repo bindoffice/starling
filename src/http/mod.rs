@@ -23,8 +23,8 @@ pub struct Request {
     pub headers: Arc<Vec<Header>>,
     pub body: Vec<u8>,
     pub body_stream: Option<RequestBodyStream>,
-    pub remote_addr: String,
-    pub local_addr: String,
+    pub remote_addr: Arc<str>,
+    pub local_addr: Arc<str>,
     pub keep_alive: bool,
 }
 
