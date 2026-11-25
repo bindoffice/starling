@@ -14,6 +14,7 @@ pub struct RequestBodyStream {
     source: Arc<RequestBodySource>,
     file_reader: Arc<Mutex<FileReader>>,
     captured: Arc<Mutex<Option<Vec<u8>>>>,
+    consumed: Arc<AtomicBool>,
 }
 
 enum RequestBodySource {
@@ -63,6 +64,7 @@ impl Clone for RequestBodyStream {
             // zero. Live channel clones continue to share the receiver.
             file_reader: Arc::new(Mutex::new(FileReader::NotStarted)),
             captured: self.captured.clone(),
+            consumed: self.consumed.clone(),
         }
     }
 }
@@ -95,6 +97,7 @@ impl RequestBodyStream {
                 })),
                 file_reader: Arc::new(Mutex::new(FileReader::NotStarted)),
                 captured: Arc::new(Mutex::new(Some(Vec::new()))),
+                consumed: Arc::new(AtomicBool::new(false)),
             },
         )
     }
@@ -104,6 +107,7 @@ impl RequestBodyStream {
             source: Arc::new(RequestBodySource::File(file)),
             file_reader: Arc::new(Mutex::new(FileReader::NotStarted)),
             captured: Arc::new(Mutex::new(None)),
+            consumed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -123,6 +127,7 @@ impl RequestBodyStream {
     }
 
     pub async fn next(&self) -> io::Result<Option<Bytes>> {
+        self.consumed.store(true, Ordering::Release);
         match self.source.as_ref() {
             RequestBodySource::Channel(channel) => {
                 let mut receiver = channel.receiver.lock().await;
@@ -179,6 +184,7 @@ impl RequestBodyStream {
     }
 
     pub(crate) async fn try_next(&self) -> io::Result<Option<Bytes>> {
+        self.consumed.store(true, Ordering::Release);
         let RequestBodySource::Channel(channel) = self.source.as_ref() else {
             return Ok(None);
         };
@@ -197,6 +203,23 @@ impl RequestBodyStream {
         drop(receiver);
         self.capture(&item).await;
         Ok(Some(item))
+    }
+
+    pub(crate) async fn try_next_limited(
+        &self,
+        total: &mut u64,
+        limit: u64,
+    ) -> io::Result<Option<Bytes>> {
+        let data = self.try_next().await?;
+        if let Some(data) = &data {
+            *total = total
+                .checked_add(data.len() as u64)
+                .ok_or_else(request_body_too_large_error)?;
+            if limit != 0 && *total > limit {
+                return Err(request_body_too_large_error());
+            }
+        }
+        Ok(data)
     }
 
     pub(crate) async fn captured_body(&self) -> Option<Vec<u8>> {
@@ -267,6 +290,22 @@ impl RequestBodyStream {
         match self.source.as_ref() {
             RequestBodySource::Channel(channel) => channel.ended.load(Ordering::Acquire),
             RequestBodySource::File(_) => false,
+        }
+    }
+
+    pub(crate) fn was_consumed(&self) -> bool {
+        self.consumed.load(Ordering::Acquire)
+    }
+
+    pub(crate) async fn channel_has_pending(&self) -> bool {
+        match self.source.as_ref() {
+            RequestBodySource::Channel(channel) => channel
+                .receiver
+                .lock()
+                .await
+                .as_ref()
+                .is_some_and(|receiver| !receiver.is_empty()),
+            RequestBodySource::File(file) => !file.is_empty(),
         }
     }
 }

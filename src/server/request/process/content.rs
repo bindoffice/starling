@@ -190,6 +190,7 @@ pub(super) async fn serve_content(
             }
         }
     };
+    set_streamed_request_body_variable(request, variables).await;
     variables.response_from_upstream = kind.upstream()
         && !matches!(
             variables.upstream_cache_status.as_str(),

@@ -1,6 +1,8 @@
 use super::super::support::*;
 use super::super::*;
 
+mod chunk_batching;
+
 #[tokio::test]
 async fn merges_duplicate_cookie_headers_for_http1_upstreams() {
     let (mut reader, mut writer) = tokio::io::duplex(64 * 1024);
@@ -214,6 +216,7 @@ async fn streams_content_length_request_body_before_client_finishes() {
                             proxy_pass http://{upstream};
                             proxy_request_buffering off;
                             proxy_read_timeout 5s;
+                            add_header X-Body $request_body;
                         }}
                     }}
                 }}
@@ -253,6 +256,13 @@ async fn streams_content_length_request_body_before_client_finishes() {
         .unwrap();
     assert!(
         response.starts_with(b"HTTP/1.1 200 "),
+        "{}",
+        String::from_utf8_lossy(&response)
+    );
+    assert!(
+        response
+            .windows(b"X-Body: partremain\r\n".len())
+            .any(|window| window == b"X-Body: partremain\r\n"),
         "{}",
         String::from_utf8_lossy(&response)
     );

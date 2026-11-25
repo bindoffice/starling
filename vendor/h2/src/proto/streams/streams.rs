@@ -179,6 +179,11 @@ where
         })
     }
 
+    pub fn has_pending_accept(&self) -> bool {
+        let me = self.inner.lock().unwrap();
+        me.actions.recv.has_pending_accept()
+    }
+
     /// Count a refused stream toward the local error reset limit.
     pub fn count_pending_refusal(&mut self) -> Result<(), Error> {
         let mut me = self.inner.lock().unwrap();

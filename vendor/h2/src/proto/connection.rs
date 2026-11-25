@@ -149,6 +149,10 @@ where
                 local_reset_duration: config.reset_stream_duration,
                 local_reset_max: config.reset_stream_max,
                 remote_reset_max: config.remote_reset_stream_max,
+                local_init_window_sz: config
+                    .settings
+                    .initial_window_size()
+                    .unwrap_or(DEFAULT_INITIAL_WINDOW_SIZE),
                 remote_init_window_sz: DEFAULT_INITIAL_WINDOW_SIZE,
                 remote_max_initiated: config
                     .settings
@@ -444,6 +448,13 @@ where
                 ReceivedFrame::Done => {
                     return Poll::Ready(Ok(()));
                 }
+            }
+            if self.inner.streams.has_pending_accept() {
+                // Let the application observe a new request before decoding
+                // any following DATA. This gives it the same opportunity as
+                // Nginx to expand the stream receive window while handling
+                // the request headers.
+                return Poll::Pending;
             }
         }
     }

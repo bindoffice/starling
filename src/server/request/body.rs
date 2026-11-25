@@ -8,7 +8,6 @@ pub(in crate::server) fn request_body_stream_enabled(
         && !context.proxy_request_buffering
         && context.proxy_set_body.is_none()
         && context.proxy_pass_request_body
-        && !context.client_body.in_file_only.enabled()
         && !context.proxy_cache_background_update
         && (context.mirrors.is_empty() || !context.mirror_request_body)
         && (context.proxy_http_version != "1.0"
@@ -53,7 +52,6 @@ fn config_may_stream_request_body(context: &EffectiveConfig) -> bool {
         && !context.proxy_request_buffering
         && context.proxy_set_body.is_none()
         && context.proxy_pass_request_body
-        && !context.client_body.in_file_only.enabled()
         && !context.proxy_cache_background_update
         && (context.mirrors.is_empty() || !context.mirror_request_body);
     gateway_request_body_streaming(context, None) || proxy_streaming
@@ -193,6 +191,24 @@ pub(in crate::server) fn set_buffered_request_body_variable(
         .map(|file| file.path().display().to_string())
         .unwrap_or_default();
     variables.request_body_file_guard = file;
+}
+
+pub(in crate::server) async fn set_streamed_request_body_variable(
+    request: &Request,
+    variables: &mut Variables,
+) {
+    let Some(stream) = request.body_stream.as_ref() else {
+        return;
+    };
+    let Some(body) = stream.captured_body().await else {
+        return;
+    };
+    if body.is_empty() {
+        return;
+    }
+    variables.request_body = String::from_utf8_lossy(&body).into_owned();
+    variables.request_body_file.clear();
+    variables.request_body_file_guard = None;
 }
 
 pub(in crate::server) fn validate_declared_request_body_size(

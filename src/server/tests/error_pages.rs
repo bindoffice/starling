@@ -1,4 +1,5 @@
 use super::support::*;
+use crate::server::{Header, Request, internal_redirect_request};
 
 #[test]
 fn follows_recursive_error_pages_only_when_enabled() {
@@ -101,4 +102,45 @@ async fn location_error_pages_replace_server_inheritance() {
     assert!(inherited.starts_with("HTTP/1.1 404 Not Found\r\n"));
     assert!(inherited.ends_with("server fallback\n"));
     let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[test]
+fn internal_redirect_keeps_buffered_body_but_discards_live_body() {
+    let mut request = Request {
+        method: "POST".into(),
+        target: "/proxy".into(),
+        version: "HTTP/1.1".into(),
+        headers: vec![
+            Header {
+                name: "Host".into(),
+                value: "localhost".into(),
+            },
+            Header {
+                name: "Content-Length".into(),
+                value: "7".into(),
+            },
+        ],
+        body: b"payload".to_vec(),
+        body_stream: None,
+        remote_addr: "127.0.0.1:45678".into(),
+        local_addr: "127.0.0.1:18522".into(),
+        keep_alive: false,
+    };
+
+    let redirected = internal_redirect_request(&request);
+    assert_eq!(redirected.method, "GET");
+    assert_eq!(redirected.body, b"payload");
+    assert!(
+        redirected
+            .headers
+            .iter()
+            .all(|header| !header.name.eq_ignore_ascii_case("content-length"))
+    );
+
+    let (_, stream) = crate::http::RequestBodyStream::channel();
+    request.body.clear();
+    request.body_stream = Some(stream);
+    let redirected = internal_redirect_request(&request);
+    assert!(redirected.body.is_empty());
+    assert!(redirected.body_stream.is_none());
 }

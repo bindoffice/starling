@@ -279,6 +279,20 @@ pub(super) async fn serve_connection<S>(
                 break;
             }
         };
+        // Nginx keeps a large connection window and expands default-size
+        // request windows before inspecting a frame that may carry the whole
+        // body at once. Explicit tiny preread windows retain strict flow
+        // control for the compatibility tests.
+        let (mut request, mut respond) = (request, respond);
+        if settings.limits.body_preread_size >= 64 * 1024
+            && request
+                .body_mut()
+                .set_target_window_size(i32::MAX as u32)
+                .is_err()
+        {
+            respond.send_reset(h2::Reason::INTERNAL_ERROR);
+            continue;
+        }
 
         state.stats.requests.fetch_add(1, Ordering::Relaxed);
         accepted_requests = accepted_requests.saturating_add(1);
@@ -381,7 +395,9 @@ pub(super) fn settings_for_connection(
     Http2ConnectionSettings {
         limits,
         max_header_field_size: server.context.large_client_header_buffers.size,
-        max_frame_size: limits.max_header_list_size.clamp(16 * 1024, (1 << 24) - 1),
+        // Nginx accepts DATA frames up to the protocol maximum instead of
+        // tying the frame size to the decoded header-list limit.
+        max_frame_size: (1 << 24) - 1,
         header_timeout: server.context.client_header_timeout,
         body_timeout: server.context.client_body_timeout,
         keepalive_timeout: server.context.keepalive_timeout,

@@ -67,6 +67,9 @@ pub struct Config {
     /// time. Going over this number results in a connection error.
     pub remote_reset_max: usize,
 
+    /// Initial receive window size advertised in the local SETTINGS frame.
+    pub local_init_window_sz: WindowSize,
+
     /// Initial window size of remote initiated streams
     pub remote_init_window_sz: WindowSize,
 

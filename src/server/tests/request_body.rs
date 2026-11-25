@@ -13,7 +13,7 @@ async fn stores_request_body_files_and_exposes_nginx_variables() {
     };
     let upstream_address = upstream.local_addr().unwrap();
     let backend = tokio::spawn(async move {
-        for _ in 0..5 {
+        for _ in 0..6 {
             let (mut stream, _) = upstream.accept().await.unwrap();
             tokio::spawn(async move {
                 let (request, body) = read_backend_request(&mut stream).await;
@@ -55,6 +55,13 @@ async fn stores_request_body_files_and_exposes_nginx_variables() {
                     }}
                     location /memory {{
                         client_body_buffer_size 8;
+                        proxy_pass http://{upstream_address};
+                        add_header X-Request-Body-File $request_body_file always;
+                        add_header X-Request-Body $request_body always;
+                    }}
+                    location /unbuffered {{
+                        client_body_in_file_only on;
+                        proxy_request_buffering off;
                         proxy_pass http://{upstream_address};
                         add_header X-Request-Body-File $request_body_file always;
                         add_header X-Request-Body $request_body always;
@@ -118,6 +125,23 @@ async fn stores_request_body_files_and_exposes_nginx_variables() {
     assert_eq!(response_header(&memory, "X-Request-Body"), Some("hello"));
     assert!(
         response_header(&memory, "X-Request-Body-File")
+            .unwrap_or_default()
+            .is_empty()
+    );
+
+    let unbuffered = request_body(
+        &config,
+        "POST /unbuffered HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\
+         Connection: close\r\n\r\nhello",
+    )
+    .await;
+    assert!(unbuffered.ends_with("ok:hello"));
+    assert_eq!(
+        response_header(&unbuffered, "X-Request-Body"),
+        Some("hello")
+    );
+    assert!(
+        response_header(&unbuffered, "X-Request-Body-File")
             .unwrap_or_default()
             .is_empty()
     );
@@ -368,6 +392,32 @@ async fn client_reset_during_spool_removes_the_partial_file() {
         !contains_generated_temp_file(&temp_root),
         "client cancellation must remove the partial spool file"
     );
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
+async fn rejects_invalid_buffered_chunk_before_a_return_response() {
+    let (prefix, config) = test_config(
+        r#"
+            worker_processes 1;
+            events { worker_connections 64; }
+            http {
+                server {
+                    listen 127.0.0.1:18736;
+                    location / { return 200 "TEST\n"; }
+                }
+            }
+        "#,
+        &[],
+    );
+
+    let response = request_body(
+        &config,
+        "POST / HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\
+         Connection: close\r\n\r\n4\r\nSEE-THIS\r\n0\r\n\r\n",
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 400 "), "{response}");
     let _ = std::fs::remove_dir_all(prefix);
 }
 

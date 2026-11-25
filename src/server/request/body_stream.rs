@@ -21,6 +21,7 @@ where
 {
     stream: RequestBodyStream,
     task: JoinHandle<(BufReader<ReadHalf<S>>, io::Result<()>)>,
+    initial_error: Option<String>,
 }
 
 impl<S> Http1BodyTask<S>
@@ -38,18 +39,26 @@ where
         } else {
             BodyFraming::ContentLength(head.content_length.filter(|length| *length != 0)?)
         };
-        let initial = if let BodyFraming::ContentLength(length) = framing {
-            let available = reader.buffer().len().min(length as usize);
-            if available == 0 {
-                None
-            } else {
-                let data = Bytes::copy_from_slice(&reader.buffer()[..available]);
-                reader.consume(available);
-                framing = BodyFraming::ContentLength(length - available as u64);
-                Some(data)
-            }
+        let initial_error = if head.chunked {
+            validate_chunked_buffer(reader.buffer())
+                .err()
+                .map(|error| error.to_string())
         } else {
             None
+        };
+        let initial = match framing {
+            BodyFraming::ContentLength(length) => {
+                let available = reader.buffer().len().min(length as usize);
+                if available == 0 {
+                    None
+                } else {
+                    let data = Bytes::copy_from_slice(&reader.buffer()[..available]);
+                    reader.consume(available);
+                    framing = BodyFraming::ContentLength(length - available as u64);
+                    Some(data)
+                }
+            }
+            BodyFraming::Chunked => take_buffered_chunked_body(&mut reader),
         };
         let (sender, stream) = RequestBodyStream::channel();
         let initial = match initial {
@@ -68,11 +77,22 @@ where
             }
             (reader, result)
         });
-        Some(Self { stream, task })
+        Some(Self {
+            stream,
+            task,
+            initial_error,
+        })
     }
 
     pub(in crate::server) fn stream(&self) -> RequestBodyStream {
         self.stream.clone()
+    }
+
+    pub(in crate::server) fn unconsumed_initial_error(&self) -> Option<&str> {
+        if self.stream.was_consumed() {
+            return None;
+        }
+        self.initial_error.as_deref()
     }
 
     pub(in crate::server) async fn close(&self) {
@@ -92,6 +112,121 @@ where
     }
 }
 
+fn validate_chunked_buffer(mut buffer: &[u8]) -> io::Result<()> {
+    loop {
+        let Some(line_end) = buffer.iter().position(|byte| *byte == b'\n') else {
+            return Ok(());
+        };
+        let line = buffer[..line_end]
+            .strip_suffix(b"\r")
+            .unwrap_or(&buffer[..line_end]);
+        let size_text = line.split(|byte| *byte == b';').next().unwrap_or_default();
+        let size_text = std::str::from_utf8(size_text)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid chunk size"))?;
+        let size = usize::from_str_radix(size_text.trim(), 16)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid chunk size"))?;
+        if size == 0 {
+            return validate_buffered_trailers(&buffer[line_end + 1..]);
+        }
+        let data_start = line_end + 1;
+        let Some(data_end) = data_start.checked_add(size) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid chunk size",
+            ));
+        };
+        let Some(chunk_end) = data_end.checked_add(2) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid chunk size",
+            ));
+        };
+        if chunk_end > buffer.len() {
+            return Ok(());
+        }
+        if &buffer[data_end..chunk_end] != b"\r\n" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid chunk terminator",
+            ));
+        }
+        buffer = &buffer[chunk_end..];
+    }
+}
+
+fn validate_buffered_trailers(mut buffer: &[u8]) -> io::Result<()> {
+    loop {
+        let Some(line_end) = buffer.iter().position(|byte| *byte == b'\n') else {
+            return Ok(());
+        };
+        let line = buffer[..line_end]
+            .strip_suffix(b"\r")
+            .unwrap_or(&buffer[..line_end]);
+        if line.is_empty() {
+            return Ok(());
+        }
+        let Some(colon) = line.iter().position(|byte| *byte == b':') else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid chunked trailer",
+            ));
+        };
+        let name = &line[..colon];
+        if name.is_empty() || !name.iter().copied().all(is_token_byte) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid chunked trailer",
+            ));
+        }
+        buffer = &buffer[line_end + 1..];
+    }
+}
+
+fn take_buffered_chunked_body<S>(reader: &mut BufReader<ReadHalf<S>>) -> Option<Bytes>
+where
+    S: AsyncRead + Send + 'static,
+{
+    let buffer = reader.buffer();
+    let mut consumed = 0;
+    let mut body = Vec::new();
+    loop {
+        let remaining = &buffer[consumed..];
+        let Some(line_end) = remaining.iter().position(|byte| *byte == b'\n') else {
+            break;
+        };
+        let line = remaining[..line_end]
+            .strip_suffix(b"\r")
+            .unwrap_or(&remaining[..line_end]);
+        let size_text = line.split(|byte| *byte == b';').next().unwrap_or_default();
+        let Ok(size_text) = std::str::from_utf8(size_text) else {
+            break;
+        };
+        let Ok(size) = usize::from_str_radix(size_text.trim(), 16) else {
+            break;
+        };
+        if size == 0 {
+            break;
+        }
+        let data_start = consumed + line_end + 1;
+        let Some(data_end) = data_start.checked_add(size) else {
+            break;
+        };
+        let Some(chunk_end) = data_end.checked_add(2) else {
+            break;
+        };
+        if chunk_end > buffer.len() || &buffer[data_end..chunk_end] != b"\r\n" {
+            break;
+        }
+        body.extend_from_slice(&buffer[data_start..data_end]);
+        consumed = chunk_end;
+    }
+    if body.is_empty() {
+        return None;
+    }
+    reader.consume(consumed);
+    Some(Bytes::from(body))
+}
+
 async fn pump_body<R>(
     reader: &mut R,
     framing: BodyFraming,
@@ -104,18 +239,29 @@ where
     R: AsyncBufRead + Unpin,
 {
     let mut reader = TimedReader::new(reader, timeout);
+    let initial_len = initial.as_ref().map_or(0, |body| body.len() as u64);
+    match framing {
+        BodyFraming::ContentLength(length) => {
+            if limit != 0 && length.saturating_add(initial_len) > limit {
+                return Err(crate::http::request_body_too_large_error());
+            }
+            send_initial(initial, sender).await;
+            pump_content_length(&mut reader, length, sender).await
+        }
+        BodyFraming::Chunked => {
+            if limit != 0 && initial_len > limit {
+                return Err(crate::http::request_body_too_large_error());
+            }
+            send_initial(initial, sender).await;
+            pump_chunked(&mut reader, limit, initial_len, sender).await
+        }
+    }
+}
+
+async fn send_initial(initial: Option<Bytes>, sender: &RequestBodySender) {
     if let Some(initial) = initial {
         let mut active = true;
         send_or_discard(sender, &initial, &mut active).await;
-    }
-    match framing {
-        BodyFraming::ContentLength(length) => {
-            if limit != 0 && length > limit {
-                return Err(crate::http::request_body_too_large_error());
-            }
-            pump_content_length(&mut reader, length, sender).await
-        }
-        BodyFraming::Chunked => pump_chunked(&mut reader, limit, sender).await,
     }
 }
 
@@ -145,11 +291,15 @@ where
     Ok(())
 }
 
-async fn pump_chunked<R>(reader: &mut R, limit: u64, sender: &RequestBodySender) -> io::Result<()>
+async fn pump_chunked<R>(
+    reader: &mut R,
+    limit: u64,
+    mut total: u64,
+    sender: &RequestBodySender,
+) -> io::Result<()>
 where
     R: AsyncBufRead + Unpin,
 {
-    let mut total = 0_u64;
     let mut active = true;
     let mut buffer = vec![0_u8; BODY_CHUNK_SIZE];
     let mut combined = Vec::with_capacity(BODY_CHUNK_SIZE);
@@ -174,6 +324,7 @@ where
                 return Err(error);
             }
             flush_chunk_prefix(sender, &mut combined, &mut active).await;
+            sender.finish();
             return Ok(());
         }
         total = total

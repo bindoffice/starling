@@ -52,29 +52,80 @@ where
         head.push_str("\r\n");
     }
     head.push_str("\r\n");
-    write_all_timed(stream, head.as_bytes(), timeout).await?;
+    let mut request = head.into_bytes();
+    let mut body_total = 0_u64;
+    let first_chunk = match &outgoing.body_stream {
+        Some(body) => match body
+            .try_next_limited(&mut body_total, outgoing.body_limit)
+            .await
+        {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                // The request head is still observable by the upstream before
+                // a streaming body error aborts the exchange.
+                write_all_timed(stream, &request, timeout).await?;
+                return Err(error);
+            }
+        },
+        None => None,
+    };
+    let first_chunk_pending = match &outgoing.body_stream {
+        Some(body) if outgoing.body_chunked => body.channel_has_pending().await,
+        _ => false,
+    };
+    let mut chunked_complete = false;
+    if let Some(chunk) = first_chunk.as_ref().filter(|chunk| !chunk.is_empty()) {
+        append_request_body_chunk(&mut request, chunk, outgoing.body_chunked);
+        if outgoing.body_chunked
+            && outgoing
+                .body_stream
+                .as_ref()
+                .is_some_and(|body| body.channel_ended())
+            && !first_chunk_pending
+        {
+            request.extend_from_slice(b"0\r\n\r\n");
+            chunked_complete = true;
+        }
+    }
+    if outgoing.body_stream.is_none() {
+        request.extend_from_slice(&outgoing.body);
+    }
+    write_all_timed(stream, &request, timeout).await?;
     if let Some(body) = &outgoing.body_stream {
-        let mut total = 0_u64;
-        while let Some(chunk) = body.next_limited(&mut total, outgoing.body_limit).await? {
+        while let Some(chunk) = body
+            .next_limited(&mut body_total, outgoing.body_limit)
+            .await?
+        {
             if chunk.is_empty() {
                 continue;
             }
             if outgoing.body_chunked {
-                write_all_timed(stream, format!("{:X}\r\n", chunk.len()).as_bytes(), timeout)
-                    .await?;
-                write_all_timed(stream, &chunk, timeout).await?;
-                write_all_timed(stream, b"\r\n", timeout).await?;
+                let mut framed = Vec::with_capacity(chunk.len() + 16);
+                append_request_body_chunk(&mut framed, &chunk, true);
+                if body.channel_ended() && !body.channel_has_pending().await {
+                    framed.extend_from_slice(b"0\r\n\r\n");
+                    chunked_complete = true;
+                }
+                write_all_timed(stream, &framed, timeout).await?;
             } else {
                 write_all_timed(stream, &chunk, timeout).await?;
             }
         }
-        if outgoing.body_chunked {
+        if outgoing.body_chunked && !chunked_complete {
             write_all_timed(stream, b"0\r\n\r\n", timeout).await?;
         }
-    } else {
-        write_all_timed(stream, &outgoing.body, timeout).await?;
     }
     flush_timed(stream, timeout).await
+}
+
+fn append_request_body_chunk(request: &mut Vec<u8>, chunk: &[u8], chunked: bool) {
+    if chunked {
+        request.extend_from_slice(format!("{:X}\r\n", chunk.len()).as_bytes());
+    }
+    request.extend_from_slice(chunk);
+    if chunked {
+        request.extend_from_slice(b"\r\n");
+    }
 }
 
 async fn write_all_timed<S>(

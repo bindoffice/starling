@@ -268,8 +268,17 @@ pub(in crate::server) fn internal_redirect_request(request: &Request) -> Request
     if !internal.method.eq_ignore_ascii_case("HEAD") {
         internal.method = "GET".into();
     }
-    internal.body.clear();
-    internal.body_stream = None;
+    // Nginx keeps an already buffered request body available to the redirected
+    // location. Live client-body streams still have to be discarded: the
+    // client connection may already be parsing the next request.
+    if internal
+        .body_stream
+        .as_ref()
+        .is_some_and(|stream| !stream.is_file_backed())
+    {
+        internal.body.clear();
+        internal.body_stream = None;
+    }
     internal.headers.retain(|header| {
         !header.name.eq_ignore_ascii_case("content-length")
             && !header.name.eq_ignore_ascii_case("transfer-encoding")

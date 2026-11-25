@@ -60,7 +60,7 @@ pub(super) async fn handle_h2<S>(
         .max_concurrent_streams(limits.max_concurrent_streams)
         .max_frame_size(settings.max_frame_size)
         .initial_window_size(limits.body_preread_size)
-        .initial_connection_window_size(limits.body_preread_size)
+        .initial_connection_window_size(i32::MAX as u32)
         .max_header_list_size(receive_header_list_limit(limits.max_header_list_size));
     let handshake = async {
         if settings.header_timeout == Duration::ZERO {

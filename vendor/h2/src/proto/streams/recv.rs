@@ -105,7 +105,11 @@ impl Recv {
 
         Recv {
             local_is_server: peer.is_server(),
-            init_window_sz: DEFAULT_INITIAL_WINDOW_SIZE,
+            // A peer can send DATA as soon as it receives our initial SETTINGS,
+            // before its ACK reaches us. Keep stream accounting in sync with
+            // the advertised value so WINDOW_UPDATE increments cannot overflow
+            // when that ACK is eventually processed.
+            init_window_sz: config.local_init_window_sz,
             flow,
             in_flight_data: 0 as WindowSize,
             next_stream_id: Ok(next_stream_id.into()),
@@ -515,8 +519,31 @@ impl Recv {
         if target <= stream.recv_flow.window_size() {
             return;
         }
+        let current = stream.recv_flow.window_size_raw();
+        let target_i32 = target.min(MAX_WINDOW_SIZE) as i32;
+        let increment = target_i32.saturating_sub(current);
+        if increment <= 0 {
+            return;
+        }
+        let increment = increment as WindowSize;
+
+        // Nginx accounts for the expanded receive window immediately after
+        // queueing WINDOW_UPDATE. A peer may already have DATA for this stream
+        // in the same socket read, so delaying the local accounting until the
+        // update is flushed would incorrectly reject that frame as a flow
+        // control violation.
+        stream
+            .recv_flow
+            .inc_window(increment)
+            .expect("unexpected flow control state");
+        let in_flight = stream.in_flight_recv_data;
+        stream
+            .recv_flow
+            .set_available(target.saturating_sub(in_flight))
+            .expect("unexpected flow control state");
+
         self.pending_target_window_updates
-            .push_back((stream.id, target));
+            .push_back((stream.id, increment));
         if let Some(task) = task.take() {
             task.wake();
         }
@@ -1180,36 +1207,20 @@ impl Recv {
         T: AsyncWrite + Unpin,
         B: Buf,
     {
-        while let Some((id, target)) = self.pending_target_window_updates.front().copied() {
+        while let Some((id, increment)) = self.pending_target_window_updates.front().copied() {
             if !dst.has_send_capacity() {
                 return Ok(BufferStatus::CodecFull);
             }
             self.pending_target_window_updates.pop_front();
 
-            let Some(mut stream) = store.find_mut(&id) else {
+            let Some(stream) = store.find_mut(&id) else {
                 continue;
             };
             if !stream.state.is_recv_streaming() {
                 continue;
             }
-            let current = stream.recv_flow.window_size_raw();
-            let target_i32 = target.min(crate::proto::MAX_WINDOW_SIZE) as i32;
-            let increment = target_i32.saturating_sub(current);
-            if increment <= 0 {
-                continue;
-            }
-            let increment = increment as WindowSize;
             dst.buffer(frame::WindowUpdate::new(id, increment).into())
                 .expect("invalid WINDOW_UPDATE frame");
-            stream
-                .recv_flow
-                .inc_window(increment)
-                .expect("unexpected flow control state");
-            let in_flight = stream.in_flight_recv_data;
-            stream
-                .recv_flow
-                .set_available(target.saturating_sub(in_flight))
-                .expect("unexpected flow control state");
         }
         Ok(BufferStatus::Complete)
     }
@@ -1304,6 +1315,10 @@ impl Recv {
         self.pending_accept.pop(store).map(|ptr| ptr.key())
     }
 
+    pub fn has_pending_accept(&self) -> bool {
+        !self.pending_accept.is_empty()
+    }
+
     pub fn poll_data(
         &mut self,
         cx: &Context,
@@ -1383,6 +1398,7 @@ mod tests {
             local_reset_duration: Duration::ZERO,
             local_reset_max: 0,
             remote_reset_max: 0,
+            local_init_window_sz: DEFAULT_INITIAL_WINDOW_SIZE,
             remote_init_window_sz: DEFAULT_INITIAL_WINDOW_SIZE,
             remote_max_initiated: None,
             local_max_error_reset_streams: None,

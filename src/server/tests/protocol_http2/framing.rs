@@ -322,15 +322,6 @@ async fn invalid_headers_padding_sends_connection_goaway() {
 }
 
 #[tokio::test]
-async fn oversized_frame_sends_connection_goaway() {
-    assert_goaway(
-        frame(FRAME_DATA, 0, 1, &vec![0; 32 * 1024 + 1]),
-        h2::Reason::FRAME_SIZE_ERROR,
-    )
-    .await;
-}
-
-#[tokio::test]
 async fn invalid_hpack_index_sends_connection_goaway() {
     assert_goaway(
         frame(
@@ -409,7 +400,7 @@ async fn assert_goaway_with_http(http_directives: &str, frames: Vec<u8>, expecte
 }
 
 #[tokio::test]
-async fn handshake_expands_the_connection_window_to_body_preread_size() {
+async fn handshake_expands_the_connection_window_to_the_protocol_maximum() {
     let source = r#"
         worker_processes 1;
         events { worker_connections 64; }
@@ -452,7 +443,7 @@ async fn handshake_expands_the_connection_window_to_body_preread_size() {
     })
     .await
     .expect("server should send a connection WINDOW_UPDATE");
-    assert_eq!(increment, 96 * 1024 - 65_535);
+    assert_eq!(increment, i32::MAX as u32 - 65_535);
 
     drop(client);
     tokio::time::timeout(Duration::from_secs(2), server_task)

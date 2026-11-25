@@ -386,6 +386,7 @@ mod tests {
             local_reset_duration: Duration::ZERO,
             local_reset_max: 0,
             remote_reset_max: 0,
+            local_init_window_sz: DEFAULT_INITIAL_WINDOW_SIZE,
             remote_init_window_sz: DEFAULT_INITIAL_WINDOW_SIZE,
             remote_max_initiated: None,
             local_max_error_reset_streams: None,

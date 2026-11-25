@@ -28,3 +28,24 @@ where
     )
     .await
 }
+
+pub(super) async fn write_request_rejection<W>(
+    write_half: &mut W,
+    status: u16,
+    send_timeout: Duration,
+    request_method: &str,
+    request_version: &str,
+    server_tokens: ServerTokens,
+) where
+    W: AsyncWrite + Unpin,
+{
+    let _ = write_request_error_response(
+        write_half,
+        status,
+        send_timeout,
+        request_method,
+        request_version,
+        server_tokens,
+    )
+    .await;
+}

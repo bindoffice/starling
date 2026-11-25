@@ -1,9 +1,10 @@
 use super::body_stream::Http1BodyTask;
 use super::*;
 
+mod request_body;
 mod response_write;
 mod upgrade;
-use error_response::write_request_error_response;
+use error_response::write_request_rejection;
 use response_write::{DispatchWrite, write_dispatch_response};
 
 mod error_response;
@@ -142,7 +143,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 let send_timeout = default_context
                     .map(|server| server.context.send_timeout)
                     .unwrap_or_else(|| Duration::from_secs(60));
-                let _ = write_request_error_response(
+                write_request_rejection(
                     &mut write_half,
                     status,
                     send_timeout,
@@ -177,7 +178,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             let send_timeout = request_context
                 .map(|server| server.context.send_timeout)
                 .unwrap_or_else(|| Duration::from_secs(60));
-            let _ = write_request_error_response(
+            write_request_rejection(
                 &mut write_half,
                 400,
                 send_timeout,
@@ -208,7 +209,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 LogLevel::Info,
                 format!("client request from {remote} sent too many header lines"),
             );
-            let _ = write_request_error_response(
+            write_request_rejection(
                 &mut write_half,
                 400,
                 send_timeout,
@@ -233,20 +234,8 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             }
         }
         let invalid_host = head.invalid_host;
-        let body_stream = if !invalid_host
-            && (head.chunked || head.content_length.is_some_and(|length| length > 0))
-        {
-            let reader_owned = reader
-                .take()
-                .expect("HTTP/1 reader available for request body");
-            // The selected location supplies the real client_max_body_size.
-            // Zero means unlimited, so the transport pump must not impose the
-            // old fixed 64 MiB cap before location selection.
-            body_task = Http1BodyTask::spawn(reader_owned, &head, body_timeout, 0);
-            body_task.as_ref().map(Http1BodyTask::stream)
-        } else {
-            None
-        };
+        body_task = request_body::spawn_http1_body(&mut reader, &head, invalid_host, body_timeout);
+        let body_stream = body_task.as_ref().map(Http1BodyTask::stream);
         let request_length = head.request_length;
         let mut request = Request {
             method: head.method,
@@ -361,6 +350,29 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 log.write();
             }
             break 'connection;
+        }
+        if let Some(error) = body_task
+            .as_ref()
+            .and_then(Http1BodyTask::unconsumed_initial_error)
+        {
+            state.logger.log(
+                LogLevel::Info,
+                format!("client request body error from {remote}: {error}"),
+            );
+            if let Some(task) = body_task.take() {
+                task.close().await;
+                task.abort();
+            }
+            write_request_rejection(
+                &mut write_half,
+                400,
+                send_timeout,
+                &request.method,
+                &request.version,
+                outcome.server_tokens,
+            )
+            .await;
+            break;
         }
         if let Some(proxy_upgrade) = outcome.upgrade.take() {
             upgrade::handle_proxy_upgrade(

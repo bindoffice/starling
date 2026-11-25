@@ -7,12 +7,15 @@ pub(super) async fn serve_static(
     selected_location: Option<&LocationConfig>,
     variables: &Variables,
 ) -> Option<Response> {
-    if !matches!(request.method.as_str(), "GET" | "HEAD") {
+    if !matches!(request.method.as_str(), "GET" | "HEAD" | "POST") {
         let mut response = error_response(405);
         response.set_header("Allow", "GET, HEAD");
         return Some(response);
     }
     if context.empty_gif {
+        if request.method == "POST" {
+            return Some(error_response(405));
+        }
         const EMPTY_GIF: &[u8] = &[
             b'G', b'I', b'F', b'8', b'9', b'a', 0x01, 0x00, 0x01, 0x00, 0x80, 0x01, 0x00, 0x00,
             0x00, 0x00, 0xff, 0xff, 0xff, 0x21, 0xf9, 0x04, 0x01, 0x00, 0x00, 0x01, 0x00, 0x2c,
@@ -27,7 +30,9 @@ pub(super) async fn serve_static(
         return Some(response);
     }
 
-    if let Some(response) = serve_flv(env, context, selected_location, variables).await {
+    if request.method != "POST"
+        && let Some(response) = serve_flv(env, context, selected_location, variables).await
+    {
         return Some(response);
     }
 
@@ -38,12 +43,14 @@ pub(super) async fn serve_static(
         env.add_uri_to_alias,
         variables,
     );
-    match try_fast_static_file(&path, context) {
-        Ok(Some(response)) => return Some(response),
-        Ok(None) => {}
-        Err(status) => return Some(error_response(status)),
+    if request.method != "POST" {
+        match try_fast_static_file(&path, context) {
+            Ok(Some(response)) => return Some(response),
+            Ok(None) => {}
+            Err(status) => return Some(error_response(status)),
+        }
     }
-    if !env.uri.ends_with('/') {
+    if request.method != "POST" && !env.uri.ends_with('/') {
         match gzip_static_candidate(request, &path, context, variables).await {
             GzipStaticCandidate::Served(response) => return Some(*response),
             GzipStaticCandidate::Denied(status) => return Some(error_response(status)),
@@ -101,12 +108,20 @@ pub(super) async fn serve_static(
             return static_file_response(request, &candidate, metadata, context, variables).await;
         }
         if context.autoindex {
+            if request.method == "POST" {
+                return Some(error_response(405));
+            }
             return Some(autoindex_response(request, &path, &env.uri, context).await);
         }
         return Some(error_response(403));
     }
     if !metadata.is_file() {
         return Some(error_response(404));
+    }
+    if request.method == "POST" {
+        let mut response = error_response(405);
+        response.set_header("Allow", "GET, HEAD");
+        return Some(response);
     }
     static_file_response(request, &path, metadata, context, variables).await
 }
@@ -144,6 +159,11 @@ pub(super) async fn static_file_response(
     context: &EffectiveConfig,
     variables: &Variables,
 ) -> Option<Response> {
+    if request.method == "POST" {
+        let mut response = error_response(405);
+        response.set_header("Allow", "GET, HEAD");
+        return Some(response);
+    }
     if let Err(status) = check_path_access(path, context, variables).await {
         return Some(error_response(status));
     }
