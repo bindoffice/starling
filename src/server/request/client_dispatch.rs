@@ -1,5 +1,6 @@
 use super::*;
 use std::future::Future;
+use std::pin::Pin;
 
 pub(in crate::server) enum DispatchWait<T> {
     Completed { output: T, client_closed: bool },
@@ -7,26 +8,25 @@ pub(in crate::server) enum DispatchWait<T> {
 }
 
 pub(in crate::server) async fn wait_for_dispatch<F>(
-    dispatch: F,
+    mut dispatch: Pin<&mut F>,
     control: Option<&ClientSocketControl>,
     client_abort: &ClientAbortState,
 ) -> DispatchWait<F::Output>
 where
     F: Future,
 {
-    let mut dispatch = Box::pin(dispatch);
     let mut close_seen = false;
     let mut preserve_seen = false;
     let mut client_closed = false;
     loop {
         let Some(control) = control else {
             return DispatchWait::Completed {
-                output: dispatch.as_mut().await,
+                output: dispatch.await,
                 client_closed: false,
             };
         };
         tokio::select! {
-            output = &mut dispatch => {
+            output = dispatch.as_mut() => {
                 if client_abort.upstream_active()
                     && control.close_detected()
                     && !client_abort.preserve()

@@ -251,26 +251,27 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
         };
 
         client_abort.reset_for_request();
-        let dispatch = dispatch_http_request(
-            snapshot,
-            &group,
-            DispatchRequestContext {
-                request: &mut request,
-                connection: connection.clone(),
-                connection_request: ConnectionRequestState::new(
-                    connection_stats.id(),
-                    connection_started,
-                    served_requests,
-                )
-                .with_pipelined(pipelined),
-                invalid_host,
-                client_abort: Some(client_abort.clone()),
-                request_length: Some(request_length),
-            },
-            &state,
-        );
-        let (action, client_closed_during_dispatch) =
-            match wait_for_dispatch(dispatch, control.as_ref(), &client_abort).await {
+        let (action, client_closed_during_dispatch) = {
+            let dispatch = dispatch_http_request(
+                snapshot,
+                &group,
+                DispatchRequestContext {
+                    request: &mut request,
+                    connection: connection.clone(),
+                    connection_request: ConnectionRequestState::new(
+                        connection_stats.id(),
+                        connection_started,
+                        served_requests,
+                    )
+                    .with_pipelined(pipelined),
+                    invalid_host,
+                    client_abort: Some(client_abort.clone()),
+                    request_length: Some(request_length),
+                },
+                &state,
+            );
+            tokio::pin!(dispatch);
+            match wait_for_dispatch(dispatch.as_mut(), control.as_ref(), &client_abort).await {
                 DispatchWait::Completed {
                     output,
                     client_closed,
@@ -286,7 +287,8 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                     close_http1_body(&mut body_task).await;
                     break 'connection;
                 }
-            };
+            }
+        };
         let Some(action) = action else {
             close_http1_body(&mut body_task).await;
             break;
