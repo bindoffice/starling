@@ -27,16 +27,16 @@ where
         };
         tokio::select! {
             output = &mut dispatch => {
-                if control.close_detected()
+                if client_abort.upstream_active()
+                    && control.close_detected()
                     && !client_abort.preserve()
-                    && client_abort.upstream_active()
                 {
                     client_abort.release_connection_limit();
                     return DispatchWait::Cancelled;
                 }
                 return DispatchWait::Completed { output, client_closed };
             }
-            _ = wait_for_client_close(control), if !close_seen => {
+            _ = wait_for_client_close(control, client_abort), if !close_seen => {
                 close_seen = true;
                 if client_abort.preserve() {
                     preserve_seen = true;
@@ -63,7 +63,11 @@ where
     }
 }
 
-pub(in crate::server) async fn wait_for_client_close(control: &ClientSocketControl) {
+pub(in crate::server) async fn wait_for_client_close(
+    control: &ClientSocketControl,
+    client_abort: &ClientAbortState,
+) {
+    client_abort.wait_for_upstream_active().await;
     loop {
         if control.close_detected() {
             return;

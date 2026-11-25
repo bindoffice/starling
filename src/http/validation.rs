@@ -9,7 +9,7 @@ pub fn file_response(path: &Path, content_type: String) -> io::Result<Response> 
 }
 
 pub(crate) fn file_response_with_metadata(
-    mut file: std::fs::File,
+    file: std::fs::File,
     metadata: &std::fs::Metadata,
     content_type: String,
 ) -> io::Result<Response> {
@@ -18,7 +18,7 @@ pub(crate) fn file_response_with_metadata(
     let modified = metadata.modified().ok();
     let body = if metadata.len() <= SMALL_FILE_MEMORY_LIMIT {
         let mut body = Vec::with_capacity(metadata.len() as usize);
-        file.read_to_end(&mut body)?;
+        file.take(metadata.len()).read_to_end(&mut body)?;
         ResponseBody::Bytes(body)
     } else {
         ResponseBody::File {

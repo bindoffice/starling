@@ -53,6 +53,30 @@ fn loads_small_static_files_into_memory_and_streams_large_files() {
     let _ = std::fs::remove_dir_all(temp_dir);
 }
 
+#[test]
+fn small_static_file_reads_stop_at_the_reported_length() {
+    let id = NEXT_BUFFER_TEMP.fetch_add(1, Ordering::Relaxed);
+    let temp_dir = std::env::temp_dir().join(format!(
+        "starling-http-file-length-{}-{id}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let path = temp_dir.join("small");
+    std::fs::write(&path, b"abc").unwrap();
+
+    let file = std::fs::File::open(&path).unwrap();
+    let metadata = file.metadata().unwrap();
+    std::fs::write(&path, b"a").unwrap();
+    let response = file_response_with_metadata(file, &metadata, "text/plain".into()).unwrap();
+
+    assert!(matches!(
+        response.body,
+        ResponseBody::Bytes(ref body) if body == b"a"
+    ));
+    assert_eq!(response.header("content-length"), Some("1"));
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
 #[tokio::test]
 
 async fn rejects_malformed_request_headers() {

@@ -73,7 +73,7 @@ impl TimeoutState {
     pub(in crate::server) fn new(timeout: Duration) -> Self {
         Self {
             timeout,
-            sleep: (timeout != Duration::ZERO).then(|| Box::pin(tokio::time::sleep(timeout))),
+            sleep: None,
             expired: false,
         }
     }
@@ -87,9 +87,12 @@ impl TimeoutState {
     }
 
     pub(in crate::server) fn poll_expired(&mut self, cx: &mut Context<'_>) -> bool {
-        let Some(sleep) = self.sleep.as_mut() else {
+        if self.timeout == Duration::ZERO {
             return false;
-        };
+        }
+        let sleep = self
+            .sleep
+            .get_or_insert_with(|| Box::pin(tokio::time::sleep(self.timeout)));
         if std::future::Future::poll(sleep.as_mut(), cx).is_ready() {
             self.expired = true;
         }

@@ -1,5 +1,6 @@
 use super::*;
 use std::sync::atomic::AtomicBool;
+use tokio::sync::Notify;
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::server) struct ClientAbortState {
@@ -10,6 +11,7 @@ pub(in crate::server) struct ClientAbortState {
 struct ClientAbortInner {
     preserve: AtomicBool,
     upstream_active: AtomicBool,
+    upstream_active_notify: Notify,
     connection_limit: std::sync::Mutex<Option<ConnectionLimitGuardHandle>>,
     socket: std::sync::Mutex<Option<ClientSocketControl>>,
 }
@@ -33,10 +35,21 @@ impl ClientAbortState {
 
     pub(in crate::server) fn mark_upstream_active(&self) {
         self.inner.upstream_active.store(true, Ordering::Release);
+        self.inner.upstream_active_notify.notify_one();
     }
 
     pub(in crate::server) fn upstream_active(&self) -> bool {
         self.inner.upstream_active.load(Ordering::Acquire)
+    }
+
+    pub(in crate::server) async fn wait_for_upstream_active(&self) {
+        loop {
+            let notified = self.inner.upstream_active_notify.notified();
+            if self.upstream_active() {
+                return;
+            }
+            notified.await;
+        }
     }
 
     pub(in crate::server) fn socket(&self) -> Option<ClientSocketControl> {

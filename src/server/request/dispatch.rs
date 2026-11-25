@@ -409,25 +409,29 @@ pub(in crate::server) async fn dispatch_http_request(
         rate: ResponseRate::default(),
     };
     let chunked = prepare_response_for_write(&mut response, &response_options);
-    sync_sent_response_variables(
-        &response,
-        request,
-        &mut variables,
-        keep_alive,
-        keepalive_header,
-        processed.context.chunked_transfer_encoding,
-    );
+    let needs_sent_response_variables = !processed.context.access_log.off
+        || processed.context.post_action.is_some()
+        || processed.context.limit_rate.is_some()
+        || processed.context.limit_rate_after.is_some();
+    variables.status = response.status;
+    if needs_sent_response_variables {
+        sync_sent_response_variables(
+            &response,
+            request,
+            &mut variables,
+            keep_alive,
+            keepalive_header,
+            processed.context.chunked_transfer_encoding,
+        );
+        variables.bytes_sent = response_head_length(&response)
+            .saturating_add(response_wire_body_len(&response, &request.method, chunked));
+        variables.body_bytes_sent = response.body_len();
+    }
     let limit_rate =
         response_rate_with_upstream(response_rate(&processed.context, &variables), &response);
-    variables.status = response.status;
-    variables.bytes_sent = response_head_length(&response).saturating_add(response_wire_body_len(
-        &response,
-        &request.method,
-        chunked,
-    ));
-    variables.body_bytes_sent = response.body_len();
 
-    let should_log_access = processed.context.log_not_found || response.status != 404;
+    let should_log_access = !processed.context.access_log.off
+        && (processed.context.log_not_found || response.status != 404);
     let deferred_access_log = (should_log_access && response.body.is_stream()).then(|| {
         Box::new(DeferredAccessLog {
             formats: http.log_formats.clone(),
