@@ -27,6 +27,21 @@ fn leaves_utf8_header_values_unencoded() {
 }
 
 #[test]
+fn decodes_only_values_with_the_internal_raw_prefix() {
+    let embedded_nul = "prefix\0starling-raw:zz\0";
+    assert_eq!(
+        header_value_bytes(embedded_nul).as_ref(),
+        embedded_nul.as_bytes()
+    );
+
+    let encoded = header_value_from_bytes(&[0xff, 0x00, 0xfe]);
+    assert_eq!(
+        header_value_bytes(&encoded).as_ref(),
+        [0xff, 0x00, 0xfe].as_slice()
+    );
+}
+
+#[test]
 fn canonicalizes_known_header_names_without_scanning_the_whole_set() {
     let names = [
         "Content-Type",

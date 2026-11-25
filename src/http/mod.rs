@@ -323,7 +323,7 @@ pub(crate) fn header_value_from_bytes(bytes: &[u8]) -> String {
 }
 
 pub(crate) fn header_value_bytes(value: &str) -> Cow<'_, [u8]> {
-    if !value.as_bytes().contains(&0) {
+    if value.as_bytes().first() != Some(&0) {
         return Cow::Borrowed(value.as_bytes());
     }
     let Some(decoded) = decode_raw_header_values(value) else {
