@@ -40,29 +40,12 @@ fn response_with_body(
     metadata: &std::fs::Metadata,
     content_type: String,
 ) -> Response {
+    let body_len = body.len();
     let modified = metadata.modified().ok();
-    let mut response = Response {
-        status: 200,
-        headers: vec![
-            Header {
-                name: HeaderName::from_static("Content-Type"),
-                value: content_type,
-            },
-            Header {
-                name: HeaderName::from_static("Content-Length"),
-                value: body.len().to_string(),
-            },
-        ],
-        trailers: Vec::new(),
-        chunked_expected: false,
-        body,
-        body_temp_file: None,
-        upstream: None,
-        builtin_error: false,
-        msie_padding: false,
-        allow_ranges: false,
-        single_range: false,
-    };
+    let mut response = Response::new(200);
+    response.body = body;
+    response.add_header_static("Content-Type", content_type);
+    response.add_header_static("Content-Length", body_len.to_string());
     response.enable_ranges(false);
     if let Some(modified) = modified {
         response.add_header_static("Last-Modified", httpdate::fmt_http_date(modified));
