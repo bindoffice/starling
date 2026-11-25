@@ -27,6 +27,69 @@ fn leaves_utf8_header_values_unencoded() {
 }
 
 #[test]
+fn canonicalizes_known_header_names_without_scanning_the_whole_set() {
+    let names = [
+        "Content-Type",
+        "Content-Length",
+        "Date",
+        "Server",
+        "Last-Modified",
+        "ETag",
+        "Connection",
+        "Keep-Alive",
+        "Transfer-Encoding",
+        "Cache-Control",
+        "Location",
+        "Set-Cookie",
+        "Vary",
+        "Host",
+        "User-Agent",
+        "Accept",
+        "Accept-Encoding",
+        "Accept-Language",
+        "Accept-Ranges",
+        "Authorization",
+        "Cookie",
+        "Referer",
+        "Range",
+        "If-Modified-Since",
+        "If-None-Match",
+        "Allow",
+        "Content-Disposition",
+        "Content-Encoding",
+        "Content-Language",
+        "Content-Location",
+        "Content-Range",
+        "Expect",
+        "Expires",
+        "Link",
+        "P3P",
+        "Proxy-Connection",
+        "TE",
+        "Trailer",
+        "Upgrade",
+        "Via",
+        "WWW-Authenticate",
+        "X-Accel-Buffering",
+        "X-Accel-Charset",
+        "X-Accel-Limit-Rate",
+        "X-Accel-Redirect",
+        "X-Forwarded-For",
+        "X-Forwarded-Proto",
+        "X-Real-IP",
+    ];
+
+    for name in names {
+        assert_eq!(HeaderName::from(name.to_ascii_lowercase()).as_str(), name);
+        assert_eq!(HeaderName::from(name).as_str(), name);
+    }
+    assert_eq!(
+        HeaderName::from("X-Custom-Header").as_str(),
+        "X-Custom-Header"
+    );
+}
+
+#[test]
 fn loads_small_static_files_into_memory_and_streams_large_files() {
     let id = NEXT_BUFFER_TEMP.fetch_add(1, Ordering::Relaxed);
     let temp_dir = std::env::temp_dir().join(format!(
