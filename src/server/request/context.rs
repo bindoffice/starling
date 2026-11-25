@@ -36,15 +36,14 @@ pub(in crate::server) fn complex_size(value: Option<&str>, variables: &Variables
         .unwrap_or(0)
 }
 
-pub(in crate::server) fn request_server_context<'a>(
+pub(in crate::server) fn request_server_context_in_group<'a>(
     config: &'a RuntimeConfig,
-    listener_groups: &[ListenerGroup],
     group: &ListenerGroup,
     host: &str,
-) -> Option<&'a ServerConfig> {
+) -> Option<(usize, &'a ServerConfig)> {
     let http = config.http.as_ref()?;
-    let active_group = current_listener_group(listener_groups, group);
-    Some(select_server(http, active_group, host))
+    let server_id = select_server_id(http, group, host);
+    Some((server_id, &http.servers[server_id]))
 }
 
 pub(in crate::server) async fn timeout_io<T>(
@@ -289,28 +288,32 @@ pub(in crate::server) fn select_server<'a>(
     group: &ListenerGroup,
     host: &str,
 ) -> &'a ServerConfig {
+    &http.servers[select_server_id(http, group, host)]
+}
+
+fn select_server_id(http: &HttpConfig, group: &ListenerGroup, host: &str) -> usize {
     let host = host.trim_end_matches('.');
     for server_id in &group.server_ids {
         let server = &http.servers[*server_id];
         if server.names.iter().any(
             |name| matches!(name, ServerName::Exact(value) if value.eq_ignore_ascii_case(host)),
         ) {
-            return server;
+            return *server_id;
         }
     }
-    let mut wildcard_match: Option<(&ServerConfig, usize)> = None;
+    let mut wildcard_match: Option<(usize, usize)> = None;
     for server_id in &group.server_ids {
         let server = &http.servers[*server_id];
         for name in server.names.iter() {
             let specificity = name.wildcard_specificity(host).unwrap_or(0);
             if specificity > 0 && wildcard_match.is_none_or(|(_, previous)| specificity > previous)
             {
-                wildcard_match = Some((server, specificity));
+                wildcard_match = Some((*server_id, specificity));
             }
         }
     }
-    if let Some((server, _)) = wildcard_match {
-        return server;
+    if let Some((server_id, _)) = wildcard_match {
+        return server_id;
     }
     for server_id in &group.server_ids {
         let server = &http.servers[*server_id];
@@ -319,10 +322,10 @@ pub(in crate::server) fn select_server<'a>(
             .iter()
             .any(|name| name.regex().is_some_and(|regex| regex.is_match(host)))
         {
-            return server;
+            return *server_id;
         }
     }
-    &http.servers[group.default_server_id]
+    group.default_server_id
 }
 
 #[derive(Debug, Clone)]

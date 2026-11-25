@@ -202,12 +202,11 @@ pub(super) async fn handle_h2_request(
         connection.remote_addr_text.clone(),
         connection.local_addr_text.clone(),
     );
-    let server_context = request_server_context(
-        config,
-        &snapshot.listener_groups,
-        group,
-        &request.host_without_port(),
-    );
+    let request_host = request.host_without_port().into_owned();
+    let active_group = current_listener_group(&snapshot.listener_groups, group);
+    let request_server = request_server_context_in_group(config, active_group, &request_host);
+    let request_server_id = request_server.map(|(server_id, _)| server_id);
+    let server_context = request_server.map(|(_, server)| server);
     let server_tokens = server_context
         .map(|server| server.context.server_tokens)
         .unwrap_or(ServerTokens::On);
@@ -277,6 +276,8 @@ pub(super) async fn handle_h2_request(
             group,
             DispatchRequestContext {
                 request: &mut request,
+                host: request_host,
+                server_id: request_server_id,
                 connection,
                 connection_request: ConnectionRequestState::new(
                     connection_id,

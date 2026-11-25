@@ -163,12 +163,10 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
         state.stats.requests.fetch_add(1, Ordering::Relaxed);
         served_requests = served_requests.saturating_add(1);
         connection_stats.set_writing();
-        let request_context = request_server_context(
-            config,
-            &snapshot.listener_groups,
-            &group,
-            &head.host_without_port(),
-        );
+        let request_host = head.host_without_port().into_owned();
+        let request_server = request_server_context_in_group(config, active_group, &request_host);
+        let request_server_id = request_server.map(|(server_id, _)| server_id);
+        let request_context = request_server.map(|(_, server)| server);
         let ignore_invalid_headers = request_context
             .map(|server| server.context.ignore_invalid_headers)
             .unwrap_or(true);
@@ -257,6 +255,8 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
                 &group,
                 DispatchRequestContext {
                     request: &mut request,
+                    host: request_host,
+                    server_id: request_server_id,
                     connection: connection.clone(),
                     connection_request: ConnectionRequestState::new(
                         connection_stats.id(),

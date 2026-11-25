@@ -16,6 +16,8 @@ pub(in crate::server) async fn dispatch_http_request(
 ) -> Option<DispatchAction> {
     let DispatchRequestContext {
         request,
+        host,
+        server_id,
         connection,
         connection_request,
         invalid_host,
@@ -52,9 +54,12 @@ pub(in crate::server) async fn dispatch_http_request(
             upgrade: None,
         }));
     };
-    let active_group = current_listener_group(&listener_groups, group);
-    let request_host = request.host_without_port().into_owned();
-    let server = select_server(http, active_group, &request_host);
+    let server = server_id
+        .and_then(|server_id| http.servers.get(server_id))
+        .unwrap_or_else(|| {
+            let active_group = current_listener_group(&listener_groups, group);
+            select_server(http, active_group, &host)
+        });
     if invalid_host {
         request.keep_alive = false;
     }
@@ -62,14 +67,14 @@ pub(in crate::server) async fn dispatch_http_request(
         Arc::make_mut(&mut request.headers)
             .retain(|header| !header.name.as_bytes().contains(&b'_'));
     }
-    let host = if request_host.is_empty() {
+    let host = if host.is_empty() {
         server
             .names
             .first()
             .map(server_name_value)
             .unwrap_or_default()
     } else {
-        request_host
+        host
     };
     let effective_request_length =
         request_length.map(|length| length.saturating_add(request.buffered_body_len()));

@@ -204,6 +204,8 @@ pub(crate) async fn read_request_head_with_limits_and_buffers<R: AsyncBufReadExt
     let mut expect_continue = false;
     let mut expect_seen = false;
     let mut unique_headers = 0_u16;
+    let mut host_headers = 0_u32;
+    let mut invalid_host = false;
     for header in &headers {
         if let Some(bit) = required_unique_header(&header.name) {
             if unique_headers & bit != 0 {
@@ -247,6 +249,9 @@ pub(crate) async fn read_request_head_with_limits_and_buffers<R: AsyncBufReadExt
             if header.value.eq_ignore_ascii_case("100-continue") {
                 expect_continue = true;
             }
+        } else if header.name.eq_ignore_ascii_case("host") {
+            host_headers = host_headers.saturating_add(1);
+            invalid_host = !valid_host(&header.value);
         }
     }
     if transfer_encoding_seen && content_length.is_some() {
@@ -263,20 +268,12 @@ pub(crate) async fn read_request_head_with_limits_and_buffers<R: AsyncBufReadExt
     } else {
         connection_keep_alive
     };
-    let host_headers = headers
-        .iter()
-        .filter(|header| header.name.eq_ignore_ascii_case("host"))
-        .count();
     if version == "HTTP/1.1" && host_headers == 0 {
         return Err(invalid_data("missing Host header"));
     }
     if host_headers > 1 {
         return Err(invalid_data("duplicate Host header"));
     }
-    let invalid_host = headers
-        .iter()
-        .find(|header| header.name.eq_ignore_ascii_case("host"))
-        .is_some_and(|host| !valid_host(&host.value));
 
     Ok(Some(RequestHead {
         method,

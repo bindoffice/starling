@@ -53,6 +53,8 @@ impl DeferredAccessLog {
 
 pub(in crate::server) struct DispatchRequestContext<'a> {
     pub(in crate::server) request: &'a mut Request,
+    pub(in crate::server) host: String,
+    pub(in crate::server) server_id: Option<usize>,
     pub(in crate::server) connection: ConnectionAddresses,
     pub(in crate::server) connection_request: ConnectionRequestState,
     pub(in crate::server) invalid_host: bool,
