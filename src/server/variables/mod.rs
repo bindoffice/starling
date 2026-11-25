@@ -24,8 +24,6 @@ pub(super) struct Variables {
     pub(super) remote_port: Arc<str>,
     pub(super) server_addr: Arc<str>,
     pub(super) server_port: Arc<str>,
-    pub(super) request_port: Option<u16>,
-    pub(super) is_request_port: bool,
     pub(super) scheme: &'static str,
     pub(super) https: &'static str,
     pub(super) http2: &'static str,
@@ -226,7 +224,6 @@ impl Variables {
         dispatch: bool,
         addresses: Option<&ConnectionAddresses>,
     ) -> Self {
-        let request_port = request.request_port();
         let (path, query) = request.path_and_query();
         let path_variables = !dispatch;
         let remote_addr = addresses
@@ -256,8 +253,6 @@ impl Variables {
             remote_port,
             server_addr,
             server_port,
-            request_port,
-            is_request_port: request_port.is_some(),
             scheme: "http",
             https: "",
             http2: "",

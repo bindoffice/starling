@@ -52,11 +52,7 @@ impl Request {
     }
 
     pub fn request_port(&self) -> Option<u16> {
-        if self.method == "CONNECT" {
-            return parse_connect_authority(&self.target).map(|(_, port)| port);
-        }
-        let authority = self.absolute_authority().or_else(|| self.header("host"))?;
-        parse_connect_authority(authority).map(|(_, port)| port)
+        request_port_from_parts(&self.method, &self.target, &self.headers)
     }
 
     pub fn path_and_query(&self) -> (&str, Option<&str>) {
@@ -81,10 +77,6 @@ impl Request {
             Some((path, query)) => (path, Some(query)),
             None => (target, None),
         }
-    }
-
-    fn absolute_authority(&self) -> Option<&str> {
-        absolute_target_authority(&self.target)
     }
 
     pub fn has_request_body(&self) -> bool {
@@ -112,6 +104,23 @@ impl Request {
             .map(|file| file.len())
             .unwrap_or(self.body.len() as u64)
     }
+}
+
+pub(crate) fn request_port_from_parts(
+    method: &str,
+    target: &str,
+    headers: &[Header],
+) -> Option<u16> {
+    if method == "CONNECT" {
+        return parse_connect_authority(target).map(|(_, port)| port);
+    }
+    let authority = absolute_target_authority(target).or_else(|| {
+        headers
+            .iter()
+            .find(|header| header.name.eq_ignore_ascii_case("host"))
+            .map(|header| header.value.as_str())
+    })?;
+    parse_connect_authority(authority).map(|(_, port)| port)
 }
 
 fn absolute_target_rest(target: &str) -> Option<&str> {

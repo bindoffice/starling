@@ -129,6 +129,34 @@ async fn preserves_the_original_remote_port_for_real_ip_requests() {
 }
 
 #[tokio::test]
+async fn evaluates_request_port_variables_from_the_original_authority() {
+    let (prefix, config) = test_config(
+        r#"
+            worker_processes 1;
+            events { worker_connections 64; }
+            http {
+                server {
+                    listen 127.0.0.1:18577;
+                    location / {
+                        return 200 "$request_port|$is_request_port\n";
+                    }
+                }
+            }
+        "#,
+        &[],
+    );
+    let response = request_body(
+        &config,
+        "GET http://example.test:8080/ HTTP/1.1\r\n\
+         Host: proxy.test:9000\r\n\
+         Connection: close\r\n\r\n",
+    )
+    .await;
+    assert!(response.ends_with("8080|:\n"), "{response}");
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
 async fn exposes_proxy_target_host_and_port_to_proxy_headers() {
     let upstream = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,

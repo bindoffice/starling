@@ -105,11 +105,25 @@ pub(in crate::server) fn variable_value(
         "remote_port" => variables.remote_port.to_string(),
         "server_addr" => variables.server_addr.to_string(),
         "server_port" => variables.server_port.to_string(),
-        "request_port" => variables
-            .request_port
-            .map(|port| port.to_string())
-            .unwrap_or_default(),
-        "is_request_port" => if variables.is_request_port { ":" } else { "" }.to_owned(),
+        "request_port" => crate::http::request_port_from_parts(
+            &variables.method,
+            &variables.request_target,
+            &variables.headers,
+        )
+        .map(|port| port.to_string())
+        .unwrap_or_default(),
+        "is_request_port" => if crate::http::request_port_from_parts(
+            &variables.method,
+            &variables.request_target,
+            &variables.headers,
+        )
+        .is_some()
+        {
+            ":"
+        } else {
+            ""
+        }
+        .to_owned(),
         "scheme" => variables.scheme.to_owned(),
         "https" => variables.https.to_owned(),
         "http2" => variables.http2.to_owned(),
