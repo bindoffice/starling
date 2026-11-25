@@ -136,6 +136,9 @@ where
 }
 
 pub(super) fn keepalive_disabled(context: &EffectiveConfig, request: &Request) -> bool {
+    if !context.keepalive_disable.msie6 && !context.keepalive_disable.safari {
+        return false;
+    }
     let user_agent = request.header("user-agent").unwrap_or_default();
     (context.keepalive_disable.msie6
         && request.method == "POST"
