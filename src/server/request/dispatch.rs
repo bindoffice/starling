@@ -165,8 +165,10 @@ pub(in crate::server) async fn dispatch_http_request(
             }
         }
     }
-    variables.uri = env.uri.clone();
-    variables.args = env.args.clone().unwrap_or_default();
+    if invalid_host {
+        variables.uri = env.uri.clone();
+        variables.args = env.args.clone().unwrap_or_default();
+    }
     variables.remote_addr = effective_real_ip(
         server,
         request,

@@ -27,37 +27,36 @@ pub(super) async fn prepare_request(
         let mut server_context = server.context.clone();
         let server_logger = variables.error_logger_for(&server_context);
         variables.set_variable_warning_context(&server_context, server_logger.clone());
-        prepare_userid_variables(&server_context, variables);
-        refresh_variables(&env, None, variables, &server_context);
-        if run_server_rewrite
-            && !server_context.rewrite_actions.is_empty()
-            && !server_may_stream_request_body(server)
-        {
-            if let Err(error) = buffer_request_body(request, &server_context).await {
-                request.keep_alive = false;
-                return response_outcome(
-                    server_context.clone(),
-                    request_body_error_response(&error),
-                );
+        let run_server_script = run_server_rewrite && !server_context.rewrite_actions.is_empty();
+        if run_server_script {
+            prepare_userid_variables(&server_context, variables);
+            refresh_variables(&env, None, variables, &server_context);
+            if !server_may_stream_request_body(server) {
+                if let Err(error) = buffer_request_body(request, &server_context).await {
+                    request.keep_alive = false;
+                    return response_outcome(
+                        server_context.clone(),
+                        request_body_error_response(&error),
+                    );
+                }
+                if let Err(error) = validate_declared_request_body_size(
+                    request,
+                    server_context.client_max_body_size,
+                )
+                .and_then(|()| {
+                    validate_buffered_request_body_size(
+                        request,
+                        server_context.client_max_body_size,
+                    )
+                }) {
+                    request.keep_alive = false;
+                    return response_outcome(
+                        server_context.clone(),
+                        request_body_error_response(&error),
+                    );
+                }
+                set_buffered_request_body_variable(request, variables);
             }
-            if let Err(error) =
-                validate_declared_request_body_size(request, server_context.client_max_body_size)
-                    .and_then(|()| {
-                        validate_buffered_request_body_size(
-                            request,
-                            server_context.client_max_body_size,
-                        )
-                    })
-            {
-                request.keep_alive = false;
-                return response_outcome(
-                    server_context.clone(),
-                    request_body_error_response(&error),
-                );
-            }
-            set_buffered_request_body_variable(request, variables);
-        }
-        if run_server_rewrite && !server_context.rewrite_actions.is_empty() {
             match run_script(
                 &mut server_context,
                 &mut env,
