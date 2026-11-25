@@ -20,13 +20,13 @@ pub(crate) fn prepare_response_headers(response: &mut Response, tokens: ServerTo
         response.set_content_length();
     }
     if response.header("Date").is_none() {
-        response.set_header(
+        response.set_header_static(
             "Date",
             httpdate::fmt_http_date(std::time::SystemTime::now()),
         );
     }
     if response.header("Server").is_none() {
-        response.set_header("Server", server_software(tokens));
+        response.set_header_static("Server", server_software(tokens));
     }
     if response.header("Content-Length").is_none() && !matches!(response.body, ResponseBody::Empty)
     {

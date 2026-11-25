@@ -64,7 +64,7 @@ pub(in crate::server) async fn gzip_static_candidate(
     else {
         return GzipStaticCandidate::Off;
     };
-    response.set_header("Content-Encoding", "gzip");
+    response.set_header_static("Content-Encoding", "gzip");
     if context.gzip_static == GzipStatic::On {
         add_vary_accept_encoding(&mut response);
     }
@@ -81,7 +81,7 @@ pub(in crate::server) fn add_vary_accept_encoding(response: &mut Response) {
         .iter_mut()
         .find(|header| header.name.eq_ignore_ascii_case("vary"))
     else {
-        response.set_header("Vary", TOKEN);
+        response.set_header_static("Vary", TOKEN);
         return;
     };
     if vary
@@ -110,7 +110,7 @@ pub(in crate::server) fn finalize_static_response(
             .map(|duration| duration.as_secs())
             .unwrap_or(0);
         let etag = format!("\"{:x}-{:x}\"", modified, metadata.len());
-        response.set_header("ETag", &etag);
+        response.set_header_static("ETag", &etag);
     }
     Some(response)
 }

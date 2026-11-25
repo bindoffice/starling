@@ -162,6 +162,10 @@ impl HeaderName {
     pub fn as_str(&self) -> &str {
         self.0.as_ref()
     }
+
+    pub(crate) const fn from_static(name: &'static str) -> Self {
+        Self(Cow::Borrowed(name))
+    }
 }
 
 impl std::ops::Deref for HeaderName {

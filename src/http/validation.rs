@@ -45,11 +45,11 @@ fn response_with_body(
         status: 200,
         headers: vec![
             Header {
-                name: "Content-Type".into(),
+                name: HeaderName::from_static("Content-Type"),
                 value: content_type,
             },
             Header {
-                name: "Content-Length".into(),
+                name: HeaderName::from_static("Content-Length"),
                 value: body.len().to_string(),
             },
         ],
@@ -65,7 +65,7 @@ fn response_with_body(
     };
     response.enable_ranges(false);
     if let Some(modified) = modified {
-        response.add_header("Last-Modified", httpdate::fmt_http_date(modified));
+        response.add_header_static("Last-Modified", httpdate::fmt_http_date(modified));
     }
     response
 }

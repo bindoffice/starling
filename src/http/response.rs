@@ -85,7 +85,7 @@ impl Response {
     pub fn bytes(status: u16, content_type: &str, body: impl Into<Vec<u8>>) -> Self {
         let mut response = Self::new(status);
         response.body = ResponseBody::Bytes(body.into());
-        response.add_header("Content-Type", content_type);
+        response.add_header_static("Content-Type", content_type);
         response.set_content_length();
         response
     }
@@ -96,7 +96,7 @@ impl Response {
 
     pub fn empty(status: u16) -> Self {
         let mut response = Self::new(status);
-        response.set_header("Content-Length", "0");
+        response.set_header_static("Content-Length", "0");
         response
     }
 
@@ -119,6 +119,29 @@ impl Response {
     pub fn add_header(&mut self, name: &str, value: impl Into<String>) {
         self.headers.push(Header {
             name: name.into(),
+            value: value.into(),
+        });
+    }
+
+    pub(crate) fn set_header_static(&mut self, name: &'static str, value: impl Into<String>) {
+        let value = value.into();
+        if let Some(header) = self
+            .headers
+            .iter_mut()
+            .find(|header| header.name.eq_ignore_ascii_case(name))
+        {
+            header.value = value;
+        } else {
+            self.headers.push(Header {
+                name: HeaderName::from_static(name),
+                value,
+            });
+        }
+    }
+
+    pub(crate) fn add_header_static(&mut self, name: &'static str, value: impl Into<String>) {
+        self.headers.push(Header {
+            name: HeaderName::from_static(name),
             value: value.into(),
         });
     }
@@ -234,7 +257,7 @@ impl Response {
 
     pub fn set_content_length(&mut self) {
         if let Some(length) = self.body.content_length() {
-            self.set_header("Content-Length", length.to_string());
+            self.set_header_static("Content-Length", length.to_string());
         } else {
             self.remove_header("Content-Length");
         }

@@ -84,25 +84,25 @@ pub(crate) fn prepare_response_for_write(
     );
     if chunked {
         response.remove_header("Content-Length");
-        response.set_header("Transfer-Encoding", "chunked");
+        response.set_header_static("Transfer-Encoding", "chunked");
     }
     if response.status == 101 {
         response.remove_header("Content-Length");
         response.remove_header("Transfer-Encoding");
         response.remove_header("Keep-Alive");
-        response.set_header("Connection", "upgrade");
+        response.set_header_static("Connection", "upgrade");
         return false;
     }
     if options.request_version == "HTTP/1.0" && !options.keep_alive {
-        response.set_header("Connection", "close");
+        response.set_header_static("Connection", "close");
     } else if options.keep_alive {
-        response.set_header("Connection", "keep-alive");
+        response.set_header_static("Connection", "keep-alive");
     } else {
-        response.set_header("Connection", "close");
+        response.set_header_static("Connection", "close");
     }
     if options.keep_alive {
         if let Some(timeout) = options.keep_alive_header {
-            response.set_header("Keep-Alive", format!("timeout={timeout}"));
+            response.set_header_static("Keep-Alive", format!("timeout={timeout}"));
         } else {
             response.remove_header("Keep-Alive");
         }
