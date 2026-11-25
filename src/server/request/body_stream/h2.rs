@@ -1,4 +1,3 @@
-use super::send_or_discard;
 use crate::http::{RequestBodySender, RequestBodyStream};
 use crate::server::http2::H2ConnectionFault;
 use bytes::Bytes;
@@ -159,21 +158,16 @@ async fn pump_h2_body(
 }
 
 async fn send_h2_chunks(sender: &RequestBodySender, chunks: Vec<Bytes>, active: &mut bool) {
-    let data = if chunks.len() == 1 {
-        chunks.into_iter().next().expect("one request body chunk")
-    } else {
-        let length = chunks.iter().map(Bytes::len).sum();
-        if length == 0 {
-            return;
+    for data in chunks {
+        if !data.is_empty() {
+            send_or_discard_owned(sender, data, active).await;
         }
-        let mut combined = Vec::with_capacity(length);
-        for chunk in chunks {
-            combined.extend_from_slice(&chunk);
-        }
-        Bytes::from(combined)
-    };
-    if !data.is_empty() {
-        send_or_discard(sender, &data, active).await;
+    }
+}
+
+async fn send_or_discard_owned(sender: &RequestBodySender, data: Bytes, active: &mut bool) {
+    if *active && !sender.send(data).await {
+        *active = false;
     }
 }
 
