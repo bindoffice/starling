@@ -31,6 +31,11 @@ pub(super) enum ProxyFailure {
 
 pub(super) trait UpstreamIo: AsyncRead + AsyncWrite + Unpin + Send {
     fn idle_is_open(&mut self) -> bool;
+
+    #[cfg(unix)]
+    fn as_tcp_stream(&mut self) -> Option<&mut TcpStream> {
+        None
+    }
 }
 
 pub(super) fn tcp_idle_is_open(stream: &TcpStream) -> bool {
@@ -42,11 +47,21 @@ impl UpstreamIo for TcpStream {
     fn idle_is_open(&mut self) -> bool {
         tcp_idle_is_open(self)
     }
+
+    #[cfg(unix)]
+    fn as_tcp_stream(&mut self) -> Option<&mut TcpStream> {
+        Some(self)
+    }
 }
 
 impl UpstreamIo for Box<dyn UpstreamIo> {
     fn idle_is_open(&mut self) -> bool {
         self.as_mut().idle_is_open()
+    }
+
+    #[cfg(unix)]
+    fn as_tcp_stream(&mut self) -> Option<&mut TcpStream> {
+        self.as_mut().as_tcp_stream()
     }
 }
 

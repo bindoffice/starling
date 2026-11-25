@@ -21,38 +21,7 @@ pub(super) async fn write_proxy_request_timed<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let mut head = format!("{} {} HTTP/{version}\r\n", outgoing.method, outgoing.path);
-    let cookies: Vec<&str> = outgoing
-        .headers
-        .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("cookie"))
-        .map(|(_, value)| value.as_str())
-        .collect();
-    let mut wrote_cookies = false;
-    for (name, value) in &outgoing.headers {
-        if name.eq_ignore_ascii_case("cookie") {
-            if wrote_cookies {
-                continue;
-            }
-            wrote_cookies = true;
-            head.push_str(name);
-            head.push_str(": ");
-            for (index, cookie) in cookies.iter().enumerate() {
-                if index != 0 {
-                    head.push_str("; ");
-                }
-                head.push_str(cookie);
-            }
-            head.push_str("\r\n");
-            continue;
-        }
-        head.push_str(name);
-        head.push_str(": ");
-        head.push_str(value);
-        head.push_str("\r\n");
-    }
-    head.push_str("\r\n");
-    let mut request = head.into_bytes();
+    let mut request = proxy_request_head(outgoing, version);
     let mut body_total = 0_u64;
     let first_chunk = match &outgoing.body_stream {
         Some(body) => match body
@@ -91,6 +60,54 @@ where
         request.extend_from_slice(&outgoing.body);
     }
     write_all_timed(stream, &request, timeout).await?;
+    write_remaining_proxy_body(stream, outgoing, body_total, chunked_complete, timeout).await
+}
+
+pub(super) fn proxy_request_head(outgoing: &ProxyRequestMessage, version: &str) -> Vec<u8> {
+    let mut head = format!("{} {} HTTP/{version}\r\n", outgoing.method, outgoing.path);
+    let cookies: Vec<&str> = outgoing
+        .headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+        .map(|(_, value)| value.as_str())
+        .collect();
+    let mut wrote_cookies = false;
+    for (name, value) in &outgoing.headers {
+        if name.eq_ignore_ascii_case("cookie") {
+            if wrote_cookies {
+                continue;
+            }
+            wrote_cookies = true;
+            head.push_str(name);
+            head.push_str(": ");
+            for (index, cookie) in cookies.iter().enumerate() {
+                if index != 0 {
+                    head.push_str("; ");
+                }
+                head.push_str(cookie);
+            }
+            head.push_str("\r\n");
+            continue;
+        }
+        head.push_str(name);
+        head.push_str(": ");
+        head.push_str(value);
+        head.push_str("\r\n");
+    }
+    head.push_str("\r\n");
+    head.into_bytes()
+}
+
+pub(super) async fn write_remaining_proxy_body<S>(
+    stream: &mut S,
+    outgoing: &ProxyRequestMessage,
+    mut body_total: u64,
+    mut chunked_complete: bool,
+    timeout: Option<Duration>,
+) -> io::Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
     if let Some(body) = &outgoing.body_stream {
         while let Some(chunk) = body
             .next_limited(&mut body_total, outgoing.body_limit)

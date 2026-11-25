@@ -355,7 +355,7 @@ fn request_body_status_error(status: u16, message: &str) -> io::Error {
     )
 }
 
-fn request_body_file_error(error: io::Error) -> io::Error {
+pub(crate) fn request_body_file_error(error: io::Error) -> io::Error {
     request_body_status_error(500, &format!("request body file read failed: {error}"))
 }
 

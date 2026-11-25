@@ -2,6 +2,7 @@ use super::*;
 
 mod reuse;
 mod write;
+mod write_file;
 
 pub(in crate::server) use reuse::{
     can_reuse_proxy_connection, header_has_token, spawn_stream_connection_reuse,
@@ -9,7 +10,7 @@ pub(in crate::server) use reuse::{
 use reuse::{can_reuse_stream_head, deferred_stream_connection};
 #[cfg(test)]
 pub(in crate::server) use write::write_proxy_request;
-use write::write_proxy_request_timed;
+use write_file::write_proxy_request_to_upstream;
 
 pub(in crate::server) async fn open_proxy_upstream(
     proxy: &ProxyPassConfig,
@@ -108,13 +109,8 @@ pub(in crate::server) async fn timed_connection_proxy_exchange(
     stream_reuse_allowed: bool,
 ) -> Result<ConnectionProxyOutcome, ProxyFailure> {
     connection.requests = connection.requests.saturating_add(1);
-    let write_result = write_proxy_request_timed(
-        &mut connection.reader,
-        outgoing,
-        version,
-        Some(context.proxy_send_timeout),
-    )
-    .await;
+    let write_result =
+        write_proxy_request_to_upstream(&mut connection, outgoing, version, context).await;
     let mut write_error = None;
     let write_incomplete = match write_result {
         Ok(()) => false,
