@@ -104,7 +104,8 @@ async fn resets_client_connections_after_request_timeout() {
     let state = test_state(&config);
     let server = tokio::spawn(async move {
         let (stream, remote) = listener.accept().await.unwrap();
-        let reset_target = TimeoutReset::from_tcp(&stream);
+        let (stream, control) = ClientSocketControl::attach_tcp(stream).unwrap();
+        let reset_target = control.map(TimeoutReset::from_control);
         handle_http_connection_with_reset(
             stream,
             ConnectionAddresses::direct(ListenAddress::Inet(remote), ListenAddress::Inet(address)),

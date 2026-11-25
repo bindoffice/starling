@@ -86,19 +86,8 @@ pub(in crate::server) struct TimeoutReset {
 }
 
 impl TimeoutReset {
-    pub(in crate::server) fn from_tcp(stream: &TcpStream) -> Option<Self> {
-        socket2::SockRef::from(stream)
-            .try_clone()
-            .ok()
-            .map(Self::new)
-    }
-
-    #[cfg(unix)]
-    pub(in crate::server) fn from_unix(stream: &UnixStream) -> Option<Self> {
-        socket2::SockRef::from(stream)
-            .try_clone()
-            .ok()
-            .map(Self::new)
+    pub(in crate::server) fn from_control(control: ClientSocketControl) -> Self {
+        Self::new(control)
     }
 
     pub(in crate::server) fn set_reset_on_close(&self) -> io::Result<()> {
@@ -124,6 +113,12 @@ impl TimeoutResetConnection for TcpStream {
 impl TimeoutResetConnection for socket2::Socket {
     fn set_reset_on_close(&self) -> io::Result<()> {
         self.set_linger(Some(Duration::ZERO))
+    }
+}
+
+impl TimeoutResetConnection for ClientSocketControl {
+    fn set_reset_on_close(&self) -> io::Result<()> {
+        ClientSocketControl::set_reset_on_close(self)
     }
 }
 

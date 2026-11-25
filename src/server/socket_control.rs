@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, RawFd};
 #[cfg(unix)]
 use tokio::io::unix::AsyncFd;
 use tokio::net::TcpStream;
@@ -20,6 +20,9 @@ enum Socket {
 }
 
 struct ClientSocketControlInner {
+    #[cfg(unix)]
+    socket: AsyncFd<Socket>,
+    #[cfg(not(unix))]
     socket: Socket,
     nodelay_applied: AtomicBool,
 }
@@ -27,8 +30,6 @@ struct ClientSocketControlInner {
 #[derive(Clone)]
 pub(in crate::server) struct ClientSocketControl {
     inner: Arc<ClientSocketControlInner>,
-    #[cfg(unix)]
-    close_fd: Option<Arc<AsyncFd<OwnedFd>>>,
 }
 
 impl std::fmt::Debug for ClientSocketControl {
@@ -49,11 +50,11 @@ impl ClientSocketControl {
         stream: TcpStream,
     ) -> io::Result<(TcpStream, Option<Self>)> {
         let socket = stream.into_std()?;
-        let control = socket
-            .try_clone()
-            .ok()
-            .map(|socket| Self::from_socket(Socket::Tcp(socket)));
-        Ok((TcpStream::from_std(socket)?, control))
+        let Ok(control_socket) = socket.try_clone() else {
+            return Ok((TcpStream::from_std(socket)?, None));
+        };
+        let stream = TcpStream::from_std(control_socket)?;
+        Ok((stream, Self::from_socket(Socket::Tcp(socket))))
     }
 
     #[cfg(unix)]
@@ -61,48 +62,47 @@ impl ClientSocketControl {
         stream: UnixStream,
     ) -> io::Result<(UnixStream, Option<Self>)> {
         let socket = stream.into_std()?;
-        let control = socket
-            .try_clone()
-            .ok()
-            .map(|socket| Self::from_socket(Socket::Unix(socket)));
-        Ok((UnixStream::from_std(socket)?, control))
+        let Ok(control_socket) = socket.try_clone() else {
+            return Ok((UnixStream::from_std(socket)?, None));
+        };
+        let stream = UnixStream::from_std(control_socket)?;
+        Ok((stream, Self::from_socket(Socket::Unix(socket))))
     }
 
-    fn from_socket(socket: Socket) -> Self {
+    fn from_socket(socket: Socket) -> Option<Self> {
         #[cfg(unix)]
-        let close_fd = duplicate_async_fd(socket.as_raw_fd());
-        Self {
+        // SAFETY: Socket owns a valid file descriptor for the lifetime of the
+        // AsyncFd registration.
+        let socket = unsafe { AsyncFd::register(socket) }.ok()?;
+        Some(Self {
             inner: Arc::new(ClientSocketControlInner {
                 socket,
                 nodelay_applied: AtomicBool::new(false),
             }),
-            #[cfg(unix)]
-            close_fd,
-        }
+        })
     }
 
     pub(in crate::server) async fn wait_for_close_event(&self) {
         #[cfg(unix)]
-        if let Some(close_fd) = &self.close_fd {
-            loop {
-                let mut readiness = match close_fd.readable().await {
-                    Ok(readiness) => readiness,
-                    Err(_) => std::future::pending().await,
-                };
-                if self.close_detected() {
-                    return;
-                }
-                readiness.clear_ready();
-                tokio::time::sleep(Duration::from_millis(5)).await;
+        loop {
+            let mut readiness = match self.inner.socket.readable().await {
+                Ok(readiness) => readiness,
+                Err(_) => std::future::pending().await,
+            };
+            if self.close_detected() {
+                return;
             }
+            readiness.clear_ready();
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
+        #[cfg(not(unix))]
         std::future::pending().await
     }
 
     fn apply_nodelay(&self, enabled: bool) -> io::Result<()> {
         // Nginx only calls ngx_tcp_nodelay() for "on"; "off" never clears an
         // option already enabled earlier on the same connection.
-        if enabled && let Socket::Tcp(socket) = &self.inner.socket {
+        if enabled && let Socket::Tcp(socket) = self.socket() {
             socket.set_nodelay(true)?;
         }
         Ok(())
@@ -135,11 +135,7 @@ impl ClientSocketControl {
     pub(in crate::server) fn close_state(&self) -> ClientCloseState {
         #[cfg(unix)]
         {
-            let fd: RawFd = match &self.inner.socket {
-                Socket::Tcp(socket) => socket.as_raw_fd(),
-                #[cfg(unix)]
-                Socket::Unix(socket) => socket.as_raw_fd(),
-            };
+            let fd: RawFd = self.socket().as_raw_fd();
 
             let mut byte = 0_u8;
             let result = unsafe {
@@ -179,10 +175,18 @@ impl ClientSocketControl {
         self.close_state() == ClientCloseState::Reset
     }
 
+    pub(in crate::server) fn set_reset_on_close(&self) -> io::Result<()> {
+        match self.socket() {
+            Socket::Tcp(socket) => socket2::SockRef::from(socket).set_linger(Some(Duration::ZERO)),
+            #[cfg(unix)]
+            Socket::Unix(socket) => socket2::SockRef::from(socket).set_linger(Some(Duration::ZERO)),
+        }
+    }
+
     pub(in crate::server) fn supports_sendfile(&self) -> bool {
         #[cfg(unix)]
         {
-            matches!(&self.inner.socket, Socket::Tcp(_)) && self.close_fd.is_some()
+            matches!(self.socket(), Socket::Tcp(_))
         }
         #[cfg(not(unix))]
         {
@@ -198,19 +202,13 @@ impl ClientSocketControl {
         mut length: u64,
         timeout: Duration,
     ) -> io::Result<()> {
-        let Socket::Tcp(_) = &self.inner.socket else {
+        let Socket::Tcp(_) = self.socket() else {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "sendfile requires a TCP client socket",
             ));
         };
-        let Some(writable) = &self.close_fd else {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "sendfile readiness socket is unavailable",
-            ));
-        };
-        let output_fd = self.inner.socket.as_raw_fd();
+        let output_fd = self.socket().as_raw_fd();
         let input_fd = file.as_raw_fd();
         while length > 0 {
             let chunk = length.min(1024 * 1024);
@@ -242,9 +240,9 @@ impl ClientSocketControl {
                 Some(libc::EINTR) => {}
                 Some(error) if error == libc::EAGAIN || error == libc::EWOULDBLOCK => {
                     let mut readiness = if timeout == Duration::ZERO {
-                        writable.writable().await
+                        self.inner.socket.writable().await
                     } else {
-                        tokio::time::timeout(timeout, writable.writable())
+                        tokio::time::timeout(timeout, self.inner.socket.writable())
                             .await
                             .map_err(|_| {
                                 io::Error::new(io::ErrorKind::TimedOut, "sendfile timed out")
@@ -260,10 +258,21 @@ impl ClientSocketControl {
 
     #[cfg(test)]
     pub(in crate::server) fn enabled(&self) -> io::Result<bool> {
-        match &self.inner.socket {
+        match self.socket() {
             Socket::Tcp(socket) => socket.nodelay(),
             #[cfg(unix)]
             Socket::Unix(_) => Ok(false),
+        }
+    }
+
+    fn socket(&self) -> &Socket {
+        #[cfg(unix)]
+        {
+            self.inner.socket.get_ref()
+        }
+        #[cfg(not(unix))]
+        {
+            &self.inner.socket
         }
     }
 }
@@ -276,16 +285,6 @@ impl AsRawFd for Socket {
             Socket::Unix(socket) => socket.as_raw_fd(),
         }
     }
-}
-
-#[cfg(unix)]
-fn duplicate_async_fd(fd: RawFd) -> Option<Arc<AsyncFd<OwnedFd>>> {
-    let duplicate = unsafe { libc::dup(fd) };
-    if duplicate < 0 {
-        return None;
-    }
-    let duplicate = unsafe { OwnedFd::from_raw_fd(duplicate) };
-    unsafe { AsyncFd::register(duplicate) }.ok().map(Arc::new)
 }
 
 #[cfg(test)]

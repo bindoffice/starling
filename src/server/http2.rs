@@ -131,7 +131,7 @@ pub(super) async fn handle_h2_request(
         body_preread_size,
         settings_acked,
     } = options;
-    let (parts, body) = request.into_parts();
+    let (parts, mut body) = request.into_parts();
     let method = parts.method.as_str().to_string();
     if h2_header_field_too_large(&parts, max_header_field_size)
         || h2_header_list_too_large(&parts, max_header_list_size)
@@ -236,6 +236,24 @@ pub(super) async fn handle_h2_request(
     } else {
         body_timeout.saturating_add(BODY_TIMEOUT_GRACE)
     };
+    // Keep queued streams at their initial flow-control window. Otherwise the
+    // client can fill every stream buffer before descriptor admission runs.
+    let _http2_body_budget = if !body_end || content_length.is_some_and(|length| length > 0) {
+        Some(state.http2_body_budget.acquire().await)
+    } else {
+        None
+    };
+    // Nginx keeps a large connection window and expands default-size request
+    // windows before inspecting a frame that may carry the whole body at once.
+    // Explicit tiny preread windows retain strict flow control for the
+    // compatibility tests.
+    if !body_end
+        && body_preread_size >= 64 * 1024
+        && body.set_target_window_size(i32::MAX as u32).is_err()
+    {
+        respond.send_reset(h2::Reason::INTERNAL_ERROR);
+        return Ok(());
+    }
     let body_task = (!body_end).then(|| {
         H2BodyTask::spawn_with_connection_fault_and_length(
             body,

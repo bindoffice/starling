@@ -9,6 +9,8 @@ use super::body_stream::RequestBodyStream;
 use crate::config::{ClientBodyInFileOnly, ClientBodyTempPath};
 use crate::http::{TempFileGuard, create_temp_file};
 
+const SPOOL_WRITE_BATCH: usize = 64 * 1024;
+
 pub struct SpooledRequestBody {
     pub body: Vec<u8>,
     pub file: Option<Arc<RequestBodyFile>>,
@@ -63,6 +65,7 @@ pub async fn spool_request_body(
 struct SpoolFile {
     path: Option<PathBuf>,
     file: tokio::fs::File,
+    pending: Vec<u8>,
 }
 
 impl SpoolFile {
@@ -71,14 +74,36 @@ impl SpoolFile {
         Ok(Self {
             path: Some(path),
             file: tokio::fs::File::from_std(file),
+            pending: Vec::with_capacity(SPOOL_WRITE_BATCH),
         })
     }
 
     async fn write_all(&mut self, data: &[u8]) -> io::Result<()> {
-        self.file.write_all(data).await
+        if data.len() >= SPOOL_WRITE_BATCH {
+            self.flush_pending().await?;
+            return self.file.write_all(data).await;
+        }
+        if self.pending.len().saturating_add(data.len()) > SPOOL_WRITE_BATCH {
+            self.flush_pending().await?;
+        }
+        self.pending.extend_from_slice(data);
+        if self.pending.len() >= SPOOL_WRITE_BATCH {
+            self.flush_pending().await?;
+        }
+        Ok(())
+    }
+
+    async fn flush_pending(&mut self) -> io::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let result = self.file.write_all(&self.pending).await;
+        self.pending.clear();
+        result
     }
 
     async fn finish(mut self) -> io::Result<PathBuf> {
+        self.flush_pending().await?;
         self.file.flush().await?;
         Ok(self.path.take().expect("request body spool path"))
     }

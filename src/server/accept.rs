@@ -47,7 +47,9 @@ pub(in crate::server) async fn accept_loop(
                                 ListenAddress::Inet(transport_remote),
                                 local,
                             );
-                            let reset_target = TimeoutReset::from_tcp(&stream);
+                            let reset_target = control
+                                .as_ref()
+                                .map(|control| TimeoutReset::from_control(control.clone()));
                             handle_http_connection_with_shutdown(
                                 stream,
                                 connection,
@@ -131,7 +133,9 @@ pub(in crate::server) async fn accept_unix_loop(
                         let shutdown = shutdown.clone();
                         connections.spawn(async move {
                             let connection = ConnectionAddresses::direct(remote, local);
-                            let reset_target = TimeoutReset::from_unix(&stream);
+                            let reset_target = control
+                                .as_ref()
+                                .map(|control| TimeoutReset::from_control(control.clone()));
                             handle_http_connection_with_shutdown(
                                 stream,
                                 connection,

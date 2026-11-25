@@ -38,6 +38,7 @@ pub async fn run(config: RuntimeConfig, logger: Arc<Logger>) -> io::Result<()> {
         upstream_keepalive,
         proxy_cache,
         client_tls_cache: Arc::new(ClientTlsConfigCache::default()),
+        http2_body_budget: Arc::new(Http2BodyBudget::new()),
     };
     let stream_routes = {
         let config = state.current_config();

@@ -279,21 +279,6 @@ pub(super) async fn serve_connection<S>(
                 break;
             }
         };
-        // Nginx keeps a large connection window and expands default-size
-        // request windows before inspecting a frame that may carry the whole
-        // body at once. Explicit tiny preread windows retain strict flow
-        // control for the compatibility tests.
-        let (mut request, mut respond) = (request, respond);
-        if settings.limits.body_preread_size >= 64 * 1024
-            && request
-                .body_mut()
-                .set_target_window_size(i32::MAX as u32)
-                .is_err()
-        {
-            respond.send_reset(h2::Reason::INTERNAL_ERROR);
-            continue;
-        }
-
         state.stats.requests.fetch_add(1, Ordering::Relaxed);
         accepted_requests = accepted_requests.saturating_add(1);
         if in_flight.fetch_add(1, Ordering::Relaxed) == 0

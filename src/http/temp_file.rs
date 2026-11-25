@@ -44,7 +44,6 @@ pub(crate) fn create_temp_file(
         let name = temp_file_name(id);
         let path = hashed_temp_path(temp_path, &name);
         let parent = path.parent().unwrap_or(&temp_path.path);
-        std::fs::create_dir_all(parent)?;
 
         let mut options = std::fs::OpenOptions::new();
         options.write(true).read(true).create_new(true);
@@ -55,6 +54,17 @@ pub(crate) fn create_temp_file(
         }
         match options.open(&path) {
             Ok(file) => return Ok((path, file)),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                // Temp roots are normally created at startup. Avoid a
+                // synchronous create_dir_all for every request, but recover
+                // when a configured hashed directory was removed at runtime.
+                std::fs::create_dir_all(parent)?;
+                match options.open(&path) {
+                    Ok(file) => return Ok((path, file)),
+                    Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(err) => return Err(err),
+                }
+            }
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(err),
         }
