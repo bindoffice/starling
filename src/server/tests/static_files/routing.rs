@@ -27,6 +27,12 @@ async fn routes_virtual_hosts_and_handles_ranges() {
                         root html;
                         location / { return 200 "wildcard\n"; }
                     }
+                    server {
+                        listen 127.0.0.1:18081;
+                        server_name ~^api\.(?<domain>[a-z]+)\.test$;
+                        root html;
+                        location / { return 200 "$1/$domain\n"; }
+                    }
                 }
             "#,
         &[("html/index.html", "0123456789")],
@@ -51,6 +57,13 @@ async fn routes_virtual_hosts_and_handles_ranges() {
     )
     .await;
     assert!(wildcard_child.ends_with("wildcard\n"));
+
+    let regex_capture = request_body(
+        &config,
+        "GET / HTTP/1.1\r\nHost: api.example.test\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(regex_capture.ends_with("example/example\n"));
 
     let first = request_body(
         &config,

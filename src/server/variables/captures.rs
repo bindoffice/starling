@@ -114,6 +114,38 @@ pub(in crate::server) fn set_regex_captures(
     }
 }
 
+pub(in crate::server) fn set_server_name_captures(
+    variables: &mut Variables,
+    server: &ServerConfig,
+) {
+    for name in server.names.iter() {
+        let Some(regex) = name.regex() else {
+            continue;
+        };
+        let Some(captures) = regex.captures(&variables.host) else {
+            continue;
+        };
+        let values = captures
+            .iter()
+            .map(|capture| capture.map_or_else(String::new, |capture| capture.as_str().to_string()))
+            .collect();
+        let named = regex
+            .capture_names()
+            .flatten()
+            .filter_map(|name| {
+                captures
+                    .name(name)
+                    .map(|value| (name.to_string(), value.as_str().to_string()))
+            })
+            .collect::<Vec<_>>();
+        variables.captures = values;
+        for (name, value) in named {
+            variables.custom.insert(name, value);
+        }
+        return;
+    }
+}
+
 pub(in crate::server) fn clear_regex_captures(variables: &mut Variables) {
     variables.captures.clear();
 }

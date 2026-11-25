@@ -173,7 +173,7 @@ impl Variables {
     ) -> Self {
         let mut variables = Self::new_with_shared(
             request,
-            host,
+            host.to_owned(),
             server,
             local,
             remote,
@@ -193,7 +193,7 @@ impl Variables {
 
     pub(in crate::server) fn new_for_dispatch(
         request: &Request,
-        host: &str,
+        host: String,
         server: &ServerConfig,
         connection: &ConnectionAddresses,
         shared: VariablesShared,
@@ -215,7 +215,7 @@ impl Variables {
     #[allow(clippy::too_many_arguments)]
     fn new_with_shared<L: AddressVariables + ?Sized, R: AddressVariables + ?Sized>(
         request: &Request,
-        host: &str,
+        host: String,
         server: &ServerConfig,
         local: &L,
         remote: &R,
@@ -242,7 +242,7 @@ impl Variables {
             method: request.method.clone(),
             request_target: request.target.clone(),
             version: request.version.clone(),
-            host: host.to_string(),
+            host,
             server_name: server.default_server_name.clone(),
             remote_addr,
             remote_user: request
@@ -426,6 +426,7 @@ mod proxy_protocol;
 
 pub(super) use captures::{
     clear_regex_captures, expand_captures, expand_captures_in_args, set_regex_captures,
+    set_server_name_captures,
 };
 use cold::VariablesCold;
 pub(super) use eval::{

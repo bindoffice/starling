@@ -75,7 +75,7 @@ pub(in crate::server) async fn dispatch_http_request(
         request_length.map(|length| length.saturating_add(request.buffered_body_len()));
     let mut variables = Variables::new_for_dispatch(
         request,
-        &host,
+        host,
         server,
         &connection,
         VariablesShared {
@@ -92,13 +92,7 @@ pub(in crate::server) async fn dispatch_http_request(
     variables.served_requests = Some(connection_request.served_requests);
     variables.pipelined = connection_request.pipelined;
     variables.connection_started = Some(connection_request.started);
-    if let Some((regex, captures)) = server.names.iter().find_map(|name| {
-        let regex = name.regex()?;
-        let captures = regex.captures(&host)?;
-        Some((regex, captures))
-    }) {
-        set_regex_captures(&mut variables, regex, &captures);
-    }
+    set_server_name_captures(&mut variables, server);
     variables.error_logs = Some(RequestErrorLogs::new(
         state.logger.clone(),
         http_error_loggers.clone(),
