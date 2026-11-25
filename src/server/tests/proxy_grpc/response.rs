@@ -80,10 +80,11 @@ async fn proxies_grpc_bodies_headers_and_trailers_over_http2() {
         method: "POST".into(),
         target: "/pkg.Service/Echo?x=1".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Content-Type".into(),
             value: "application/grpc".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: b"\0\0\0\0\x05hello".to_vec(),
         remote_addr: "127.0.0.1:45678".into(),

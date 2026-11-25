@@ -56,6 +56,9 @@ pub(super) fn apply_common_directive(
     if try_apply_memcached_directive(directive, context, !allow_http_only)? {
         return Ok(());
     }
+    if try_apply_open_file_cache_directive(directive, context)? {
+        return Ok(());
+    }
     if try_apply_compat_directive(directive)? {
         return Ok(());
     }

@@ -197,13 +197,14 @@ fn request_with_headers(method: &str, target: &str, headers: &[(&str, &str)]) ->
         method: method.into(),
         target: target.into(),
         version: "HTTP/1.1".into(),
-        headers: headers
+        headers: (headers
             .iter()
             .map(|(name, value)| Header {
                 name: (*name).into(),
                 value: (*value).into(),
             })
-            .collect(),
+            .collect::<Vec<_>>())
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),

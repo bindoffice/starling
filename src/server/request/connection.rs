@@ -243,7 +243,7 @@ pub(in crate::server) async fn handle_io_with_shutdown<S>(
             method: head.method,
             target: head.target,
             version: head.version,
-            headers: head.headers,
+            headers: head.headers.into(),
             body: Vec::new(),
             body_stream,
             remote_addr: remote.to_string(),

@@ -9,6 +9,16 @@ pub(in crate::server) fn prepare_userid_variables(
     variables: &mut Variables,
 ) {
     let config = &context.userid;
+    let reset = uid_reset_requested(variables);
+    let state = &variables.userid;
+    if config.enable == UserIdEnable::Off
+        && state.enable == UserIdEnable::Off
+        && state.got == [0; 4]
+        && state.set == [0; 4]
+        && state.reset == reset
+    {
+        return;
+    }
     let name_changed = variables.userid.name != config.name;
     let config_changed = name_changed
         || variables.userid.enable != config.enable
@@ -31,7 +41,7 @@ pub(in crate::server) fn prepare_userid_variables(
     variables.userid.enable = config.enable;
     variables.userid.service = config.service;
     variables.userid.mark = config.mark;
-    variables.userid.reset = uid_reset_requested(variables);
+    variables.userid.reset = reset;
 
     if config.enable == UserIdEnable::Off {
         variables.userid.got = [0; 4];

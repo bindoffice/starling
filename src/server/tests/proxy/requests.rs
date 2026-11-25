@@ -38,7 +38,7 @@ fn builds_proxy_requests_with_body_method_and_header_controls() {
         method: "POST".into(),
         target: "/forward?value=hello".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "example.test".into(),
@@ -55,7 +55,8 @@ fn builds_proxy_requests_with_body_method_and_header_controls() {
                 name: "X-Original".into(),
                 value: "original".into(),
             },
-        ],
+        ])
+        .into(),
         body_stream: None,
         body: b"original".to_vec(),
         remote_addr: "127.0.0.1:1234".into(),

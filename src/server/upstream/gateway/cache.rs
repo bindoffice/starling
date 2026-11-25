@@ -141,7 +141,7 @@ pub(in crate::server) fn prepare_gateway_upstream_request(
     }
     let mut outgoing = request.clone();
     if cacheable {
-        outgoing.headers.retain(|header| {
+        Arc::make_mut(&mut outgoing.headers).retain(|header| {
             !GATEWAY_CACHE_REQUEST_HEADERS
                 .iter()
                 .any(|name| header.name.eq_ignore_ascii_case(name))

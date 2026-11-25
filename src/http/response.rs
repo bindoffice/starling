@@ -15,7 +15,7 @@ pub(crate) use tokens::prepare_response_headers;
 pub use writer::{ResponseWriteOptions, write_response};
 pub(crate) use writer::{
     prepare_response_for_write, response_head_length, response_uses_chunked_encoding,
-    write_prepared_response_with_scratch,
+    write_prepared_response_head, write_prepared_response_with_scratch,
 };
 
 const RESPONSE_HEADER_CAPACITY: usize = 8;

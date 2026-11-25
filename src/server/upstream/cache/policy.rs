@@ -78,7 +78,7 @@ pub(in crate::server) fn proxy_cache_upstream_request(
     converted.method = "GET".into();
     converted.body.clear();
     converted.body_stream = None;
-    converted.headers.retain(|header| {
+    Arc::make_mut(&mut converted.headers).retain(|header| {
         !header.name.eq_ignore_ascii_case("content-length")
             && !header.name.eq_ignore_ascii_case("transfer-encoding")
             && !header.name.eq_ignore_ascii_case("expect")

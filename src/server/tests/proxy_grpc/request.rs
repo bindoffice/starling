@@ -25,7 +25,7 @@ fn builds_grpc_requests_from_the_original_uri_and_headers() {
         method: "POST".into(),
         target: "/pkg.Service/Call?trace=1".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "localhost".into(),
@@ -50,7 +50,8 @@ fn builds_grpc_requests_from_the_original_uri_and_headers() {
                 name: "Content-Length".into(),
                 value: "5".into(),
             },
-        ],
+        ])
+        .into(),
         body_stream: None,
         body: b"hello".to_vec(),
         remote_addr: "127.0.0.1:45678".into(),
@@ -173,7 +174,7 @@ fn preserves_streaming_grpc_request_body_and_content_length() {
         method: "POST".into(),
         target: "/pkg.Service/Call".into(),
         version: "HTTP/2.0".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "localhost".into(),
@@ -186,7 +187,8 @@ fn preserves_streaming_grpc_request_body_and_content_length() {
                 name: "Content-Length".into(),
                 value: "5".into(),
             },
-        ],
+        ])
+        .into(),
         body: Vec::new(),
         body_stream: Some(body_stream),
         remote_addr: "127.0.0.1:45678".into(),
@@ -250,7 +252,7 @@ fn default_grpc_request_buffering_does_not_stream() {
         method: "POST".into(),
         target: "/pkg.Service/Call".into(),
         version: "HTTP/2.0".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "localhost".into(),
@@ -263,7 +265,8 @@ fn default_grpc_request_buffering_does_not_stream() {
                 name: "Content-Length".into(),
                 value: "5".into(),
             },
-        ],
+        ])
+        .into(),
         body: b"hello".to_vec(),
         body_stream: Some(body_stream),
         remote_addr: "127.0.0.1:45678".into(),

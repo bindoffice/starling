@@ -18,7 +18,7 @@ pub(in crate::server) async fn auth_request_response(
     }
     let uri = normalize_uri(path)?;
     let mut headers = request.headers.clone();
-    headers.retain(|header| {
+    Arc::make_mut(&mut headers).retain(|header| {
         !header.name.eq_ignore_ascii_case("content-length")
             && !header.name.eq_ignore_ascii_case("transfer-encoding")
     });

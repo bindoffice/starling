@@ -5,6 +5,9 @@ use md5::{Digest, Md5};
 use crate::config::SecureLinkConfig;
 
 pub(in crate::server) fn refresh_secure_link(config: &SecureLinkConfig, variables: &mut Variables) {
+    if config.secret.is_none() && config.variable.is_none() && config.md5.is_none() {
+        return;
+    }
     variables.secure_link.clear();
     variables.secure_link_expires.clear();
 

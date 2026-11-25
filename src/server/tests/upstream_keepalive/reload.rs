@@ -33,10 +33,11 @@ async fn pool_keys_keep_the_generation_captured_when_the_request_started() {
         method: "GET".into(),
         target: "/".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Host".into(),
             value: "localhost".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),

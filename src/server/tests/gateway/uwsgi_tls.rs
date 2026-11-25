@@ -20,10 +20,11 @@ fn resolves_dynamic_uwsgi_schemes_before_target_selection() {
         method: "GET".into(),
         target: "/".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Host".into(),
             value: "localhost".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),
@@ -99,10 +100,11 @@ async fn negotiates_suwsgi_tls_and_exchanges_a_packet() {
         method: "GET".into(),
         target: "/secure".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Host".into(),
             value: "localhost".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),

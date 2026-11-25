@@ -49,10 +49,11 @@ async fn compresses_eligible_responses_with_gzip() {
         method: "GET".into(),
         target: "/repeated.txt".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Accept-Encoding".into(),
             value: "gzip".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:1".into(),
@@ -245,7 +246,7 @@ async fn evaluates_gzip_proxied_response_conditions() {
         method: "GET".into(),
         target: "/".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Accept-Encoding".into(),
                 value: "gzip".into(),
@@ -258,7 +259,8 @@ async fn evaluates_gzip_proxied_response_conditions() {
                 name: "Via".into(),
                 value: "proxy".into(),
             },
-        ],
+        ])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:1".into(),
@@ -275,7 +277,7 @@ async fn evaluates_gzip_proxied_response_conditions() {
     assert!(no_etag.header("Content-Encoding").is_some());
 
     let request = Request {
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Accept-Encoding".into(),
                 value: "gzip".into(),
@@ -284,7 +286,8 @@ async fn evaluates_gzip_proxied_response_conditions() {
                 name: "Via".into(),
                 value: "proxy".into(),
             },
-        ],
+        ])
+        .into(),
         ..request
     };
     let mut cacheable = Response::bytes(200, "text/plain", "cacheable body");

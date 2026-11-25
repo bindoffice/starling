@@ -61,8 +61,8 @@ use crate::http::{
     UpstreamResponseHead, error_response, parse_accel_buffering, prepare_response_for_write,
     prepare_response_headers, read_request_head_with_limits_and_buffers,
     read_upstream_response_body, read_upstream_response_head, reason_phrase, response_head_length,
-    sanitize_header_value, store_request_body, write_prepared_response_with_scratch,
-    write_response,
+    sanitize_header_value, store_request_body, write_prepared_response_head,
+    write_prepared_response_with_scratch, write_response,
 };
 use crate::logging::{
     Logger, append_access_log, flush_access_logs, log_filter_allows, nginx_access_timestamp,

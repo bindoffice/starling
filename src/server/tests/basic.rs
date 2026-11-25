@@ -12,10 +12,11 @@ fn variable_expansion_supports_braces_and_headers() {
         method: "GET".into(),
         target: "/a?b=1".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "User-Agent".into(),
             value: "test".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:1".into(),
@@ -101,6 +102,7 @@ fn variable_expansion_supports_braces_and_headers() {
             userid: crate::config::UserIdConfig::default(),
             browser: BrowserConfig::default(),
             sendfile: false,
+            open_file_cache: Arc::new(crate::config::OpenFileCacheConfig::default()),
             dav: DavConfig::default(),
             log_not_found: true,
             log_subrequest: false,
@@ -374,10 +376,11 @@ async fn exposes_request_metadata_and_limit_rate_variables() {
         method: "POST".into(),
         target: "/".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Host".into(),
             value: "localhost".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: b"abc".to_vec(),
         remote_addr: "127.0.0.1:1234".into(),

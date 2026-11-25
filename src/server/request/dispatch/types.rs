@@ -19,6 +19,7 @@ pub(in crate::server) struct DispatchOutcome {
     pub(in crate::server) limit_rate: ResponseRate,
     pub(in crate::server) server_tokens: ServerTokens,
     pub(in crate::server) chunked_transfer_encoding: bool,
+    pub(in crate::server) sendfile: bool,
     pub(in crate::server) http2_chunk_size: usize,
     pub(in crate::server) close: ConnectionCloseConfig,
     pub(in crate::server) _body_file_guard: Option<Arc<RequestBodyFile>>,

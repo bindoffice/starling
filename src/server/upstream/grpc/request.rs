@@ -84,7 +84,7 @@ pub(in crate::server) fn build_grpc_request(
     {
         outgoing = outgoing.header("content-length", length);
     }
-    for header in &request.headers {
+    for header in request.headers.iter() {
         let lower = header.name.to_ascii_lowercase();
         if sent.contains(&lower) {
             continue;

@@ -33,7 +33,7 @@ pub(super) fn streaming_request(
         method: "POST".into(),
         target: uri.into(),
         version: "HTTP/1.1".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "localhost".into(),
@@ -42,7 +42,8 @@ pub(super) fn streaming_request(
                 name: "Content-Length".into(),
                 value: length.to_string(),
             },
-        ],
+        ])
+        .into(),
         body_stream: Some(stream),
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),
@@ -61,7 +62,7 @@ pub(super) fn streaming_chunked_request(
         method: "POST".into(),
         target: uri.into(),
         version: "HTTP/1.1".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "localhost".into(),
@@ -70,7 +71,8 @@ pub(super) fn streaming_chunked_request(
                 name: "Transfer-Encoding".into(),
                 value: "chunked".into(),
             },
-        ],
+        ])
+        .into(),
         body_stream: Some(stream),
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),
@@ -85,10 +87,11 @@ pub(super) fn plain_request(uri: &str, local_addr: &str) -> Request {
         method: "GET".into(),
         target: uri.into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Host".into(),
             value: "localhost".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),

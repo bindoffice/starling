@@ -33,31 +33,10 @@ pub(super) struct Variables {
     pub(super) connection_id: Option<u64>,
     pub(super) served_requests: Option<u64>,
     pub(super) connection_started: Option<Instant>,
-    pub(super) ssl_protocol: String,
-    pub(super) ssl_cipher: String,
-    pub(super) ssl_server_name: String,
-    pub(super) ssl_alpn_protocol: String,
-    pub(super) ssl_client_verify: String,
-    pub(super) ssl_client_cert: String,
-    pub(super) ssl_client_escaped_cert: String,
-    pub(super) ssl_client_fingerprint: String,
-    pub(super) ssl_client_serial: String,
-    pub(super) ssl_client_s_dn: String,
-    pub(super) ssl_client_i_dn: String,
-    pub(super) ssl_client_s_dn_legacy: String,
-    pub(super) ssl_client_i_dn_legacy: String,
-    pub(super) ssl_client_v_start: String,
-    pub(super) ssl_client_v_end: String,
-    pub(super) ssl_client_v_remain: String,
     pub(super) hostname: Arc<str>,
     pub(super) request_id: Arc<OnceLock<String>>,
     pub(super) realip_remote_addr: Option<Arc<str>>,
     pub(super) realip_remote_port: Option<Arc<str>>,
-    pub(super) proxy_protocol_addr: String,
-    pub(super) proxy_protocol_port: String,
-    pub(super) proxy_protocol_server_addr: String,
-    pub(super) proxy_protocol_server_port: String,
-    pub(super) proxy_protocol_tlvs: Option<Arc<[u8]>>,
     pub(super) uri: String,
     pub(super) fastcgi_script_name: String,
     pub(super) fastcgi_path_info: String,
@@ -74,41 +53,16 @@ pub(super) struct Variables {
     pub(super) request_body_file_guard: Option<Arc<RequestBodyFile>>,
     pub(super) request_body_prepared: bool,
     pub(super) request_length: Option<u64>,
-    pub(super) upstream_status: String,
-    pub(super) upstream_cache_status: String,
-    pub(super) upstream_cache_last_modified: String,
-    pub(super) upstream_cache_etag: String,
-    pub(super) proxy_cache_background: bool,
-    pub(super) upstream_response_time: String,
-    pub(super) upstream_headers: Vec<Header>,
-    pub(super) upstream_trailers: Vec<Header>,
-    pub(super) sent_headers: Vec<Header>,
-    pub(super) sent_trailers: Vec<Header>,
-    pub(super) sent_connection: String,
-    pub(super) sent_keep_alive: String,
-    pub(super) sent_transfer_encoding: String,
-    pub(super) response_from_upstream: bool,
     pub(super) client_abort: Option<ClientAbortState>,
-    pub(super) error_page: bool,
     pub(super) started: Instant,
-    pub(super) limit_req_status: String,
-    pub(super) limit_conn_status: String,
-    pub(super) invalid_referer: String,
-    pub(super) secure_link: String,
-    pub(super) secure_link_expires: String,
-    pub(super) msie: String,
-    pub(super) modern_browser: String,
-    pub(super) ancient_browser: String,
-    pub(super) userid: UserIdState,
     pub(super) document_root: PathBuf,
     pub(super) request_filename: PathBuf,
     pub(super) proxy_host: String,
     pub(super) proxy_port: String,
     pub(super) upstream_addr: String,
-    pub(super) headers: Vec<Header>,
+    pub(super) headers: Arc<Vec<Header>>,
     pub(super) captures: Vec<String>,
     pub(super) server_names: Arc<[ServerName]>,
-    pub(super) custom: HashMap<String, String>,
     pub(super) maps: Arc<HashMap<String, Arc<MapVariable>>>,
     pub(super) geos: Arc<HashMap<String, Arc<GeoVariable>>>,
     pub(super) split_clients: Arc<HashMap<String, Arc<SplitClientsVariable>>>,
@@ -123,6 +77,10 @@ pub(super) struct Variables {
     pub(super) rewrite_log: bool,
     pub(super) uninitialized_variable_warn: bool,
     pub(super) content_handler: Option<ContentHandlerKind>,
+    pub(super) msie: String,
+    pub(super) modern_browser: String,
+    pub(super) ancient_browser: String,
+    pub(super) cold: VariablesCold,
 }
 
 pub(in crate::server) struct VariablesShared {
@@ -307,31 +265,10 @@ impl Variables {
             connection_id: None,
             served_requests: None,
             connection_started: None,
-            ssl_protocol: String::new(),
-            ssl_cipher: String::new(),
-            ssl_server_name: String::new(),
-            ssl_alpn_protocol: String::new(),
-            ssl_client_verify: String::new(),
-            ssl_client_cert: String::new(),
-            ssl_client_escaped_cert: String::new(),
-            ssl_client_fingerprint: String::new(),
-            ssl_client_serial: String::new(),
-            ssl_client_s_dn: String::new(),
-            ssl_client_i_dn: String::new(),
-            ssl_client_s_dn_legacy: String::new(),
-            ssl_client_i_dn_legacy: String::new(),
-            ssl_client_v_start: String::new(),
-            ssl_client_v_end: String::new(),
-            ssl_client_v_remain: String::new(),
             hostname: hostname(),
             request_id: Arc::new(OnceLock::new()),
             realip_remote_addr: (!dispatch).then(|| Arc::from(remote.variable_address())),
             realip_remote_port: (!dispatch).then(|| Arc::from(remote.variable_port())),
-            proxy_protocol_addr: String::new(),
-            proxy_protocol_port: String::new(),
-            proxy_protocol_server_addr: String::new(),
-            proxy_protocol_server_port: String::new(),
-            proxy_protocol_tlvs: None,
             uri: if path_variables {
                 path.to_string()
             } else {
@@ -374,32 +311,8 @@ impl Variables {
             request_body_file_guard: None,
             request_body_prepared: false,
             request_length,
-            upstream_status: String::new(),
-            upstream_cache_status: String::new(),
-            upstream_cache_last_modified: String::new(),
-            upstream_cache_etag: String::new(),
-            proxy_cache_background: false,
-            upstream_response_time: String::new(),
-            upstream_headers: Vec::new(),
-            upstream_trailers: Vec::new(),
-            sent_headers: Vec::new(),
-            sent_trailers: Vec::new(),
-            sent_connection: String::new(),
-            sent_keep_alive: String::new(),
-            sent_transfer_encoding: String::new(),
-            response_from_upstream: false,
             client_abort: None,
-            error_page: false,
             started: Instant::now(),
-            limit_req_status: String::new(),
-            limit_conn_status: String::new(),
-            invalid_referer: String::new(),
-            secure_link: String::new(),
-            secure_link_expires: String::new(),
-            msie: String::new(),
-            modern_browser: String::new(),
-            ancient_browser: String::new(),
-            userid: UserIdState::default(),
             document_root: PathBuf::new(),
             request_filename: PathBuf::new(),
             proxy_host: String::new(),
@@ -408,7 +321,6 @@ impl Variables {
             headers: request.headers.clone(),
             captures: Vec::new(),
             server_names: server.names.clone(),
-            custom: HashMap::new(),
             maps: server.context.maps.clone(),
             geos: server.context.geos.clone(),
             split_clients: server.context.split_clients.clone(),
@@ -423,7 +335,21 @@ impl Variables {
             rewrite_log: false,
             uninitialized_variable_warn: false,
             content_handler: None,
+            msie: String::new(),
+            modern_browser: String::new(),
+            ancient_browser: String::new(),
+            cold: VariablesCold::default(),
         }
+    }
+
+    #[inline]
+    pub(super) fn cold(&self) -> &VariablesCold {
+        &self.cold
+    }
+
+    #[inline]
+    pub(super) fn cold_mut(&mut self) -> &mut VariablesCold {
+        &mut self.cold
     }
 
     pub(super) fn error_logger_for(&self, context: &EffectiveConfig) -> Option<Arc<Logger>> {
@@ -476,11 +402,28 @@ impl Variables {
     }
 }
 
+impl std::ops::Deref for Variables {
+    type Target = VariablesCold;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.cold()
+    }
+}
+
+impl std::ops::DerefMut for Variables {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.cold_mut()
+    }
+}
+
 pub(super) fn server_name_value(name: &ServerName) -> String {
     name.display().to_string()
 }
 
 mod captures;
+mod cold;
 mod eval;
 mod headers;
 mod maps;
@@ -489,6 +432,7 @@ mod proxy_protocol;
 pub(super) use captures::{
     clear_regex_captures, expand_captures, expand_captures_in_args, set_regex_captures,
 };
+use cold::VariablesCold;
 pub(super) use eval::{
     binary_address_bytes, eval_variables, eval_variables_bytes, eval_variables_with_stack,
     variable_bytes_for_log, variable_value,

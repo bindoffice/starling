@@ -44,10 +44,11 @@ async fn retries_grpc_upstreams_on_configured_status() {
         method: "POST".into(),
         target: "/pkg.Service/Retry".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Content-Type".into(),
             value: "application/grpc".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),

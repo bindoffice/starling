@@ -169,7 +169,7 @@ fn extracts_paths_and_args_from_absolute_targets() {
             method: "GET".into(),
             target: target.into(),
             version: "HTTP/1.1".into(),
-            headers: Vec::new(),
+            headers: (Vec::new()).into(),
             body: Vec::new(),
             body_stream: None,
             remote_addr: "127.0.0.1:1".into(),

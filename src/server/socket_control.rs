@@ -179,6 +179,85 @@ impl ClientSocketControl {
         self.close_state() == ClientCloseState::Reset
     }
 
+    pub(in crate::server) fn supports_sendfile(&self) -> bool {
+        #[cfg(unix)]
+        {
+            matches!(&self.inner.socket, Socket::Tcp(_)) && self.close_fd.is_some()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+
+    #[cfg(unix)]
+    pub(in crate::server) async fn sendfile(
+        &self,
+        file: &tokio::fs::File,
+        mut offset: u64,
+        mut length: u64,
+        timeout: Duration,
+    ) -> io::Result<()> {
+        let Socket::Tcp(_) = &self.inner.socket else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "sendfile requires a TCP client socket",
+            ));
+        };
+        let Some(writable) = &self.close_fd else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "sendfile readiness socket is unavailable",
+            ));
+        };
+        let output_fd = self.inner.socket.as_raw_fd();
+        let input_fd = file.as_raw_fd();
+        while length > 0 {
+            let chunk = length.min(1024 * 1024);
+            let mut file_offset = i64::try_from(offset).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "file offset exceeds i64")
+            })?;
+            let result = unsafe {
+                libc::sendfile(
+                    output_fd,
+                    input_fd,
+                    &mut file_offset,
+                    chunk.min(usize::MAX as u64) as usize,
+                )
+            };
+            if result > 0 {
+                let sent = result as u64;
+                offset = offset.saturating_add(sent);
+                length -= sent;
+                continue;
+            }
+            if result == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "static file ended before Content-Length",
+                ));
+            }
+            let error = io::Error::last_os_error();
+            match error.raw_os_error() {
+                Some(libc::EINTR) => {}
+                Some(error) if error == libc::EAGAIN || error == libc::EWOULDBLOCK => {
+                    let mut readiness = if timeout == Duration::ZERO {
+                        writable.writable().await
+                    } else {
+                        tokio::time::timeout(timeout, writable.writable())
+                            .await
+                            .map_err(|_| {
+                                io::Error::new(io::ErrorKind::TimedOut, "sendfile timed out")
+                            })?
+                    }?;
+                    readiness.clear_ready();
+                }
+                _ => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(in crate::server) fn enabled(&self) -> io::Result<bool> {
         match &self.inner.socket {

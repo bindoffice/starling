@@ -38,7 +38,7 @@ pub(in crate::server) fn start_mirror_requests(
         if !context.mirror_request_body {
             mirror_request.body.clear();
             mirror_request.body_stream = None;
-            mirror_request.headers.retain(|header| {
+            Arc::make_mut(&mut mirror_request.headers).retain(|header| {
                 !header.name.eq_ignore_ascii_case("content-length")
                     && !header.name.eq_ignore_ascii_case("transfer-encoding")
                     && !header.name.eq_ignore_ascii_case("expect")

@@ -29,7 +29,7 @@ async fn exchanges_fastcgi_records_and_maps_cgi_headers() {
         method: "POST".into(),
         target: "/php/demo.php/extra/path?x=1".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "localhost".into(),
@@ -50,7 +50,8 @@ async fn exchanges_fastcgi_records_and_maps_cgi_headers() {
                 name: "X-Custom".into(),
                 value: "again".into(),
             },
-        ],
+        ])
+        .into(),
         body_stream: None,
         body: b"hello".to_vec(),
         remote_addr: "127.0.0.1:45678".into(),

@@ -10,6 +10,8 @@ mod listen;
 pub use listen::*;
 mod memcached;
 pub use memcached::*;
+mod open_file_cache;
+pub use open_file_cache::*;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {

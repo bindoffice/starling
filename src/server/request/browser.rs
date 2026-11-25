@@ -10,12 +10,9 @@ pub(in crate::server) fn refresh_browser_variables(
         .iter()
         .find(|header| header.name.eq_ignore_ascii_case("user-agent"))
         .map(|header| header.value.as_str());
-    variables.msie = if user_agent.is_some_and(is_msie) {
-        "1".into()
-    } else {
-        String::new()
-    };
+    let msie = user_agent.is_some_and(is_msie);
     let modern = matches!(classify_browser(config, user_agent), BrowserClass::Modern);
+    variables.msie = if msie { "1".into() } else { String::new() };
     variables.modern_browser = if modern {
         config.modern_value.clone()
     } else {

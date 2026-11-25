@@ -33,10 +33,11 @@ fn rewrites_proxy_cookie_domains_paths_and_regexes() {
         method: "GET".into(),
         target: "/".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Host".into(),
             value: "localhost".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:1234".into(),

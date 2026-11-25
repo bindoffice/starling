@@ -43,6 +43,7 @@ pub(in crate::server) async fn dispatch_http_request(
             limit_rate: ResponseRate::default(),
             server_tokens: ServerTokens::On,
             chunked_transfer_encoding: true,
+            sendfile: false,
             http2_chunk_size: Http2Limits::default().chunk_size,
             close: ConnectionCloseConfig::default(),
             _body_file_guard: None,
@@ -57,8 +58,7 @@ pub(in crate::server) async fn dispatch_http_request(
         request.keep_alive = false;
     }
     if server.context.ignore_invalid_headers && !server.context.underscores_in_headers {
-        request
-            .headers
+        Arc::make_mut(&mut request.headers)
             .retain(|header| !header.name.as_bytes().contains(&b'_'));
     }
     let host = match request.host_without_port() {
@@ -154,6 +154,7 @@ pub(in crate::server) async fn dispatch_http_request(
                     limit_rate: response_rate(&server.context, &variables),
                     server_tokens: server.context.server_tokens,
                     chunked_transfer_encoding: server.context.chunked_transfer_encoding,
+                    sendfile: false,
                     http2_chunk_size: server.context.http2_limits.chunk_size,
                     close: ConnectionCloseConfig::from(&server.context),
                     _body_file_guard: None,
@@ -253,6 +254,7 @@ pub(in crate::server) async fn dispatch_http_request(
                     limit_rate: ResponseRate::default(),
                     server_tokens: processed.context.server_tokens,
                     chunked_transfer_encoding: processed.context.chunked_transfer_encoding,
+                    sendfile: processed.context.sendfile && !group.ssl,
                     http2_chunk_size: processed.context.http2_limits.chunk_size,
                     close: ConnectionCloseConfig::from(&processed.context),
                     _body_file_guard: None,
@@ -306,6 +308,7 @@ pub(in crate::server) async fn dispatch_http_request(
             limit_rate: ResponseRate::default(),
             server_tokens: processed.context.server_tokens,
             chunked_transfer_encoding: processed.context.chunked_transfer_encoding,
+            sendfile: false,
             http2_chunk_size: processed.context.http2_limits.chunk_size,
             close: ConnectionCloseConfig::from(&processed.context),
             _body_file_guard: variables.request_body_file_guard.clone(),
@@ -464,6 +467,7 @@ pub(in crate::server) async fn dispatch_http_request(
         limit_rate,
         server_tokens: processed.context.server_tokens,
         chunked_transfer_encoding: processed.context.chunked_transfer_encoding,
+        sendfile: processed.context.sendfile && !group.ssl,
         http2_chunk_size: processed.context.http2_limits.chunk_size,
         close: ConnectionCloseConfig::from(&processed.context),
         _body_file_guard: variables.request_body_file_guard.clone(),

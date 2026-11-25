@@ -25,10 +25,11 @@ fn default_tunnel_target_uses_the_connect_authority_port() {
         method: "CONNECT".into(),
         target: "example.test:8443".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Host".into(),
             value: "example.test:8443".into(),
-        }],
+        }])
+        .into(),
         body: Vec::new(),
         body_stream: None,
         remote_addr: "127.0.0.1:40000".into(),

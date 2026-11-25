@@ -73,6 +73,7 @@ impl EffectiveConfig {
             userid: UserIdConfig::default(),
             browser: BrowserConfig::default(),
             sendfile: false,
+            open_file_cache: Arc::new(OpenFileCacheConfig::default()),
             dav: DavConfig::default(),
             log_not_found: true,
             log_subrequest: false,

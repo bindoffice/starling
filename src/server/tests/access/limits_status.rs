@@ -170,10 +170,11 @@ fn tracks_connection_limit_guards() {
         method: "GET".into(),
         target: "/".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Host".into(),
             value: "localhost".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),
@@ -226,10 +227,11 @@ async fn releases_a_connection_limit_owner_after_its_client_closes() {
         method: "GET".into(),
         target: "/".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Host".into(),
             value: "localhost".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),
@@ -288,10 +290,11 @@ async fn keeps_connection_limit_guard_alive_after_request_processing() {
         method: "GET".into(),
         target: "/".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Host".into(),
             value: "localhost".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),

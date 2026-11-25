@@ -106,7 +106,7 @@ async fn small_buffered_fastcgi_requests_are_written_as_one_record_batch() {
     let context = &server.locations[0].context;
     let mut request = plain_request("/", "127.0.0.1:18145");
     request.method = "POST".into();
-    request.headers.push(Header {
+    Arc::make_mut(&mut request.headers).push(Header {
         name: "Content-Length".into(),
         value: "6".into(),
     });
@@ -160,7 +160,7 @@ async fn queued_preread_body_is_written_with_the_fastcgi_header_batch() {
     drop(sender);
     let mut request = plain_request("/", "127.0.0.1:18146");
     request.method = "POST".into();
-    request.headers.push(Header {
+    Arc::make_mut(&mut request.headers).push(Header {
         name: "Content-Length".into(),
         value: "5".into(),
     });
@@ -219,7 +219,7 @@ async fn final_streaming_body_chunk_and_terminal_record_share_a_write() {
     let (sender, stream) = crate::http::RequestBodyStream::channel();
     let mut request = plain_request("/", "127.0.0.1:18148");
     request.method = "POST".into();
-    request.headers.push(Header {
+    Arc::make_mut(&mut request.headers).push(Header {
         name: "Content-Length".into(),
         value: "10".into(),
     });
@@ -290,7 +290,7 @@ async fn file_backed_fastcgi_bodies_larger_than_one_record_are_sent_in_full() {
     ));
     let mut request = plain_request("/", "127.0.0.1:18147");
     request.method = "POST".into();
-    request.headers.push(Header {
+    Arc::make_mut(&mut request.headers).push(Header {
         name: "Content-Length".into(),
         value: body.len().to_string(),
     });

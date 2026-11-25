@@ -268,6 +268,9 @@ pub(super) fn compile_conditional(
                 seen_sendfile = true;
                 config.sendfile = parse_flag(child, "sendfile")?;
             }
+            "open_file_cache_events" => {
+                parse_flag(child, "open_file_cache_events")?;
+            }
             "limit_rate" => {
                 require_location_scope(child, scope)?;
                 if seen_limit_rate {

@@ -1,5 +1,8 @@
 use super::*;
 
+mod open_file_cache;
+use open_file_cache::open_cached;
+
 pub(super) async fn serve_static(
     request: &Request,
     env: &RequestEnv,

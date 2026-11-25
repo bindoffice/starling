@@ -72,7 +72,7 @@ fn cacheable_fastcgi_requests_clear_client_conditional_headers() {
         ("Range", "bytes=0-1"),
         ("If-Range", "\"client\""),
     ] {
-        request.headers.push(Header {
+        Arc::make_mut(&mut request.headers).push(Header {
             name: name.into(),
             value: value.into(),
         });

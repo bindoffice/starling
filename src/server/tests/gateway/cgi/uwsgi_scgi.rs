@@ -27,7 +27,7 @@ async fn exchanges_uwsgi_packets_and_maps_cgi_headers() {
         method: "POST".into(),
         target: "/u/app?x=1".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "localhost".into(),
@@ -36,7 +36,8 @@ async fn exchanges_uwsgi_packets_and_maps_cgi_headers() {
                 name: "Content-Length".into(),
                 value: "5".into(),
             },
-        ],
+        ])
+        .into(),
         body_stream: None,
         body: b"hello".to_vec(),
         remote_addr: "127.0.0.1:45678".into(),
@@ -121,7 +122,7 @@ async fn exchanges_scgi_netstrings_and_maps_cgi_headers() {
         method: "POST".into(),
         target: "/s/app?x=1".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "localhost".into(),
@@ -130,7 +131,8 @@ async fn exchanges_scgi_netstrings_and_maps_cgi_headers() {
                 name: "Content-Length".into(),
                 value: "5".into(),
             },
-        ],
+        ])
+        .into(),
         body_stream: None,
         body: b"hello".to_vec(),
         remote_addr: "127.0.0.1:45678".into(),

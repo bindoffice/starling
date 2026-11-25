@@ -122,6 +122,7 @@ pub struct EffectiveConfig {
     pub userid: UserIdConfig,
     pub browser: BrowserConfig,
     pub sendfile: bool,
+    pub open_file_cache: Arc<OpenFileCacheConfig>,
     pub dav: DavConfig,
     pub log_not_found: bool,
     pub log_subrequest: bool,

@@ -90,7 +90,7 @@ async fn process_target(target: String, runtime: &mut Runtime<'_>) -> Result<Inc
     subrequest.target = env.unparsed_uri.clone().unwrap_or_else(|| uri.clone());
     subrequest.body.clear();
     subrequest.body_stream = None;
-    subrequest.headers.retain(|header| {
+    Arc::make_mut(&mut subrequest.headers).retain(|header| {
         !header.name.eq_ignore_ascii_case("content-length")
             && !header.name.eq_ignore_ascii_case("transfer-encoding")
             && !header.name.eq_ignore_ascii_case("expect")

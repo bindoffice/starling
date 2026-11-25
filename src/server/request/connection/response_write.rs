@@ -31,13 +31,43 @@ where
     } else {
         prepare_response_for_write(&mut outcome.response, &options)
     };
-    let write = write_prepared_response_with_scratch(
-        &mut writer,
-        &mut outcome.response,
-        options,
-        chunked,
-        scratch,
-    );
+    let sendfile = outcome.sendfile
+        && !chunked
+        && options.rate.rate == 0
+        && !request.method.eq_ignore_ascii_case("HEAD")
+        && control.is_some_and(ClientSocketControl::supports_sendfile)
+        && matches!(outcome.response.body, ResponseBody::File { .. });
+    let write = async {
+        if !sendfile {
+            return write_prepared_response_with_scratch(
+                &mut writer,
+                &mut outcome.response,
+                options,
+                chunked,
+                scratch,
+            )
+            .await;
+        }
+        let ResponseBody::File {
+            file,
+            offset,
+            length,
+        } = std::mem::replace(&mut outcome.response.body, ResponseBody::Empty)
+        else {
+            unreachable!("sendfile response body was checked above");
+        };
+        write_prepared_response_head(
+            &mut writer,
+            &outcome.response,
+            options.request_version,
+            scratch,
+        )
+        .await?;
+        control
+            .expect("sendfile requires client socket control")
+            .sendfile(&file, offset, length, outcome.send_timeout)
+            .await
+    };
     tokio::pin!(write);
     let result = if let Some(control) = control {
         tokio::select! {

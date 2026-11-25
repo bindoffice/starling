@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::http::buffer_pool::PooledBuffer;
+
 pub(super) async fn write_body<W: AsyncWrite + Unpin>(
     writer: &mut W,
     rate: ResponseRate,
@@ -233,7 +235,7 @@ async fn write_file_range<W: AsyncWrite + Unpin>(
 ) -> io::Result<()> {
     file.seek(SeekFrom::Start(offset)).await?;
     let mut remaining = length;
-    let mut buffer = vec![0_u8; 64 * 1024];
+    let mut buffer = PooledBuffer::acquire(64 * 1024);
     while remaining > 0 {
         let chunk_len = remaining.min(buffer.len() as u64) as usize;
         let read = file.read(&mut buffer[..chunk_len]).await?;
@@ -273,7 +275,7 @@ async fn write_chunked_file<W: AsyncWrite + Unpin>(
 ) -> io::Result<()> {
     file.seek(SeekFrom::Start(offset)).await?;
     let mut remaining = length;
-    let mut buffer = vec![0_u8; 64 * 1024];
+    let mut buffer = PooledBuffer::acquire(64 * 1024);
     while remaining > 0 {
         let chunk_len = remaining.min(buffer.len() as u64) as usize;
         let read = file.read(&mut buffer[..chunk_len]).await?;
@@ -320,7 +322,7 @@ async fn write_file_body<W: AsyncWrite + Unpin>(
 ) -> io::Result<()> {
     file.seek(SeekFrom::Start(offset)).await?;
     let mut remaining = length;
-    let mut buffer = vec![0_u8; 64 * 1024];
+    let mut buffer = PooledBuffer::acquire(64 * 1024);
     while remaining > 0 {
         let chunk_len = remaining.min(buffer.len() as u64) as usize;
         let read = file.read(&mut buffer[..chunk_len]).await?;

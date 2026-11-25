@@ -13,10 +13,11 @@ fn request(target: &str, body: &[u8]) -> Request {
         method: "POST".into(),
         target: target.into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Host".into(),
             value: "localhost".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: body.to_vec(),
         remote_addr: "127.0.0.1:45678".into(),

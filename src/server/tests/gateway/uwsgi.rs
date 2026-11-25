@@ -25,7 +25,7 @@ async fn appends_uwsgi_string_after_parameters_and_before_body() {
         method: "POST".into(),
         target: "/u/app".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "localhost".into(),
@@ -34,7 +34,8 @@ async fn appends_uwsgi_string_after_parameters_and_before_body() {
                 name: "Content-Length".into(),
                 value: "5".into(),
             },
-        ],
+        ])
+        .into(),
         body_stream: None,
         body: b"hello".to_vec(),
         remote_addr: "127.0.0.1:45678".into(),

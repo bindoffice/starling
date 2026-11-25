@@ -1,6 +1,97 @@
 use super::*;
 
 #[tokio::test]
+async fn sendfile_serves_large_static_files_over_plain_tcp() {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping sendfile runtime test: sockets not permitted");
+            return;
+        }
+        Err(error) => panic!("bind sendfile listener: {error}"),
+    };
+    let address = listener.local_addr().unwrap();
+    let source = format!(
+        r#"
+            worker_processes 1;
+            events {{ worker_connections 64; }}
+            http {{
+                server {{
+                    listen {address};
+                    root html;
+                    sendfile on;
+                    location / {{ }}
+                }}
+            }}
+        "#
+    );
+    let body = "starling-sendfile\n".repeat(16 * 1024);
+    let (prefix, config) = test_config(&source, &[("html/blob.bin", &body)]);
+    let group = build_listener_groups(&config)[0].clone();
+    let state = test_state(&config);
+    let server = tokio::spawn(async move {
+        let (stream, remote) = listener.accept().await.unwrap();
+        let (stream, control) =
+            ClientSocketControl::attach_tcp(stream).expect("attach socket control");
+        handle_http_connection_with_reset(
+            stream,
+            ConnectionAddresses::direct(ListenAddress::Inet(remote), ListenAddress::Inet(address)),
+            group,
+            state,
+            None,
+            control,
+        )
+        .await;
+    });
+
+    let mut client = TcpStream::connect(address).await.unwrap();
+    client
+        .write_all(b"GET /blob.bin HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut response = Vec::new();
+    client.read_to_end(&mut response).await.unwrap();
+    server.await.unwrap();
+
+    let (headers, received) = split_http_response(&response);
+    assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"), "{headers}");
+    assert!(
+        headers.contains(&format!("Content-Length: {}\r\n", body.len())),
+        "{headers}"
+    );
+    assert_eq!(received, body.as_bytes());
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
+async fn open_file_cache_reuses_the_opened_file_between_revalidations() {
+    let (prefix, config) = test_config(
+        r#"
+            worker_processes 1;
+            events { worker_connections 64; }
+            http {
+                open_file_cache max=4 inactive=1h;
+                open_file_cache_valid 1h;
+                server {
+                    listen 127.0.0.1:18151;
+                    root html;
+                    location / { }
+                }
+            }
+        "#,
+        &[("html/cached.txt", "first version\n")],
+    );
+    let request = "GET /cached.txt HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    let first = request_body(&config, request).await;
+    assert!(first.ends_with("first version\n"));
+
+    std::fs::write(prefix.join("html/cached.txt"), "second version\n").unwrap();
+    let second = request_body(&config, request).await;
+    assert!(second.ends_with("first version\n"), "{second}");
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[tokio::test]
 async fn serves_static_content_and_configuration_directives() {
     let (prefix, config) = test_config(
         r#"

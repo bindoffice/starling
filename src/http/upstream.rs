@@ -159,7 +159,7 @@ pub async fn read_request<R: AsyncBufReadExt + AsyncReadExt + Unpin>(
         method: head.method,
         target: head.target,
         version: head.version,
-        headers: head.headers,
+        headers: head.headers.into(),
         body,
         body_stream: None,
         remote_addr,

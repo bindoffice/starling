@@ -46,13 +46,14 @@ mod tests {
             method: "GET".into(),
             target: "/".into(),
             version: "HTTP/1.1".into(),
-            headers: range
+            headers: (range
                 .map(|range| Header {
                     name: "Range".into(),
                     value: range.into(),
                 })
                 .into_iter()
-                .collect(),
+                .collect::<Vec<_>>())
+            .into(),
             body_stream: None,
             body: Vec::new(),
             remote_addr: "127.0.0.1:1".into(),

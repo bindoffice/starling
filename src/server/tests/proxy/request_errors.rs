@@ -72,7 +72,7 @@ async fn truncated_file_backed_request_body_maps_to_500_and_truncates_upstream_b
         method: "POST".into(),
         target: "/".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "localhost".into(),
@@ -81,7 +81,8 @@ async fn truncated_file_backed_request_body_maps_to_500_and_truncates_upstream_b
                 name: "Content-Length".into(),
                 value: "8".into(),
             },
-        ],
+        ])
+        .into(),
         body_stream: Some(RequestBodyStream::from_file(file.clone())),
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),

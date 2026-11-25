@@ -43,19 +43,19 @@ impl CacheRevalidation {
     }
 
     pub(in crate::server) fn apply_to_request(&self, request: &mut Request) {
-        request.headers.retain(|header| {
+        Arc::make_mut(&mut request.headers).retain(|header| {
             !CACHE_CONDITIONAL_HEADERS
                 .iter()
                 .any(|name| header.name.eq_ignore_ascii_case(name))
         });
         if let Some(last_modified) = &self.last_modified {
-            request.headers.push(Header {
+            Arc::make_mut(&mut request.headers).push(Header {
                 name: "If-Modified-Since".into(),
                 value: last_modified.clone(),
             });
         }
         if let Some(etag) = &self.etag {
-            request.headers.push(Header {
+            Arc::make_mut(&mut request.headers).push(Header {
                 name: "If-None-Match".into(),
                 value: etag.clone(),
             });

@@ -18,7 +18,7 @@ pub(in crate::server) fn start_post_action(
     let server = server.clone();
     let mut request = request.clone();
     if request.body_stream.take().is_some() {
-        request.headers.retain(|header| {
+        Arc::make_mut(&mut request.headers).retain(|header| {
             !header.name.eq_ignore_ascii_case("content-length")
                 && !header.name.eq_ignore_ascii_case("transfer-encoding")
                 && !header.name.eq_ignore_ascii_case("expect")

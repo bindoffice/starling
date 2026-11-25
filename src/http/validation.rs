@@ -15,11 +15,8 @@ pub(crate) fn file_response_with_metadata(
 ) -> io::Result<Response> {
     const SMALL_FILE_MEMORY_LIMIT: u64 = 64 * 1024;
 
-    let modified = metadata.modified().ok();
     let body = if metadata.len() <= SMALL_FILE_MEMORY_LIMIT {
-        let mut body = Vec::with_capacity(metadata.len() as usize);
-        file.take(metadata.len()).read_to_end(&mut body)?;
-        ResponseBody::Bytes(body)
+        ResponseBody::Bytes(read_file_body(file, metadata.len())?)
     } else {
         ResponseBody::File {
             file: File::from_std(file),
@@ -27,6 +24,23 @@ pub(crate) fn file_response_with_metadata(
             length: metadata.len(),
         }
     };
+    Ok(response_with_body(body, metadata, content_type))
+}
+
+pub(crate) fn file_response_from_memory(
+    body: Vec<u8>,
+    metadata: &std::fs::Metadata,
+    content_type: String,
+) -> Response {
+    response_with_body(ResponseBody::Bytes(body), metadata, content_type)
+}
+
+fn response_with_body(
+    body: ResponseBody,
+    metadata: &std::fs::Metadata,
+    content_type: String,
+) -> Response {
+    let modified = metadata.modified().ok();
     let mut response = Response {
         status: 200,
         headers: vec![
@@ -53,7 +67,13 @@ pub(crate) fn file_response_with_metadata(
     if let Some(modified) = modified {
         response.add_header("Last-Modified", httpdate::fmt_http_date(modified));
     }
-    Ok(response)
+    response
+}
+
+pub(crate) fn read_file_body(file: std::fs::File, length: u64) -> io::Result<Vec<u8>> {
+    let mut body = Vec::with_capacity(length as usize);
+    file.take(length).read_to_end(&mut body)?;
+    Ok(body)
 }
 
 pub(in crate::http) fn is_token_byte(byte: u8) -> bool {

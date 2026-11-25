@@ -64,6 +64,8 @@ mod max_headers;
 mod memcached;
 #[path = "config_compat/msie.rs"]
 mod msie;
+#[path = "config_compat/open_file_cache.rs"]
+mod open_file_cache;
 #[path = "config_compat/open_log_file_cache.rs"]
 mod open_log_file_cache;
 #[path = "config_compat/post_action.rs"]

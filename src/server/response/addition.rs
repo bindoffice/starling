@@ -104,7 +104,7 @@ async fn addition_fragment(
     subrequest.method = "GET".into();
     subrequest.body.clear();
     subrequest.body_stream = None;
-    subrequest.headers.retain(|header| {
+    Arc::make_mut(&mut subrequest.headers).retain(|header| {
         !header.name.eq_ignore_ascii_case("content-length")
             && !header.name.eq_ignore_ascii_case("transfer-encoding")
             && !header.name.eq_ignore_ascii_case("expect")

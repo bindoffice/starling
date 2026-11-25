@@ -1,6 +1,8 @@
 use super::*;
-use crate::http::{BodySegment, ResponseStreamItem, is_forbidden_trailer_name};
-use bytes::{Buf, BytesMut};
+use crate::http::{
+    BodySegment, ResponseStreamItem, buffer_pool::PooledBuffer, is_forbidden_trailer_name,
+};
+use bytes::Bytes;
 
 pub(super) async fn send_h2_body(
     send: &mut h2::SendStream<Bytes>,
@@ -262,12 +264,12 @@ impl H2BodySender<'_> {
             ));
         }
         let mut file_remaining = length;
-        let mut buffer = vec![0_u8; self.chunk_size];
-        let mut pending = BytesMut::with_capacity(self.chunk_size);
-        while file_remaining > 0 || !pending.is_empty() {
-            while file_remaining > 0 && pending.len() < self.chunk_size {
-                let chunk_len =
-                    file_remaining.min((self.chunk_size - pending.len()) as u64) as usize;
+        let mut buffer = PooledBuffer::acquire(self.chunk_size);
+        let mut pending_start = 0;
+        let mut pending_end = 0;
+        while file_remaining > 0 || pending_start < pending_end {
+            if pending_start == pending_end && file_remaining > 0 {
+                let chunk_len = file_remaining.min(self.chunk_size as u64) as usize;
                 let read = match file.read(&mut buffer[..chunk_len]).await {
                     Ok(0) => {
                         self.send.send_reset(h2::Reason::INTERNAL_ERROR);
@@ -284,23 +286,29 @@ impl H2BodySender<'_> {
                 };
                 file_remaining -= read as u64;
                 self.remaining -= read as u64;
-                pending.extend_from_slice(&buffer[..read]);
+                pending_start = 0;
+                pending_end = read;
             }
 
-            if pending.is_empty() {
+            if pending_start == pending_end {
                 break;
             }
             let end_of_stream = self.remaining == 0 && !self.has_trailers;
-            match h2_send_data_available(self.send, &pending, end_of_stream, self.chunk_size) {
+            match h2_send_data_available(
+                self.send,
+                &buffer[pending_start..pending_end],
+                end_of_stream,
+                self.chunk_size,
+            ) {
                 Ok(0) => {}
                 Ok(sent) => {
-                    pending.advance(sent);
+                    pending_start += sent;
                     continue;
                 }
                 Err(err) => return Err(err),
             }
 
-            self.send.reserve_capacity(pending.len());
+            self.send.reserve_capacity(pending_end - pending_start);
             match std::future::poll_fn(|cx| self.send.poll_capacity(cx)).await {
                 Some(Ok(_)) => {}
                 Some(Err(err)) => return Err(io::Error::other(err)),

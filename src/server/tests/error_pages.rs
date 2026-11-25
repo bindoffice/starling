@@ -110,7 +110,7 @@ fn internal_redirect_keeps_buffered_body_but_discards_live_body() {
         method: "POST".into(),
         target: "/proxy".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "localhost".into(),
@@ -119,7 +119,8 @@ fn internal_redirect_keeps_buffered_body_but_discards_live_body() {
                 name: "Content-Length".into(),
                 value: "7".into(),
             },
-        ],
+        ])
+        .into(),
         body: b"payload".to_vec(),
         body_stream: None,
         remote_addr: "127.0.0.1:45678".into(),

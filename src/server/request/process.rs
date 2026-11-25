@@ -313,12 +313,13 @@ pub(super) fn tunnel_request_outcome(
 }
 
 fn sync_upstream_response_variables(variables: &mut Variables, response: &Response) {
-    variables
-        .upstream_headers
-        .clone_from(&response.upstream_headers().to_vec());
-    variables
-        .upstream_trailers
-        .clone_from(&response.upstream_trailers().to_vec());
+    let headers = response.upstream_headers();
+    let trailers = response.upstream_trailers();
+    if headers.is_empty() && trailers.is_empty() {
+        return;
+    }
+    variables.upstream_headers.clone_from(&headers.to_vec());
+    variables.upstream_trailers.clone_from(&trailers.to_vec());
 }
 
 fn consume_uri_change(uri_changes: &mut usize) -> bool {

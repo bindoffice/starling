@@ -26,7 +26,7 @@ fn evaluates_early_hint_predicates_with_nginx_truthiness() {
         method: "GET".into(),
         target: "/disabled/?preload=1".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "localhost".into(),
@@ -35,7 +35,8 @@ fn evaluates_early_hint_predicates_with_nginx_truthiness() {
                 name: "Link".into(),
                 value: "</style.css>; rel=preload".into(),
             },
-        ],
+        ])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),
@@ -56,7 +57,7 @@ fn evaluates_early_hint_predicates_with_nginx_truthiness() {
     ));
 
     let mut zero = variables.clone();
-    zero.headers[1].value = "0".into();
+    Arc::make_mut(&mut zero.headers)[1].value = "0".into();
     zero.args.clear();
     assert!(!should_send_early_hints(
         &server.locations[0].context.early_hints,

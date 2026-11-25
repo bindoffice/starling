@@ -30,21 +30,29 @@ pub(super) fn apply_connection_variables(
     }
     variables.realip_remote_addr = Some(connection.remote_addr_text.clone());
     variables.realip_remote_port = Some(connection.remote_port_text.clone());
-    variables.proxy_protocol_port = connection
-        .proxy_protocol_port
-        .map(|port| port.to_string())
-        .unwrap_or_default();
-    variables.proxy_protocol_server_addr = connection
-        .proxy_protocol_server_addr
-        .map(|address| address.to_string())
-        .unwrap_or_default();
-    variables.proxy_protocol_server_port = connection
-        .proxy_protocol_server_port
-        .map(|port| port.to_string())
-        .unwrap_or_default();
-    variables.proxy_protocol_tlvs = connection.proxy_protocol_tlvs.clone();
-    variables.proxy_protocol_addr = connection
-        .proxy_protocol_addr
-        .map(|address| address.to_string())
-        .unwrap_or_default();
+    if connection.proxy_protocol_addr.is_some()
+        || connection.proxy_protocol_port.is_some()
+        || connection.proxy_protocol_server_addr.is_some()
+        || connection.proxy_protocol_server_port.is_some()
+        || connection.proxy_protocol_tlvs.is_some()
+    {
+        let cold = variables.cold_mut();
+        cold.proxy_protocol_addr = connection
+            .proxy_protocol_addr
+            .map(|address| address.to_string())
+            .unwrap_or_default();
+        cold.proxy_protocol_port = connection
+            .proxy_protocol_port
+            .map(|port| port.to_string())
+            .unwrap_or_default();
+        cold.proxy_protocol_server_addr = connection
+            .proxy_protocol_server_addr
+            .map(|address| address.to_string())
+            .unwrap_or_default();
+        cold.proxy_protocol_server_port = connection
+            .proxy_protocol_server_port
+            .map(|port| port.to_string())
+            .unwrap_or_default();
+        cold.proxy_protocol_tlvs = connection.proxy_protocol_tlvs.clone();
+    }
 }

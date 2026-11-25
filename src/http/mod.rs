@@ -10,6 +10,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWr
 
 use crate::SERVER_SOFTWARE;
 
+pub(crate) mod buffer_pool;
+
 pub const MAX_HEADER_BYTES: usize = 64 * 1024;
 pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
@@ -18,7 +20,7 @@ pub struct Request {
     pub method: String,
     pub target: String,
     pub version: String,
-    pub headers: Vec<Header>,
+    pub headers: Arc<Vec<Header>>,
     pub body: Vec<u8>,
     pub body_stream: Option<RequestBodyStream>,
     pub remote_addr: String,

@@ -145,7 +145,7 @@ fn trusts_unix_peers_for_http_real_ip_rewrites() {
         method: "GET".into(),
         target: "/".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "localhost".into(),
@@ -154,7 +154,8 @@ fn trusts_unix_peers_for_http_real_ip_rewrites() {
                 name: "X-Forwarded-For".into(),
                 value: "203.0.113.10".into(),
             },
-        ],
+        ])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "unix:/tmp/client.sock".into(),

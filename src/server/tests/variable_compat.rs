@@ -21,10 +21,11 @@ fn packs_binary_remote_addr_for_limit_keys() {
         method: "GET".into(),
         target: "/".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Host".into(),
             value: "localhost".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),
@@ -46,6 +47,50 @@ fn packs_binary_remote_addr_for_limit_keys() {
         eval_variables_bytes("prefix:$binary_remote_addr", &variables),
         expected
     );
+    let _ = std::fs::remove_dir_all(prefix);
+}
+
+#[test]
+fn shares_request_headers_until_a_request_copy_is_mutated() {
+    let (prefix, config) = test_config(
+        r#"
+            worker_processes 1;
+            events { worker_connections 64; }
+            http {
+                server {
+                    listen 127.0.0.1:18574;
+                    location / { return 204; }
+                }
+            }
+        "#,
+        &[],
+    );
+    let server = &config.http.as_ref().unwrap().servers[0];
+    let request = Request {
+        method: "GET".into(),
+        target: "/".into(),
+        version: "HTTP/1.1".into(),
+        headers: (vec![Header {
+            name: "Host".into(),
+            value: "localhost".into(),
+        }])
+        .into(),
+        body_stream: None,
+        body: Vec::new(),
+        remote_addr: "127.0.0.1:45678".into(),
+        local_addr: "127.0.0.1:18574".into(),
+        keep_alive: false,
+    };
+    let remote: SocketAddr = "127.0.0.1:45678".parse().unwrap();
+    let local: SocketAddr = "127.0.0.1:18574".parse().unwrap();
+    let variables = Variables::new(&request, "localhost", server, &local, &remote);
+    assert!(Arc::ptr_eq(&request.headers, &variables.headers));
+
+    let mut copied = request.clone();
+    assert!(Arc::ptr_eq(&request.headers, &copied.headers));
+    Arc::make_mut(&mut copied.headers)[0].value = "changed.test".into();
+    assert_eq!(request.headers[0].value, "localhost");
+    assert_eq!(copied.headers[0].value, "changed.test");
     let _ = std::fs::remove_dir_all(prefix);
 }
 

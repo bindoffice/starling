@@ -63,7 +63,7 @@ pub(in crate::server) fn build_proxy_request(
     }
     let mut headers = Vec::new();
     if context.proxy_pass_request_headers {
-        for header in &request.headers {
+        for header in request.headers.iter() {
             if skip_headers.contains(&header.name.to_ascii_lowercase()) {
                 continue;
             }

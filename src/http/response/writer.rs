@@ -60,6 +60,18 @@ pub(crate) async fn write_prepared_response_with_scratch<W: AsyncWrite + Unpin>(
     Ok(())
 }
 
+pub(crate) async fn write_prepared_response_head<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    response: &Response,
+    request_version: &str,
+    scratch: &mut Vec<u8>,
+) -> io::Result<()> {
+    write_early_hints(writer, response.early_hints(), request_version).await?;
+    build_response_head_into(response, scratch);
+    writer.write_all(scratch).await?;
+    writer.flush().await
+}
+
 pub(crate) fn prepare_response_for_write(
     response: &mut Response,
     options: &ResponseWriteOptions<'_>,

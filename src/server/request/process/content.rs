@@ -191,11 +191,14 @@ pub(super) async fn serve_content(
         }
     };
     set_streamed_request_body_variable(request, variables).await;
-    variables.response_from_upstream = kind.upstream()
+    let response_from_upstream = kind.upstream()
         && !matches!(
             variables.upstream_cache_status.as_str(),
             "HIT" | "STALE" | "UPDATING" | "REVALIDATED"
         );
+    if response_from_upstream || variables.response_from_upstream != response_from_upstream {
+        variables.response_from_upstream = response_from_upstream;
+    }
     if preserve_on_client_abort {
         response.mark_preserve_on_client_abort();
     }

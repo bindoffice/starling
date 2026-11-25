@@ -63,7 +63,7 @@ async fn truncated_file_backed_request_body_maps_to_500_without_retry() {
         method: "POST".into(),
         target: "/pkg.Service/Call".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![
+        headers: (vec![
             Header {
                 name: "Host".into(),
                 value: "localhost".into(),
@@ -72,18 +72,19 @@ async fn truncated_file_backed_request_body_maps_to_500_without_retry() {
                 name: "Content-Length".into(),
                 value: "8".into(),
             },
-        ],
+        ])
+        .into(),
         body_stream: Some(stream),
         body: Vec::new(),
         remote_addr: "127.0.0.1:45678".into(),
         local_addr: "127.0.0.1:18597".into(),
         keep_alive: false,
     };
-    request.headers.push(Header {
+    Arc::make_mut(&mut request.headers).push(Header {
         name: "Content-Type".into(),
         value: "application/grpc".into(),
     });
-    request.headers.push(Header {
+    Arc::make_mut(&mut request.headers).push(Header {
         name: "TE".into(),
         value: "trailers".into(),
     });

@@ -26,10 +26,11 @@ fn builds_nginx_compatible_proxy_paths() {
         method: "GET".into(),
         target: "/rewrite/a%20b?x=1".into(),
         version: "HTTP/1.1".into(),
-        headers: vec![Header {
+        headers: (vec![Header {
             name: "Host".into(),
             value: "localhost".into(),
-        }],
+        }])
+        .into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:1234".into(),

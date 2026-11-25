@@ -53,7 +53,7 @@ fn next_upstream_state_enforces_defaults_methods_and_tries() {
         method: "GET".into(),
         target: "/".into(),
         version: "HTTP/1.1".into(),
-        headers: Vec::new(),
+        headers: (Vec::new()).into(),
         body_stream: None,
         body: Vec::new(),
         remote_addr: "127.0.0.1:1234".into(),

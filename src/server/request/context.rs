@@ -391,8 +391,11 @@ pub(in crate::server) fn refresh_variables(
         .iter()
         .find(|header| header.name.eq_ignore_ascii_case("referer"))
         .map(|header| header.value.as_str());
-    variables.invalid_referer =
+    let invalid_referer =
         invalid_referer_value(&context.valid_referers, referer, &variables.server_names);
+    if variables.invalid_referer != invalid_referer {
+        variables.invalid_referer = invalid_referer;
+    }
     refresh_secure_link(&context.secure_link, variables);
     refresh_browser_variables(&context.browser, variables);
 }

@@ -117,10 +117,11 @@ async fn applies_rewrite_log_and_uninitialized_variable_warning_at_runtime() {
             method: "GET".into(),
             target: target.into(),
             version: "HTTP/1.1".into(),
-            headers: vec![Header {
+            headers: (vec![Header {
                 name: "Host".into(),
                 value: "localhost".into(),
-            }],
+            }])
+            .into(),
             body_stream: None,
             body: Vec::new(),
             remote_addr: remote.to_string(),

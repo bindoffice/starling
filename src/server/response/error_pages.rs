@@ -279,7 +279,7 @@ pub(in crate::server) fn internal_redirect_request(request: &Request) -> Request
         internal.body.clear();
         internal.body_stream = None;
     }
-    internal.headers.retain(|header| {
+    Arc::make_mut(&mut internal.headers).retain(|header| {
         !header.name.eq_ignore_ascii_case("content-length")
             && !header.name.eq_ignore_ascii_case("transfer-encoding")
             && !header.name.eq_ignore_ascii_case("expect")

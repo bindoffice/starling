@@ -183,7 +183,7 @@ pub(super) fn request_from_h2_parts(
             method: parts.method.as_str().to_string(),
             target,
             version: "HTTP/2.0".into(),
-            headers,
+            headers: headers.into(),
             body,
             body_stream: None,
             remote_addr,
