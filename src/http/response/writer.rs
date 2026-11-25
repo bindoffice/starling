@@ -1,5 +1,4 @@
 use super::*;
-use std::io::Write as _;
 
 mod body;
 
@@ -140,26 +139,13 @@ fn decimal_length(mut value: u16) -> usize {
 }
 
 fn build_response_head_into(response: &Response, head: &mut Vec<u8>) {
-    let header_bytes = response
-        .headers
-        .iter()
-        .map(|header| {
-            header
-                .name
-                .len()
-                .saturating_add(header_value_bytes(&header.value).len())
-                .saturating_add(4)
-        })
-        .sum::<usize>();
     head.clear();
-    head.reserve(header_bytes.saturating_add(64));
-    write!(
-        head,
-        "HTTP/1.1 {} {}\r\n",
-        response.status,
-        reason_phrase(response.status)
-    )
-    .expect("writing to a byte vector cannot fail");
+    head.reserve(response.headers.len().saturating_mul(32).saturating_add(64));
+    head.extend_from_slice(b"HTTP/1.1 ");
+    extend_decimal(head, response.status);
+    head.push(b' ');
+    head.extend_from_slice(reason_phrase(response.status).as_bytes());
+    head.extend_from_slice(b"\r\n");
     for header in &response.headers {
         head.extend_from_slice(header.name.as_bytes());
         head.extend_from_slice(b": ");
@@ -167,6 +153,20 @@ fn build_response_head_into(response: &Response, head: &mut Vec<u8>) {
         head.extend_from_slice(b"\r\n");
     }
     head.extend_from_slice(b"\r\n");
+}
+
+fn extend_decimal(output: &mut Vec<u8>, mut value: u16) {
+    let mut digits = [0; 5];
+    let mut index = digits.len();
+    loop {
+        index -= 1;
+        digits[index] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    output.extend_from_slice(&digits[index..]);
 }
 
 fn extend_sanitized_header_value(output: &mut Vec<u8>, value: &[u8]) {
@@ -217,5 +217,22 @@ mod tests {
         extend_sanitized_header_value(&mut output, b"first\r\nsecond\nthird");
 
         assert_eq!(output, b"first  second third");
+    }
+
+    #[test]
+    fn builds_the_response_head_without_generic_formatting() {
+        let mut response = Response::empty(204);
+        response.set_header("Date", "Thu, 01 Jan 1970 00:00:00 GMT");
+        let mut output = Vec::new();
+
+        build_response_head_into(&response, &mut output);
+
+        assert_eq!(
+            output,
+            b"HTTP/1.1 204 No Content\r\n\
+              Content-Length: 0\r\n\
+              Date: Thu, 01 Jan 1970 00:00:00 GMT\r\n\
+              \r\n"
+        );
     }
 }
