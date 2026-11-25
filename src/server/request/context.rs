@@ -386,15 +386,19 @@ pub(in crate::server) fn refresh_variables(
     variables.document_root = document_root_path(context, variables);
     variables.request_filename =
         map_request_path(context, location, &env.uri, env.add_uri_to_alias, variables);
-    let referer = variables
-        .headers
-        .iter()
-        .find(|header| header.name.eq_ignore_ascii_case("referer"))
-        .map(|header| header.value.as_str());
-    let invalid_referer =
-        invalid_referer_value(&context.valid_referers, referer, &variables.server_names);
-    if variables.invalid_referer != invalid_referer {
-        variables.invalid_referer = invalid_referer;
+    if context.valid_referers.is_configured() {
+        let referer = variables
+            .headers
+            .iter()
+            .find(|header| header.name.eq_ignore_ascii_case("referer"))
+            .map(|header| header.value.as_str());
+        let invalid_referer =
+            invalid_referer_value(&context.valid_referers, referer, &variables.server_names);
+        if variables.invalid_referer != invalid_referer {
+            variables.invalid_referer = invalid_referer;
+        }
+    } else if !variables.invalid_referer.is_empty() {
+        variables.invalid_referer.clear();
     }
     refresh_secure_link(&context.secure_link, variables);
     refresh_browser_variables(&context.browser, variables);
