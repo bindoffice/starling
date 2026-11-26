@@ -196,14 +196,17 @@ HTTP/2 小响应使用 8 个连接、每连接 16 个 stream、每轮 100 万请
 | HTTP/1.1 8 MiB 下载 | Nginx 1.31.9 | 4,165.32 req/s / 32.57 GiB/s | 7.700 ms | 13.330 ms | 0 |
 | HTTP/2 小响应 | Starling | 136,059 req/s | 0.902 ms | 1.145 ms | 0 |
 | HTTP/2 小响应 | Nginx 1.31.9 | 223,423 req/s | 0.568 ms | 1.110 ms | 0 |
-| HTTP/2 8 MiB 下载 | Starling | 203.11 req/s / 1.590 GiB/s | 157.294 ms | 167.041 ms | 0 |
+| HTTP/2 8 MiB 下载 | Starling | 1,448.15 req/s / 10.54 GiB/s | 22.300 ms | 45.378 ms | 0 |
 | HTTP/2 8 MiB 下载 | Nginx 1.31.9 | 1,050.55 req/s / 8.220 GiB/s | 28.444 ms | 36.162 ms | 0 |
 
 HTTP/1.1 小响应下 Starling 达到 Nginx 的 71.5%，约落后 1.40 倍；HTTP/2 小响应
 达到 60.9%，约落后 1.64 倍。8 MiB HTTP/1.1 下载的吞吐已基本持平（99.1%），但
-Starling p99 高约 19.7%；HTTP/2 8 MiB 下载则是当前明确瓶颈，Starling 吞吐约为
-Nginx 的 19.3%。H1/H2 与 H3 使用不同传输栈，不能把某一协议的倍率直接外推到
-其他协议。
+Starling p99 高约 19.7%。HTTP/2 8 MiB 下载优化后达到 Nginx 的 137.9%，约为
+优化前 203.11 req/s 的 7.13 倍；p99 仍比 Nginx 高约 25.5%，长尾还有继续优化
+空间。该路径在 Linux 明文 TCP 且 `sendfile on` 时由 h2 直接通过内核 `sendfile`
+发送 DATA，并用 `MSG_MORE` + `TCP_CORK` 合并帧头与正文；TLS、UNIX socket、
+非 Linux 平台或 `sendfile off` 会自动回退到内存读取路径。H1/H2 与 H3 使用不同
+传输栈，不能把某一协议的倍率直接外推到其他协议。
 
 可复现命令：
 

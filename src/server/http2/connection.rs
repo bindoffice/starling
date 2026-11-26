@@ -54,6 +54,7 @@ pub(super) struct H2ConnectionContext {
     pub(super) group: ListenerGroup,
     pub(super) state: SharedState,
     pub(super) nodelay: Option<ClientSocketControl>,
+    pub(super) sendfile_supported: bool,
     pub(super) shutdown: Option<watch::Receiver<ShutdownMode>>,
     pub(super) frame_timeouts: FrameTimeoutTracker,
     pub(super) frame_timeout_events: FrameTimeoutEvents,
@@ -72,6 +73,7 @@ pub(super) async fn serve_connection<S>(
         group,
         state,
         nodelay,
+        sendfile_supported,
         mut shutdown,
         frame_timeouts,
         mut frame_timeout_events,
@@ -303,6 +305,7 @@ pub(super) async fn serve_connection<S>(
             served_requests: accepted_requests,
             body_preread_size: settings.limits.body_preread_size,
             settings_acked: settings_acked.clone(),
+            sendfile_supported,
         };
         let connection_fault = connection_fault.clone();
         streams.spawn(async move {

@@ -127,6 +127,7 @@ use bytes::{Buf, Bytes};
 use http::{HeaderMap, Method, Request, Response};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use std::{fmt, io};
@@ -391,12 +392,16 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
     B: Buf,
 {
-    fn handshake2(io: T, builder: Builder) -> Handshake<T, B> {
+    fn handshake2(
+        io: T,
+        builder: Builder,
+        send_file_sink: Option<Arc<dyn frame::SendFileSink>>,
+    ) -> Handshake<T, B> {
         let span = tracing::trace_span!("server_handshake");
         let entered = span.enter();
 
         // Create the codec.
-        let mut codec = Codec::new(io);
+        let mut codec = Codec::new_with_sendfile_sink(io, send_file_sink);
 
         if let Some(max) = builder.settings.max_frame_size() {
             codec.set_max_recv_frame_size(max as usize);
@@ -1190,7 +1195,21 @@ impl Builder {
         T: AsyncRead + AsyncWrite + Unpin,
         B: Buf,
     {
-        Connection::handshake2(io, self.clone())
+        Connection::handshake2(io, self.clone(), None)
+    }
+
+    /// Perform a server handshake with a sink that can write DATA payloads
+    /// directly from files.
+    pub fn handshake_with_sendfile_sink<T, B>(
+        &self,
+        io: T,
+        send_file_sink: Arc<dyn frame::SendFileSink>,
+    ) -> Handshake<T, B>
+    where
+        T: AsyncRead + AsyncWrite + Unpin,
+        B: Buf,
+    {
+        Connection::handshake2(io, self.clone(), Some(send_file_sink))
     }
 }
 

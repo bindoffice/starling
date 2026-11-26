@@ -9,6 +9,7 @@ use crate::{client, proto, server};
 
 use bytes::{Buf, Bytes};
 use http::{HeaderMap, Request, Response};
+use std::fs::File;
 use std::task::{Context, Poll, Waker};
 use tokio::io::AsyncWrite;
 
@@ -1481,6 +1482,37 @@ impl<B> Clone for StreamRef<B> {
             opaque: self.opaque.clone(),
             send_buffer: self.send_buffer.clone(),
         }
+    }
+}
+
+impl StreamRef<Bytes> {
+    pub fn send_file(
+        &mut self,
+        file: Arc<File>,
+        offset: u64,
+        len: usize,
+        end_stream: bool,
+    ) -> Result<(), UserError> {
+        let mut me = self.opaque.inner.lock().unwrap();
+        let me = &mut *me;
+
+        let stream = me.store.resolve(self.opaque.key);
+        let actions = &mut me.actions;
+        let mut send_buffer = self.send_buffer.inner.lock().unwrap();
+        let send_buffer = &mut *send_buffer;
+
+        me.counts.transition(stream, |counts, stream| {
+            let mut frame = frame::Data::new_file(
+                stream.id,
+                Bytes::new(),
+                frame::SendFile::new(file, offset, len),
+            );
+            frame.set_end_stream(end_stream);
+
+            actions
+                .send
+                .send_data(frame, send_buffer, stream, counts, &mut actions.task)
+        })
     }
 }
 

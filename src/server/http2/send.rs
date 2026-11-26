@@ -14,6 +14,27 @@ pub(in crate::server) async fn send_h2_response(
         server_tokens,
         chunk_size,
         false,
+        false,
+    )
+    .await
+}
+
+pub(in crate::server) async fn send_h2_response_with_sendfile(
+    respond: SendResponse<Bytes>,
+    response: Response,
+    request_method: &str,
+    server_tokens: ServerTokens,
+    chunk_size: usize,
+    sendfile: bool,
+) -> io::Result<()> {
+    send_h2_response_inner(
+        respond,
+        response,
+        request_method,
+        server_tokens,
+        chunk_size,
+        sendfile,
+        false,
     )
     .await
 }
@@ -31,6 +52,7 @@ pub(in crate::server) async fn send_h2_response_discarding_request_body(
         request_method,
         server_tokens,
         chunk_size,
+        false,
         true,
     )
     .await
@@ -42,6 +64,7 @@ async fn send_h2_response_inner(
     request_method: &str,
     server_tokens: ServerTokens,
     chunk_size: usize,
+    sendfile: bool,
     discard_request_body: bool,
 ) -> io::Result<()> {
     prepare_response_headers(&mut response, server_tokens);
@@ -78,14 +101,21 @@ async fn send_h2_response_inner(
     }
 
     let body = std::mem::replace(&mut response.body, ResponseBody::Empty);
-    let mut trailers =
-        match super::body::send_h2_body(&mut send, body, has_trailers, chunk_size).await {
-            Ok(trailers) => trailers,
-            Err(error) => {
-                send.send_reset(h2_reset_reason(&error));
-                return Err(error);
-            }
-        };
+    let mut trailers = match super::body::send_h2_body(
+        &mut send,
+        body,
+        has_trailers,
+        chunk_size,
+        sendfile,
+    )
+    .await
+    {
+        Ok(trailers) => trailers,
+        Err(error) => {
+            send.send_reset(h2_reset_reason(&error));
+            return Err(error);
+        }
+    };
     if has_trailers {
         trailers.extend(response.trailers.iter().cloned());
     }

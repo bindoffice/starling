@@ -24,7 +24,7 @@ pub(in crate::server) use request::{
 use request::{receive_header_list_limit, request_from_h2_parts};
 pub(in crate::server) use send::{
     h2_header_name, h2_header_value, is_h2_connection_header, send_h2_response,
-    send_h2_response_discarding_request_body,
+    send_h2_response_discarding_request_body, send_h2_response_with_sendfile,
 };
 
 // Let the frame-level tracker win the race for a partially received DATA
@@ -50,6 +50,11 @@ pub(super) async fn handle_h2<S>(
     let (frame_timeouts, frame_timeout_events) =
         FrameTimeoutTracker::new(settings.header_timeout, settings.body_timeout);
     let settings_acked = Arc::new(AtomicBool::new(false));
+    let sendfile_sink = nodelay
+        .as_ref()
+        .filter(|control| !group.ssl && control.supports_h2_sendfile())
+        .map(|control| Arc::new(control.clone()) as Arc<dyn h2::SendFileSink>);
+    let sendfile_supported = sendfile_sink.is_some();
     let stream = FrameValidatedStream::new(
         stream,
         settings.max_header_field_size,
@@ -65,10 +70,14 @@ pub(super) async fn handle_h2<S>(
         .initial_connection_window_size(i32::MAX as u32)
         .max_header_list_size(receive_header_list_limit(limits.max_header_list_size));
     let handshake = async {
+        let handshake = match sendfile_sink {
+            Some(sink) => builder.handshake_with_sendfile_sink(stream, sink),
+            None => builder.handshake(stream),
+        };
         if settings.header_timeout == Duration::ZERO {
-            Some(builder.handshake(stream).await)
+            Some(handshake.await)
         } else {
-            tokio::time::timeout(settings.header_timeout, builder.handshake(stream))
+            tokio::time::timeout(settings.header_timeout, handshake)
                 .await
                 .ok()
         }
@@ -105,6 +114,7 @@ pub(super) async fn handle_h2<S>(
             group,
             state,
             nodelay,
+            sendfile_supported,
             shutdown,
             frame_timeouts,
             frame_timeout_events,
@@ -132,6 +142,7 @@ pub(super) async fn handle_h2_request(
         served_requests,
         body_preread_size,
         settings_acked,
+        sendfile_supported,
     } = options;
     let (parts, mut body) = request.into_parts();
     let method = parts.method.as_str().to_string();
@@ -367,6 +378,7 @@ pub(super) async fn handle_h2_request(
     send_h2_early_hints(&mut respond, outcome.response.early_hints())?;
     let send_timeout = outcome.send_timeout;
     let deferred_access_log = outcome.deferred_access_log;
+    let sendfile = outcome.sendfile && sendfile_supported;
     let send = async {
         if discard_request_body {
             send_h2_response_discarding_request_body(
@@ -378,12 +390,13 @@ pub(super) async fn handle_h2_request(
             )
             .await
         } else {
-            send_h2_response(
+            send_h2_response_with_sendfile(
                 respond,
                 outcome.response,
                 &request.method,
                 outcome.server_tokens,
                 outcome.http2_chunk_size,
+                sendfile,
             )
             .await
         }
@@ -404,6 +417,7 @@ pub(super) struct H2RequestOptions {
     pub(super) served_requests: u64,
     pub(super) body_preread_size: u32,
     pub(super) settings_acked: Arc<AtomicBool>,
+    pub(super) sendfile_supported: bool,
 }
 
 enum BodyTaskOutcome {

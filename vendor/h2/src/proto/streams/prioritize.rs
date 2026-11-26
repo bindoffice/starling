@@ -98,6 +98,9 @@ pub(crate) struct Prioritized<B> {
 
     // The stream that this is associated with
     stream: store::Key,
+
+    // Bytes from a file-backed DATA payload assigned to this frame.
+    file_len: Option<usize>,
 }
 
 // ===== impl Prioritize =====
@@ -282,7 +285,7 @@ impl Prioritize {
     where
         B: Buf,
     {
-        let sz = frame.payload().remaining();
+        let sz = frame.data_len();
 
         if sz > MAX_WINDOW_SIZE as usize {
             return Err(UserError::PayloadTooBig);
@@ -729,14 +732,14 @@ impl Prioritize {
         &mut self,
         buffer: &mut Buffer<Frame<B>>,
         store: &mut Store,
-        frame: frame::Data<Prioritized<B>>,
+        mut frame: frame::Data<Prioritized<B>>,
     ) -> bool
     where
         B: Buf,
     {
         tracing::trace!(
             ?frame,
-            sz = frame.payload().inner.get_ref().remaining(),
+            sz = frame.payload().remaining(),
             "reclaimed"
         );
 
@@ -754,13 +757,15 @@ impl Prioritize {
             }
         }
 
+        let send_file = frame.take_send_file();
         let mut frame = frame.map(|prioritized| {
             // TODO: Ensure fully written
             eos = prioritized.end_of_stream;
             prioritized.inner.into_inner()
         });
+        frame.set_send_file(send_file);
 
-        if frame.payload().has_remaining() {
+        if frame.data_len() > 0 {
             let mut stream = store.resolve(key);
 
             if eos {
@@ -878,7 +883,7 @@ impl Prioritize {
                     // Get the amount of capacity remaining for stream's
                     // window.
                     let stream_capacity = stream.send_flow.available();
-                    let sz = frame.payload().remaining();
+                    let sz = frame.data_len();
 
                     tracing::trace!(
                         sz,
@@ -954,17 +959,22 @@ impl Prioritize {
                             let eos = frame.is_end_stream();
                             let len = len as usize;
 
-                            if frame.payload().remaining() > len {
+                            if frame.data_len() > len {
                                 frame.set_end_stream(false);
                             }
                             (eos, len)
                         });
 
-                    Frame::Data(frame.map(|buf| Prioritized {
+                    let send_file = frame.take_send_file();
+                    let file_len = send_file.as_ref().map(|_| len);
+                    let mut frame = frame.map(|buf| Prioritized {
                         inner: buf.take(len),
                         end_of_stream: eos,
                         stream: stream.key(),
-                    }))
+                        file_len,
+                    });
+                    frame.set_send_file(send_file);
+                    Frame::Data(frame)
                 }
                 Some(Frame::PushPromise(pp)) => {
                     let mut pushed = stream.store_mut().find_mut(&pp.promised_id()).unwrap();
@@ -1120,28 +1130,41 @@ where
     B: Buf,
 {
     fn remaining(&self) -> usize {
-        self.inner.remaining()
+        self.file_len.unwrap_or_else(|| self.inner.remaining())
     }
 
     fn chunk(&self) -> &[u8] {
-        self.inner.chunk()
+        if self.file_len.is_some() {
+            &[]
+        } else {
+            self.inner.chunk()
+        }
     }
 
     fn chunks_vectored<'a>(&'a self, dst: &mut [std::io::IoSlice<'a>]) -> usize {
-        self.inner.chunks_vectored(dst)
+        if self.file_len.is_some() {
+            0
+        } else {
+            self.inner.chunks_vectored(dst)
+        }
     }
 
     fn advance(&mut self, cnt: usize) {
-        self.inner.advance(cnt)
+        if let Some(file_len) = &mut self.file_len {
+            *file_len -= cnt.min(*file_len);
+        } else {
+            self.inner.advance(cnt);
+        }
     }
 }
 
 impl<B: Buf> fmt::Debug for Prioritized<B> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_struct("Prioritized")
-            .field("remaining", &self.inner.get_ref().remaining())
+            .field("remaining", &self.remaining())
             .field("end_of_stream", &self.end_of_stream)
             .field("stream", &self.stream)
+            .field("file_len", &self.file_len)
             .finish()
     }
 }

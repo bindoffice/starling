@@ -14,6 +14,7 @@ use bytes::Buf;
 use futures_core::Stream;
 use futures_sink::Sink;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::length_delimited;
@@ -36,10 +37,29 @@ where
         Self::with_max_recv_frame_size(io, frame::DEFAULT_MAX_FRAME_SIZE as usize)
     }
 
+    pub(crate) fn new_with_sendfile_sink(
+        io: T,
+        send_file_sink: Option<Arc<dyn frame::SendFileSink>>,
+    ) -> Self {
+        Self::with_max_recv_frame_size_and_sendfile_sink(
+            io,
+            frame::DEFAULT_MAX_FRAME_SIZE as usize,
+            send_file_sink,
+        )
+    }
+
     /// Returns a new `Codec` with the given maximum frame size
     pub fn with_max_recv_frame_size(io: T, max_frame_size: usize) -> Self {
+        Self::with_max_recv_frame_size_and_sendfile_sink(io, max_frame_size, None)
+    }
+
+    fn with_max_recv_frame_size_and_sendfile_sink(
+        io: T,
+        max_frame_size: usize,
+        send_file_sink: Option<Arc<dyn frame::SendFileSink>>,
+    ) -> Self {
         // Wrap with writer
-        let framed_write = FramedWrite::new(io);
+        let framed_write = FramedWrite::new_with_sendfile_sink(io, send_file_sink);
 
         // Delimit the frames
         let delimited = length_delimited::Builder::new()

@@ -48,7 +48,7 @@ mod stream_id;
 mod util;
 mod window_update;
 
-pub use self::data::Data;
+pub use self::data::{Data, SendFile, SendFileSink};
 pub use self::go_away::GoAway;
 pub use self::head::{Head, Kind};
 pub use self::headers::{

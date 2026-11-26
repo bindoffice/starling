@@ -5,6 +5,7 @@ use crate::hpack;
 
 use bytes::{Buf, BufMut, BytesMut};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_util::io::poll_write_buf;
@@ -24,6 +25,8 @@ pub struct FramedWrite<T, B> {
     /// Upstream `AsyncWrite`
     inner: T,
     final_flush_done: bool,
+    send_file_sink: Option<Arc<dyn frame::SendFileSink>>,
+    file_corked: bool,
 
     encoder: Encoder<B>,
 }
@@ -82,7 +85,10 @@ where
     T: AsyncWrite + Unpin,
     B: Buf,
 {
-    pub fn new(inner: T) -> FramedWrite<T, B> {
+    pub(crate) fn new_with_sendfile_sink(
+        inner: T,
+        send_file_sink: Option<Arc<dyn frame::SendFileSink>>,
+    ) -> FramedWrite<T, B> {
         let chain_threshold = if inner.is_write_vectored() {
             CHAIN_THRESHOLD
         } else {
@@ -91,6 +97,8 @@ where
         FramedWrite {
             inner,
             final_flush_done: false,
+            send_file_sink,
+            file_corked: false,
             encoder: Encoder {
                 hpack: hpack::Encoder::default(),
                 buf: Cursor::new(BytesMut::with_capacity(DEFAULT_BUFFER_CAPACITY)),
@@ -143,11 +151,95 @@ where
             while !self.encoder.is_empty() {
                 let n = match self.encoder.next {
                     Some(Next::Data(ref mut frame)) => {
-                        tracing::trace!(queued_data_frame = true);
-                        let mut buf = (&mut self.encoder.buf).chain(frame.payload_mut());
-                        ready!(poll_write_buf(Pin::new(&mut self.inner), cx, &mut buf))?
+                        if frame.send_file().is_some() {
+                            let Some(sink) = self.send_file_sink.clone() else {
+                                return Poll::Ready(Err(io::Error::new(
+                                    io::ErrorKind::Unsupported,
+                                    "HTTP/2 connection has no sendfile sink",
+                                )));
+                            };
+                            if !self.file_corked {
+                                if let Err(err) = sink.set_cork(true) {
+                                    return Poll::Ready(Err(err));
+                                }
+                                self.file_corked = true;
+                            }
+                            while self.encoder.buf.has_remaining() {
+                                let n = match sink.poll_write_more(self.encoder.buf.chunk(), cx) {
+                                    Poll::Ready(Ok(n)) => n,
+                                    Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                                    Poll::Pending => return Poll::Pending,
+                                };
+                                if n == 0 {
+                                    return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
+                                }
+                                self.encoder.buf.advance(n);
+                            }
+
+                            let mut written = 0;
+                            while frame.payload().has_remaining() {
+                                let Some(send_file) = frame.send_file() else {
+                                    return Poll::Ready(Err(io::Error::new(
+                                        io::ErrorKind::Unsupported,
+                                        "HTTP/2 file payload lost during write",
+                                    )));
+                                };
+                                let len = send_file.len().min(frame.payload().remaining());
+                                let sent = match sink.poll_sendfile(
+                                    send_file.file(),
+                                    send_file.offset(),
+                                    len,
+                                    cx,
+                                ) {
+                                    Poll::Ready(Ok(0)) => {
+                                        return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
+                                    }
+                                    Poll::Ready(Ok(sent)) => sent,
+                                    Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                                    Poll::Pending => return Poll::Pending,
+                                };
+                                frame.payload_mut().advance(sent);
+                                frame.advance_send_file(sent);
+                                written += sent;
+                            }
+                            if frame.is_end_stream() && self.file_corked {
+                                if let Err(err) = sink.set_cork(false) {
+                                    return Poll::Ready(Err(err));
+                                }
+                                self.file_corked = false;
+                            }
+                            written
+                        } else {
+                            if self.file_corked {
+                                let Some(sink) = self.send_file_sink.clone() else {
+                                    return Poll::Ready(Err(io::Error::new(
+                                        io::ErrorKind::Unsupported,
+                                        "HTTP/2 connection has no sendfile sink",
+                                    )));
+                                };
+                                if let Err(err) = sink.set_cork(false) {
+                                    return Poll::Ready(Err(err));
+                                }
+                                self.file_corked = false;
+                            }
+                            tracing::trace!(queued_data_frame = true);
+                            let mut buf = (&mut self.encoder.buf).chain(frame.payload_mut());
+                            ready!(poll_write_buf(Pin::new(&mut self.inner), cx, &mut buf))?
+                        }
                     }
                     _ => {
+                        if self.file_corked {
+                            let Some(sink) = self.send_file_sink.clone() else {
+                                return Poll::Ready(Err(io::Error::new(
+                                    io::ErrorKind::Unsupported,
+                                    "HTTP/2 connection has no sendfile sink",
+                                )));
+                            };
+                            if let Err(err) = sink.set_cork(false) {
+                                return Poll::Ready(Err(err));
+                            }
+                            self.file_corked = false;
+                        }
                         tracing::trace!(queued_data_frame = false);
                         ready!(poll_write_buf(
                             Pin::new(&mut self.inner),
@@ -237,7 +329,11 @@ where
                     return Err(PayloadTooBig);
                 }
 
-                if len >= self.chain_threshold {
+                if v.send_file().is_some() {
+                    let head = v.head();
+                    head.encode(len, self.buf.get_mut());
+                    self.next = Some(Next::Data(v));
+                } else if len >= self.chain_threshold {
                     let head = v.head();
 
                     // Encode the frame head to the buffer

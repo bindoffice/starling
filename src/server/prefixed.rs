@@ -1,4 +1,5 @@
 use super::*;
+use std::io::IoSlice;
 
 pub(in crate::server) struct PrefixedStream<S> {
     prefix: Vec<u8>,
@@ -41,6 +42,18 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for PrefixedStream<S> {
         buffer: &[u8],
     ) -> Poll<io::Result<usize>> {
         Pin::new(&mut self.get_mut().inner).poll_write(cx, buffer)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffers: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write_vectored(cx, buffers)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {

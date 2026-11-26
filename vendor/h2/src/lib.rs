@@ -136,6 +136,8 @@ mod share;
 pub mod fuzz_bridge;
 
 pub use crate::error::{Error, Reason};
+#[doc(hidden)]
+pub use crate::frame::SendFileSink;
 pub use crate::share::{FlowControl, Ping, PingPong, Pong, RecvStream, SendStream, StreamId};
 
 #[cfg(feature = "unstable")]

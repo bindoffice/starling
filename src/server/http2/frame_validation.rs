@@ -1,6 +1,7 @@
 use super::frame_timeout::FrameTimeoutTracker;
 use super::hpack_validation::{HeaderBlockError, HeaderBlockValidator};
 use super::*;
+use std::io::IoSlice;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 #[cfg(test)]
@@ -417,6 +418,25 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for FrameValidatedStream<S> {
             )));
         }
         Pin::new(&mut this.inner).poll_write(cx, buffer)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffers: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        if this.fatal.is_some() {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "HTTP/2 connection rejected before write",
+            )));
+        }
+        Pin::new(&mut this.inner).poll_write_vectored(cx, buffers)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {

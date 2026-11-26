@@ -6,8 +6,10 @@ use bytes::{Buf, Bytes};
 use http::HeaderMap;
 
 use std::fmt;
+use std::fs::File;
 #[cfg(feature = "stream")]
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 /// Sends the body stream and trailers to the remote peer.
@@ -379,6 +381,24 @@ impl<B: Buf> SendStream<B> {
     /// If the lock on the stream store has been poisoned.
     pub fn stream_id(&self) -> StreamId {
         StreamId::from_internal(self.inner.stream_id())
+    }
+}
+
+impl SendStream<Bytes> {
+    /// Sends a DATA frame whose payload is read directly from a file.
+    ///
+    /// The connection must have been established with a
+    /// [`frame::SendFileSink`](crate::frame::SendFileSink).
+    pub fn send_file(
+        &mut self,
+        file: Arc<File>,
+        offset: u64,
+        len: usize,
+        end_of_stream: bool,
+    ) -> Result<(), crate::Error> {
+        self.inner
+            .send_file(file, offset, len, end_of_stream)
+            .map_err(Into::into)
     }
 }
 

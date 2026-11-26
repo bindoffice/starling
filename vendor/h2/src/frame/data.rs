@@ -1,7 +1,94 @@
 use crate::frame::{util, Error, Frame, Head, Kind, StreamId};
 use bytes::{Buf, BufMut, Bytes};
 
+use std::fs::File;
 use std::fmt;
+use std::io;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+/// Non-blocking sink used to write DATA payloads directly from a file.
+pub trait SendFileSink: Send + Sync + fmt::Debug {
+    /// Writes bytes that belong to the file DATA frame header.
+    ///
+    /// Implementations should use `MSG_MORE`/`TCP_CORK` where available so the
+    /// following `poll_sendfile` can be coalesced into the same TCP segments.
+    fn poll_write_more(
+        &self,
+        _buf: &[u8],
+        _cx: &mut Context<'_>,
+    ) -> Poll<io::Result<usize>> {
+        Poll::Ready(Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "sendfile sink does not support coalesced writes",
+        )))
+    }
+
+    /// Coalesces subsequent file DATA writes on transports that support it.
+    fn set_cork(&self, _cork: bool) -> io::Result<()> {
+        Ok(())
+    }
+
+    /// Attempts to send up to `len` bytes from `file` at `offset`.
+    fn poll_sendfile(
+        &self,
+        file: &File,
+        offset: u64,
+        len: usize,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<usize>>;
+}
+
+/// A file-backed DATA payload sent through an optional zero-copy socket sink.
+#[derive(Clone)]
+pub struct SendFile {
+    file: Arc<File>,
+    offset: u64,
+    len: usize,
+}
+
+impl SendFile {
+    pub(crate) fn new(file: Arc<File>, offset: u64, len: usize) -> Self {
+        Self { file, offset, len }
+    }
+
+    pub(crate) fn file(&self) -> &File {
+        &self.file
+    }
+
+    pub(crate) fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
+    pub(crate) fn advance(&mut self, count: usize) {
+        let count = count.min(self.len);
+        self.offset = self.offset.saturating_add(count as u64);
+        self.len -= count;
+    }
+}
+
+impl PartialEq for SendFile {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.file, &other.file)
+            && self.offset == other.offset
+            && self.len == other.len
+    }
+}
+
+impl Eq for SendFile {}
+
+impl fmt::Debug for SendFile {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.debug_struct("SendFile")
+            .field("offset", &self.offset)
+            .field("len", &self.len)
+            .finish()
+    }
+}
 
 /// Data frame
 ///
@@ -14,6 +101,7 @@ pub struct Data<T = Bytes> {
     data: T,
     flags: DataFlags,
     pad_len: Option<u8>,
+    send_file: Option<SendFile>,
 }
 
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
@@ -33,6 +121,19 @@ impl<T> Data<T> {
             data: payload,
             flags: DataFlags::default(),
             pad_len: None,
+            send_file: None,
+        }
+    }
+
+    pub(crate) fn new_file(stream_id: StreamId, payload: T, send_file: SendFile) -> Self {
+        assert!(!stream_id.is_zero());
+
+        Data {
+            stream_id,
+            data: payload,
+            flags: DataFlags::default(),
+            pad_len: None,
+            send_file: Some(send_file),
         }
     }
 
@@ -99,6 +200,24 @@ impl<T> Data<T> {
         self.data
     }
 
+    pub(crate) fn take_send_file(&mut self) -> Option<SendFile> {
+        self.send_file.take()
+    }
+
+    pub(crate) fn set_send_file(&mut self, send_file: Option<SendFile>) {
+        self.send_file = send_file;
+    }
+
+    pub(crate) fn send_file(&self) -> Option<&SendFile> {
+        self.send_file.as_ref()
+    }
+
+    pub(crate) fn advance_send_file(&mut self, count: usize) {
+        if let Some(send_file) = &mut self.send_file {
+            send_file.advance(count);
+        }
+    }
+
     pub(crate) fn head(&self) -> Head {
         Head::new(Kind::Data, self.flags.into(), self.stream_id)
     }
@@ -112,6 +231,7 @@ impl<T> Data<T> {
             data: f(self.data),
             flags: self.flags,
             pad_len: self.pad_len,
+            send_file: self.send_file,
         }
     }
 }
@@ -137,6 +257,7 @@ impl Data<Bytes> {
             data: payload,
             flags,
             pad_len,
+            send_file: None,
         })
     }
 
@@ -161,6 +282,7 @@ mod tests {
             data: Bytes::copy_from_slice(data),
             flags: DataFlags::default(),
             pad_len,
+            send_file: None,
         }
     }
 
@@ -193,6 +315,13 @@ mod tests {
 }
 
 impl<T: Buf> Data<T> {
+    pub(crate) fn data_len(&self) -> usize {
+        match &self.send_file {
+            Some(send_file) => send_file.len(),
+            None => self.data.remaining(),
+        }
+    }
+
     /// Encode the data frame into the `dst` buffer.
     ///
     /// # Panics

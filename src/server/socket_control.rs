@@ -1,13 +1,15 @@
 use std::io;
 use std::mem::MaybeUninit;
 use std::net::TcpStream as StdTcpStream;
+use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
 #[cfg(unix)]
 use std::time::Duration;
 
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::RawFd;
 #[cfg(unix)]
 use tokio::io::unix::AsyncFd;
 use tokio::net::TcpStream;
@@ -189,6 +191,17 @@ impl ClientSocketControl {
         }
     }
 
+    pub(in crate::server) fn supports_h2_sendfile(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            matches!(self.socket(), Socket::Tcp(_))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+
     #[cfg(unix)]
     pub(in crate::server) async fn sendfile(
         &self,
@@ -261,6 +274,94 @@ impl ClientSocketControl {
         #[cfg(not(unix))]
         {
             &self.inner.socket
+        }
+    }
+}
+
+#[cfg(unix)]
+impl h2::SendFileSink for ClientSocketControl {
+    #[cfg(target_os = "linux")]
+    fn set_cork(&self, cork: bool) -> io::Result<()> {
+        let value = i32::from(cork);
+        // SAFETY: `value` is a valid `c_int` for the duration of the call and
+        // the socket descriptor remains owned by `self`.
+        let result = unsafe {
+            libc::setsockopt(
+                self.socket().as_raw_fd(),
+                libc::IPPROTO_TCP,
+                libc::TCP_CORK,
+                (&value as *const i32).cast(),
+                std::mem::size_of_val(&value) as libc::socklen_t,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn poll_write_more(&self, buf: &[u8], cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+        loop {
+            // SAFETY: `buf` is valid for the duration of the call and the
+            // socket descriptor remains owned by `self`.
+            let written = unsafe {
+                libc::send(
+                    self.socket().as_raw_fd(),
+                    buf.as_ptr().cast(),
+                    buf.len(),
+                    libc::MSG_MORE | libc::MSG_NOSIGNAL,
+                )
+            };
+            if written >= 0 {
+                return Poll::Ready(Ok(written as usize));
+            }
+            let error = io::Error::last_os_error();
+            match error.raw_os_error() {
+                Some(libc::EINTR) => continue,
+                Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK => {
+                    let mut readiness = match self.inner.socket.poll_write_ready(cx) {
+                        Poll::Ready(result) => result?,
+                        Poll::Pending => return Poll::Pending,
+                    };
+                    readiness.clear_ready();
+                }
+                _ => return Poll::Ready(Err(error)),
+            }
+        }
+    }
+
+    fn poll_sendfile(
+        &self,
+        file: &std::fs::File,
+        offset: u64,
+        len: usize,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<usize>> {
+        let Socket::Tcp(output) = self.socket() else {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "sendfile requires a TCP client socket",
+            )));
+        };
+        loop {
+            let mut file_offset = offset;
+            match rustix::fs::sendfile(output, file, Some(&mut file_offset), len) {
+                Ok(sent) => return Poll::Ready(Ok(sent)),
+                Err(rustix::io::Errno::INTR) => {}
+                Err(error)
+                    if error == rustix::io::Errno::AGAIN
+                        || error == rustix::io::Errno::WOULDBLOCK =>
+                {
+                    let mut readiness = match self.inner.socket.poll_write_ready(cx) {
+                        Poll::Ready(result) => result?,
+                        Poll::Pending => return Poll::Pending,
+                    };
+                    readiness.clear_ready();
+                }
+                Err(error) => return Poll::Ready(Err(error.into())),
+            }
         }
     }
 }
