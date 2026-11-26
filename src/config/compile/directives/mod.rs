@@ -132,6 +132,8 @@ pub(super) struct SeenScopeDirectives {
     post_action: bool,
     reset_timedout_connection: bool,
     pub(super) tcp_nodelay: bool,
+    pub(super) ssl_certificate: bool,
+    pub(super) ssl_certificate_key: bool,
     server_tokens: bool,
     sub_filter: bool,
     ssi: SsiSeen,

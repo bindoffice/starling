@@ -4,18 +4,23 @@ use crate::config::StreamServer;
 use crate::server::stream::stream_servers_for_address;
 
 pub(in crate::server) struct StreamTlsConfigs {
-    pub(in crate::server) default: Arc<tokio_rustls::rustls::ServerConfig>,
-    pub(in crate::server) exact: HashMap<String, Arc<tokio_rustls::rustls::ServerConfig>>,
-    pub(in crate::server) wildcard: Vec<(String, Arc<tokio_rustls::rustls::ServerConfig>)>,
-    pub(in crate::server) regex: Vec<(Regex, Arc<tokio_rustls::rustls::ServerConfig>)>,
+    pub(in crate::server) default: Arc<StreamTlsEntry>,
+    pub(in crate::server) exact: HashMap<String, Arc<StreamTlsEntry>>,
+    pub(in crate::server) wildcard: Vec<(String, Arc<StreamTlsEntry>)>,
+    pub(in crate::server) regex: Vec<(Regex, Arc<StreamTlsEntry>)>,
+}
+
+pub(in crate::server) struct StreamTlsEntry {
+    pub(in crate::server) config: Arc<tokio_rustls::rustls::ServerConfig>,
+    pub(in crate::server) client_ocsp: Option<Arc<super::ocsp::ClientOcspVerifier>>,
 }
 
 impl StreamTlsConfigs {
-    fn select(&self, client_hello: ClientHello<'_>) -> Arc<tokio_rustls::rustls::ServerConfig> {
+    fn select(&self, client_hello: ClientHello<'_>) -> Arc<StreamTlsEntry> {
         self.select_name(client_hello.server_name())
     }
 
-    fn select_name(&self, server_name: Option<&str>) -> Arc<tokio_rustls::rustls::ServerConfig> {
+    fn select_name(&self, server_name: Option<&str>) -> Arc<StreamTlsEntry> {
         let Some(server_name) = server_name else {
             return self.default.clone();
         };
@@ -56,14 +61,62 @@ impl ResolvesServerCert for RejectHandshakeResolver {
 pub(in crate::server) async fn accept_stream_tls<S>(
     stream: S,
     configs: Arc<StreamTlsConfigs>,
-) -> io::Result<tokio_rustls::server::TlsStream<S>>
+) -> Result<tokio_rustls::server::TlsStream<S>, StreamTlsAcceptError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let start =
-        LazyConfigAcceptor::new(tokio_rustls::rustls::server::Acceptor::default(), stream).await?;
-    let config = configs.select(start.client_hello());
-    start.into_stream(config).await
+    let start = LazyConfigAcceptor::new(tokio_rustls::rustls::server::Acceptor::default(), stream)
+        .await
+        .map_err(StreamTlsAcceptError::handshake)?;
+    let entry = configs.select(start.client_hello());
+    let stream = start
+        .into_stream(entry.config.clone())
+        .await
+        .map_err(StreamTlsAcceptError::handshake)?;
+    if let Some(verifier) = &entry.client_ocsp {
+        let certificates = stream
+            .get_ref()
+            .1
+            .peer_certificates()
+            .map(|certificates| certificates.to_vec())
+            .unwrap_or_default();
+        if let Err(error) = verifier.validate(&certificates).await {
+            return Err(StreamTlsAcceptError {
+                error,
+                connection: Some(Box::new(tls_connection_info(stream.get_ref().1))),
+            });
+        }
+    }
+    Ok(stream)
+}
+
+#[derive(Debug)]
+pub(in crate::server) struct StreamTlsAcceptError {
+    error: io::Error,
+    connection: Option<Box<TlsConnectionInfo>>,
+}
+
+impl StreamTlsAcceptError {
+    fn handshake(error: io::Error) -> Self {
+        Self {
+            error,
+            connection: None,
+        }
+    }
+
+    pub(in crate::server) fn client_ocsp_failure(
+        &self,
+    ) -> Option<(&io::Error, &TlsConnectionInfo)> {
+        self.connection
+            .as_deref()
+            .map(|connection| (&self.error, connection))
+    }
+}
+
+impl std::fmt::Display for StreamTlsAcceptError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(formatter)
+    }
 }
 
 pub(in crate::server) fn build_stream_tls_configs(
@@ -165,9 +218,7 @@ fn build_stream_tls_config(
     })
 }
 
-fn build_stream_server_tls_config(
-    server: &StreamServer,
-) -> io::Result<tokio_rustls::rustls::ServerConfig> {
+fn build_stream_server_tls_config(server: &StreamServer) -> io::Result<StreamTlsEntry> {
     install_crypto_provider();
     let versions = rustls_protocol_versions(server.ssl_protocols);
     let provider = Arc::new(tls_crypto_provider(&server.ssl_ciphers));
@@ -185,31 +236,35 @@ fn build_stream_server_tls_config(
             .with_cert_resolver(Arc::new(RejectHandshakeResolver));
         server_config.ignore_client_order = server.ssl_prefer_server_ciphers;
         apply_stream_alpn(&mut server_config, server);
-        return Ok(server_config);
+        return Ok(StreamTlsEntry {
+            config: Arc::new(server_config),
+            client_ocsp: None,
+        });
     }
-    let certificate = load_certificate_paths(
+    let certificates = load_certificate_entries(
+        &server.ssl_certificates,
+        &server.ssl_certificate_keys,
         server.ssl_certificate.as_deref(),
         server.ssl_certificate_key.as_deref(),
         &server.ssl_passwords,
     )?;
-    let stapling = super::ocsp::build_stapling(
-        super::ocsp::StaplingOptions {
-            enabled: server.ssl_stapling,
-            verify: server.ssl_stapling_verify,
-            file: server.ssl_stapling_file.as_deref(),
-            responder: server.ssl_stapling_responder.as_deref(),
-            trusted_certificate: server.ssl_trusted_certificate.as_deref(),
-            resolver: &server.resolver,
-            resolver_timeout: server.resolver_timeout,
-        },
-        certificate.clone(),
-    )?;
-    let resolver = Arc::new(CertificateResolver {
-        exact: HashMap::new(),
-        wildcard: Vec::new(),
-        default: certificate,
-        stapling,
-    });
+    let mut entries = Vec::with_capacity(certificates.len());
+    for certificate in certificates {
+        let stapling = super::ocsp::build_stapling(
+            super::ocsp::StaplingOptions {
+                enabled: server.ssl_stapling,
+                verify: server.ssl_stapling_verify,
+                file: server.ssl_stapling_file.as_deref(),
+                responder: server.ssl_stapling_responder.as_deref(),
+                trusted_certificate: server.ssl_trusted_certificate.as_deref(),
+                resolver: &server.resolver,
+                resolver_timeout: server.resolver_timeout,
+            },
+            certificate.clone(),
+        )?;
+        entries.push(ServerCertificateEntry::new(certificate, stapling));
+    }
+    let resolver = Arc::new(ServerCertificateResolver::new(entries));
     let client_verifier = build_client_cert_verifier(
         server.ssl_verify_client,
         server.ssl_verify_depth,
@@ -218,6 +273,16 @@ fn build_stream_server_tls_config(
         server.ssl_crl.as_deref(),
         &provider,
     )?;
+    let client_ocsp = super::ocsp::ClientOcspVerifier::build(super::ocsp::ClientOcspOptions {
+        mode: server.ssl_ocsp,
+        verify_client: server.ssl_verify_client,
+        responder: server.ssl_ocsp_responder.as_deref(),
+        cache: server.ssl_ocsp_cache.as_deref(),
+        client_certificate: server.ssl_client_certificate.as_deref(),
+        trusted_certificate: server.ssl_trusted_certificate.as_deref(),
+        resolver: &server.resolver,
+        resolver_timeout: server.resolver_timeout,
+    })?;
     let mut server_config = match client_verifier {
         Some(verifier) => builder
             .with_client_cert_verifier(verifier)
@@ -226,7 +291,10 @@ fn build_stream_server_tls_config(
     };
     server_config.ignore_client_order = server.ssl_prefer_server_ciphers;
     apply_stream_alpn(&mut server_config, server);
-    Ok(server_config)
+    Ok(StreamTlsEntry {
+        config: Arc::new(server_config),
+        client_ocsp,
+    })
 }
 
 fn apply_stream_alpn(config: &mut tokio_rustls::rustls::ServerConfig, server: &StreamServer) {

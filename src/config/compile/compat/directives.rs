@@ -19,10 +19,6 @@ pub(in crate::config::compile) fn try_apply_compat_directive(
         | "ssl_session_cache"
         | "ssl_session_timeout"
         | "ssl_session_tickets"
-        | "ssl_dhparam"
-        | "ssl_ecdh_curve"
-        | "ssl_early_data"
-        | "ssl_buffer_size"
         | "proxy_connection_drop"
         | "client_body_early_read"
         | "connection_pool_size"
@@ -41,6 +37,18 @@ pub(in crate::config::compile) fn try_apply_compat_directive(
             Ok(true)
         }
         "send_lowat" | "proxy_send_lowat" | "fastcgi_send_lowat" | "postpone_gzipping" => {
+            validate_size_argument(directive)?;
+            Ok(true)
+        }
+        "ssl_dhparam" | "ssl_ecdh_curve" => {
+            one_arg(directive)?;
+            Ok(true)
+        }
+        "ssl_early_data" => {
+            parse_flag(directive, "ssl_early_data")?;
+            Ok(true)
+        }
+        "ssl_buffer_size" => {
             validate_size_argument(directive)?;
             Ok(true)
         }

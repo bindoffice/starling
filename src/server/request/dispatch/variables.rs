@@ -9,6 +9,7 @@ pub(super) fn apply_connection_variables(
         variables.ssl_cipher = tls.cipher.clone();
         variables.ssl_server_name = tls.server_name.clone();
         variables.ssl_alpn_protocol = tls.alpn_protocol.clone();
+        variables.ssl_session_reused = if tls.session_reused { "r" } else { "." }.into();
         variables.ssl_client_verify = if tls.client_certificate.is_some() {
             "SUCCESS".into()
         } else {

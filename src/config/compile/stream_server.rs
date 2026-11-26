@@ -271,11 +271,9 @@ pub(super) fn compile_stream_server(
             "no \"listen\" is defined for stream server",
         ));
     }
-    if proxy_pass.is_none() && return_value.is_none() && pass.is_none() {
-        return Err(ConfigError::at(
-            directive.location.clone(),
-            "no \"proxy_pass\", \"return\" or \"pass\" is defined for stream server",
-        ));
+    if handler.is_none() {
+        handler = Some(StreamHandler::Return);
+        return_value = Some(String::new());
     }
     // Nginx only starts upstream TLS for SOCK_STREAM connections.  It still
     // accepts proxy_ssl for UDP listen sockets, where the setting is inert.
@@ -289,6 +287,14 @@ pub(super) fn compile_stream_server(
         return Err(ConfigError::at(
             directive.location.clone(),
             "no ssl_trusted_certificate for ssl_stapling_verify",
+        ));
+    }
+    if tls.ssl_ocsp != OcspMode::Off
+        && tls.ssl_verify_client == ClientCertificateVerify::OptionalNoCa
+    {
+        return Err(ConfigError::at(
+            directive.location.clone(),
+            "\"ssl_ocsp\" is incompatible with \"ssl_verify_client optional_no_ca\"",
         ));
     }
     let StreamTlsOptions {
@@ -308,6 +314,8 @@ pub(super) fn compile_stream_server(
         proxy_ssl_alpn,
         ssl_certificate,
         ssl_certificate_key,
+        ssl_certificates,
+        ssl_certificate_keys,
         ssl_protocols,
         ssl_prefer_server_ciphers,
         ssl_ciphers,
@@ -320,6 +328,9 @@ pub(super) fn compile_stream_server(
         ssl_stapling_verify,
         ssl_stapling_file,
         ssl_stapling_responder,
+        ssl_ocsp,
+        ssl_ocsp_responder,
+        ssl_ocsp_cache,
         resolver,
         resolver_timeout,
         ssl_passwords,
@@ -376,6 +387,8 @@ pub(super) fn compile_stream_server(
         proxy_ssl_protocols,
         ssl_certificate,
         ssl_certificate_key,
+        ssl_certificates,
+        ssl_certificate_keys,
         ssl_verify_client,
         ssl_verify_depth,
         ssl_client_certificate,
@@ -385,6 +398,9 @@ pub(super) fn compile_stream_server(
         ssl_stapling_verify,
         ssl_stapling_file,
         ssl_stapling_responder,
+        ssl_ocsp,
+        ssl_ocsp_responder,
+        ssl_ocsp_cache,
         resolver,
         resolver_timeout,
         proxy_ssl_crl,

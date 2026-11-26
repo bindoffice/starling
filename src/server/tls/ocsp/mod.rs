@@ -3,13 +3,16 @@ use std::io;
 use super::*;
 use crate::config::ResolverConfig;
 
+mod cache;
 mod certificate;
+mod client;
 mod refresh;
 mod request;
 mod response;
 mod state;
 mod url;
 
+pub(in crate::server) use client::{ClientOcspOptions, ClientOcspVerifier};
 pub(in crate::server) use state::StaplingState;
 
 pub(super) struct StaplingOptions<'a> {
@@ -29,20 +32,26 @@ pub(super) fn build_stapling(
     if !options.enabled {
         return Ok(None);
     }
-    if let Some(path) = options.file {
-        let response = std::fs::read(path)?;
-        response::validate_static(&response)?;
-        return Ok(Some(StaplingState::new(certificate, Some(response))));
-    }
-
     let Some(identity) = certificate::CertificateIdentity::load(
         &certificate.cert,
         options.trusted_certificate,
         options.verify,
     )?
     else {
+        if options.file.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "cannot determine the OCSP issuer for ssl_stapling_file",
+            ));
+        }
         return Ok(None);
     };
+    if let Some(path) = options.file {
+        let response = std::fs::read(path)?;
+        response::validate_static(&identity, &response)?;
+        return Ok(Some(StaplingState::new(certificate, Some(response))));
+    }
+
     let responder = match options.responder {
         Some(responder) => responder.to_string(),
         None => {
@@ -52,12 +61,15 @@ pub(super) fn build_stapling(
             responder
         }
     };
-    if !options.resolver.is_configured() {
-        return Ok(None);
-    }
     let Ok(responder) = url::ResponderUrl::parse(&responder) else {
         return Ok(None);
     };
+    // An IP responder does not need a DNS resolver. Keep hostname-based
+    // responders disabled when no resolver was configured, matching nginx's
+    // configuration-time behavior.
+    if responder.host.parse::<std::net::IpAddr>().is_err() && !options.resolver.is_configured() {
+        return Ok(None);
+    }
     let resolver =
         crate::server::resolver::Resolver::new(options.resolver.clone(), options.resolver_timeout);
     let state = StaplingState::new(certificate, None);
@@ -65,6 +77,7 @@ pub(super) fn build_stapling(
         &state,
         Arc::new(identity),
         responder,
+        options.trusted_certificate.map(Path::to_path_buf),
         resolver,
         options.resolver_timeout,
     );
@@ -120,6 +133,7 @@ mod tests {
         let response = request::fetch(
             identity,
             url::ResponderUrl::parse(&format!("http://{address}/ocsp")).unwrap(),
+            Some(fixture.join("ca.crt")),
             resolver,
             Duration::from_secs(2),
         )
@@ -172,6 +186,7 @@ mod tests {
             &state,
             identity,
             url::ResponderUrl::parse(&format!("http://{address}/ocsp")).unwrap(),
+            Some(fixture.join("ca.crt")),
             Resolver::new(
                 ResolverConfig {
                     servers: vec!["127.0.0.1:1".parse().unwrap()],

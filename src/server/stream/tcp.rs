@@ -189,7 +189,16 @@ pub(in crate::server) async fn handle_stream_connection_boxed(
                 }
             }
             Ok(Err(err)) => {
-                log.status = 400;
+                if let Some((verify_error, tls)) = err.client_ocsp_failure() {
+                    let mut tls = tls.clone();
+                    tls.client_certificate_error =
+                        Some(client_certificate_verify_failure(verify_error).into());
+                    log.status = 500;
+                    log.server_name = tls.server_name.clone();
+                    log.tls = Some(tls);
+                } else {
+                    log.status = 400;
+                }
                 log.logger.log(
                     LogLevel::Info,
                     format!("stream TLS handshake for {} failed: {err}", log.remote),

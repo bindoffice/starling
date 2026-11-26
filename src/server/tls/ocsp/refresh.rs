@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, SystemTime};
 
@@ -12,6 +13,7 @@ pub(super) async fn run(
     state: Weak<StaplingState>,
     identity: Arc<CertificateIdentity>,
     responder: ResponderUrl,
+    trusted_certificate: Option<PathBuf>,
     resolver: Resolver,
     timeout: Duration,
 ) {
@@ -22,6 +24,7 @@ pub(super) async fn run(
         let delay = match request::fetch(
             identity.clone(),
             responder.clone(),
+            trusted_certificate.clone(),
             resolver.clone(),
             timeout,
         )

@@ -227,11 +227,23 @@ pub(super) fn apply_common_directive(
         }
         "ssl_certificate" => {
             validate_no_block(directive)?;
-            context.ssl_certificate = Some(resolve_path(prefix, one_arg(directive)?));
+            let path = resolve_path(prefix, one_arg(directive)?);
+            if !seen.ssl_certificate {
+                context.ssl_certificates.clear();
+                seen.ssl_certificate = true;
+            }
+            context.ssl_certificates.push(path.clone());
+            context.ssl_certificate = Some(path);
         }
         "ssl_certificate_key" => {
             validate_no_block(directive)?;
-            context.ssl_certificate_key = Some(resolve_path(prefix, one_arg(directive)?));
+            let path = resolve_path(prefix, one_arg(directive)?);
+            if !seen.ssl_certificate_key {
+                context.ssl_certificate_keys.clear();
+                seen.ssl_certificate_key = true;
+            }
+            context.ssl_certificate_keys.push(path.clone());
+            context.ssl_certificate_key = Some(path);
         }
         "auth_basic" => {
             validate_no_block(directive)?;

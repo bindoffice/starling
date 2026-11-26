@@ -11,13 +11,13 @@ pub(in crate::server) async fn write_stream_return<S>(
 {
     let text = eval_stream_log_variables(template, log);
     log.status = 200;
-    if text.is_empty() {
-        return;
-    }
 
     let result = tokio::time::timeout(STREAM_RETURN_TIMEOUT, async {
-        inbound.write_all(text.as_bytes()).await?;
-        inbound.flush().await
+        if !text.is_empty() {
+            inbound.write_all(text.as_bytes()).await?;
+            inbound.flush().await?;
+        }
+        inbound.shutdown().await
     })
     .await;
 

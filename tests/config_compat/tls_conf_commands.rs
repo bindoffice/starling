@@ -83,6 +83,36 @@ fn validates_proxy_ssl_conf_command_argument_count_before_rejecting_it() {
 }
 
 #[test]
+fn rejects_downstream_ssl_conf_command_with_an_actionable_error() {
+    let prefix = temp_prefix();
+    fs::create_dir_all(&prefix).unwrap();
+    let config_path = prefix.join("nginx.conf");
+    for source in [
+        "events {} http { ssl_conf_command Options -ServerPreference; }",
+        "events {} http { server { listen 127.0.0.1:18134; \
+         ssl_conf_command Options -ServerPreference; } }",
+        "events {} stream { ssl_conf_command Options -ServerPreference; }",
+        "events {} stream { server { listen 127.0.0.1:18135; \
+         ssl_conf_command Options -ServerPreference; proxy_pass 127.0.0.1:19443; } }",
+    ] {
+        fs::write(&config_path, source).unwrap();
+        let document = ConfigLoader::new(prefix.clone())
+            .load(&config_path)
+            .unwrap();
+        let error = compile(document, prefix.clone(), config_path.clone()).unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("\"ssl_conf_command\" is not supported by the rustls TLS backend"),
+            "{error}"
+        );
+        assert!(error.message.contains("\"ssl_protocols\""), "{error}");
+        assert!(error.message.contains("\"ssl_ciphers\""), "{error}");
+    }
+    let _ = fs::remove_dir_all(prefix);
+}
+
+#[test]
 fn keeps_inert_compatibility_directives_accepted() {
     let prefix = temp_prefix();
     fs::create_dir_all(&prefix).unwrap();
@@ -182,6 +212,79 @@ fn validates_inert_compatibility_directive_arguments() {
             .unwrap();
         let error = compile(document, prefix.clone(), config_path.clone()).unwrap_err();
         assert!(error.message.contains(directive), "{error}");
+    }
+    let _ = fs::remove_dir_all(prefix);
+}
+
+#[test]
+fn warns_about_openssl_only_tls_tuning_directives() {
+    let prefix = temp_prefix();
+    fs::create_dir_all(&prefix).unwrap();
+    let config_path = prefix.join("nginx.conf");
+    fs::write(
+        &config_path,
+        r#"
+            events {}
+            http {
+                ssl_dhparam dhparam.pem;
+                ssl_ecdh_curve prime256v1;
+                ssl_early_data on;
+                ssl_buffer_size 4k;
+            }
+        "#,
+    )
+    .unwrap();
+    let document = ConfigLoader::new(prefix.clone())
+        .load(&config_path)
+        .unwrap();
+    let config = compile(document, prefix.clone(), config_path).unwrap();
+    for directive in [
+        "ssl_dhparam",
+        "ssl_ecdh_curve",
+        "ssl_early_data",
+        "ssl_buffer_size",
+    ] {
+        assert!(
+            config.warnings.iter().any(|warning| {
+                warning.message.contains(&format!("\"{directive}"))
+                    && warning.message.contains("rustls TLS backend")
+            }),
+            "missing rustls warning for {directive}: {:?}",
+            config.warnings
+        );
+    }
+    let _ = fs::remove_dir_all(prefix);
+}
+
+#[test]
+fn validates_openssl_only_tls_tuning_directive_arguments() {
+    let prefix = temp_prefix();
+    fs::create_dir_all(&prefix).unwrap();
+    let config_path = prefix.join("nginx.conf");
+    for (source, expected) in [
+        (
+            "events {} http { ssl_dhparam; }",
+            "invalid number of arguments in \"ssl_dhparam\" directive",
+        ),
+        (
+            "events {} http { ssl_ecdh_curve prime256v1 secp384r1; }",
+            "invalid number of arguments in \"ssl_ecdh_curve\" directive",
+        ),
+        (
+            "events {} http { ssl_early_data enabled; }",
+            "invalid value \"enabled\" in \"ssl_early_data\" directive",
+        ),
+        (
+            "events {} http { ssl_buffer_size huge; }",
+            "invalid value \"huge\" in \"ssl_buffer_size\" directive",
+        ),
+    ] {
+        fs::write(&config_path, source).unwrap();
+        let document = ConfigLoader::new(prefix.clone())
+            .load(&config_path)
+            .unwrap();
+        let error = compile(document, prefix.clone(), config_path.clone()).unwrap_err();
+        assert!(error.message.contains(expected), "{error}");
     }
     let _ = fs::remove_dir_all(prefix);
 }

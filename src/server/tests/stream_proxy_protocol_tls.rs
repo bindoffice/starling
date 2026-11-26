@@ -17,6 +17,7 @@ fn emits_tls_authority_alpn_and_ssl_tlvs() {
         alpn_protocol: "h2".into(),
         client_certificate: None,
         client_certificate_verified: false,
+        client_certificate_error: None,
         session_reused: false,
     };
     let header = build_stream_proxy_protocol_header_with_tls(
@@ -57,6 +58,7 @@ fn emits_client_certificate_flags_and_verification_status() {
         alpn_protocol: String::new(),
         client_certificate: Some(client_certificate()),
         client_certificate_verified: true,
+        client_certificate_error: None,
         session_reused: false,
     };
 

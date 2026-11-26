@@ -1,3 +1,4 @@
+use super::super::compat::reject_ssl_conf_command;
 use super::*;
 
 pub(super) fn try_apply_tls_directive(
@@ -57,6 +58,10 @@ pub(super) fn try_apply_tls_directive(
                 &mut context.proxy_ssl_protocols,
                 &mut seen.proxy_ssl_protocols,
             )?;
+        }
+        "ssl_conf_command" => {
+            require_server_scope(directive, scope)?;
+            reject_ssl_conf_command(directive, "ssl_conf_command")?;
         }
         _ => return Ok(false),
     }

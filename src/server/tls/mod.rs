@@ -8,7 +8,19 @@ pub(super) struct TlsConnectionInfo {
     pub(super) alpn_protocol: String,
     pub(super) client_certificate: Option<ClientCertificateInfo>,
     pub(super) client_certificate_verified: bool,
+    pub(super) client_certificate_error: Option<String>,
     pub(super) session_reused: bool,
+}
+
+pub(super) fn client_certificate_verify_failure(error: &io::Error) -> &'static str {
+    let error = error.to_string();
+    if error.contains("certificate revoked") {
+        "certificate revoked"
+    } else if error.contains("certificate status unknown") {
+        "certificate status unknown"
+    } else {
+        "certificate status request failed"
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +55,7 @@ pub(super) fn build_tls_configs(
     Ok(configs)
 }
 
+#[cfg(test)]
 pub(super) struct CertificateResolver {
     pub(super) exact: HashMap<String, Arc<CertifiedKey>>,
     pub(super) wildcard: Vec<(String, Arc<CertifiedKey>)>,
@@ -50,6 +63,7 @@ pub(super) struct CertificateResolver {
     pub(super) stapling: Option<Arc<ocsp::StaplingState>>,
 }
 
+#[cfg(test)]
 impl std::fmt::Debug for CertificateResolver {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -67,6 +81,7 @@ impl std::fmt::Debug for CertificateResolver {
     }
 }
 
+#[cfg(test)]
 impl ResolvesServerCert for CertificateResolver {
     fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
         let Some(server_name) = client_hello.server_name() else {
@@ -92,6 +107,7 @@ impl ResolvesServerCert for CertificateResolver {
     }
 }
 
+#[cfg(test)]
 impl CertificateResolver {
     fn default_certificate(&self) -> Option<Arc<CertifiedKey>> {
         if let Some(stapling) = &self.stapling {
@@ -101,18 +117,77 @@ impl CertificateResolver {
     }
 }
 
+pub(super) struct ServerCertificateEntry {
+    certificate: Arc<CertifiedKey>,
+    stapling: Option<Arc<ocsp::StaplingState>>,
+}
+
+impl ServerCertificateEntry {
+    pub(super) fn new(
+        certificate: Arc<CertifiedKey>,
+        stapling: Option<Arc<ocsp::StaplingState>>,
+    ) -> Self {
+        Self {
+            certificate,
+            stapling,
+        }
+    }
+
+    fn resolved_certificate(&self) -> Arc<CertifiedKey> {
+        self.stapling
+            .as_ref()
+            .map(|stapling| stapling.certificate())
+            .unwrap_or_else(|| self.certificate.clone())
+    }
+}
+
+pub(super) struct ServerCertificateResolver {
+    entries: Vec<ServerCertificateEntry>,
+}
+
+impl ServerCertificateResolver {
+    pub(super) fn new(entries: Vec<ServerCertificateEntry>) -> Self {
+        Self { entries }
+    }
+}
+
+impl std::fmt::Debug for ServerCertificateResolver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ServerCertificateResolver")
+            .field("entries", &self.entries.len())
+            .finish()
+    }
+}
+
+impl ResolvesServerCert for ServerCertificateResolver {
+    fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        let offered = client_hello.signature_schemes();
+        self.entries
+            .iter()
+            .find(|entry| entry.certificate.key.choose_scheme(offered).is_some())
+            .or_else(|| self.entries.first())
+            .map(ServerCertificateEntry::resolved_certificate)
+    }
+}
+
 pub(super) struct HttpTlsConfigs {
-    pub(super) default: Arc<tokio_rustls::rustls::ServerConfig>,
-    pub(super) exact: HashMap<String, Arc<tokio_rustls::rustls::ServerConfig>>,
-    pub(super) wildcard: Vec<(String, Arc<tokio_rustls::rustls::ServerConfig>)>,
+    pub(super) default: Arc<HttpTlsEntry>,
+    pub(super) exact: HashMap<String, Arc<HttpTlsEntry>>,
+    pub(super) wildcard: Vec<(String, Arc<HttpTlsEntry>)>,
+}
+
+pub(super) struct HttpTlsEntry {
+    pub(super) config: Arc<tokio_rustls::rustls::ServerConfig>,
+    pub(super) client_ocsp: Option<Arc<ocsp::ClientOcspVerifier>>,
 }
 
 impl HttpTlsConfigs {
-    fn select(&self, client_hello: ClientHello<'_>) -> Arc<tokio_rustls::rustls::ServerConfig> {
+    fn select(&self, client_hello: ClientHello<'_>) -> Arc<HttpTlsEntry> {
         self.select_name(client_hello.server_name())
     }
 
-    fn select_name(&self, server_name: Option<&str>) -> Arc<tokio_rustls::rustls::ServerConfig> {
+    fn select_name(&self, server_name: Option<&str>) -> Arc<HttpTlsEntry> {
         let Some(server_name) = server_name else {
             return self.default.clone();
         };
@@ -190,26 +265,31 @@ pub(super) fn build_tls_config(
 pub(super) fn build_http_server_tls_config(
     server: &ServerConfig,
     http2: bool,
-) -> io::Result<tokio_rustls::rustls::ServerConfig> {
-    let certificate = load_certificate(&server.context)?;
-    let stapling = ocsp::build_stapling(
-        ocsp::StaplingOptions {
-            enabled: server.context.ssl_stapling,
-            verify: server.context.ssl_stapling_verify,
-            file: server.context.ssl_stapling_file.as_deref(),
-            responder: server.context.ssl_stapling_responder.as_deref(),
-            trusted_certificate: server.context.ssl_trusted_certificate.as_deref(),
-            resolver: &server.context.resolver,
-            resolver_timeout: server.context.resolver_timeout,
-        },
-        certificate.clone(),
+) -> io::Result<HttpTlsEntry> {
+    let certificates = load_certificate_entries(
+        &server.context.ssl_certificates,
+        &server.context.ssl_certificate_keys,
+        server.context.ssl_certificate.as_deref(),
+        server.context.ssl_certificate_key.as_deref(),
+        &server.context.ssl_passwords,
     )?;
-    let resolver = Arc::new(CertificateResolver {
-        exact: HashMap::new(),
-        wildcard: Vec::new(),
-        default: certificate,
-        stapling,
-    });
+    let mut entries = Vec::with_capacity(certificates.len());
+    for certificate in certificates {
+        let stapling = ocsp::build_stapling(
+            ocsp::StaplingOptions {
+                enabled: server.context.ssl_stapling,
+                verify: server.context.ssl_stapling_verify,
+                file: server.context.ssl_stapling_file.as_deref(),
+                responder: server.context.ssl_stapling_responder.as_deref(),
+                trusted_certificate: server.context.ssl_trusted_certificate.as_deref(),
+                resolver: &server.context.resolver,
+                resolver_timeout: server.context.resolver_timeout,
+            },
+            certificate.clone(),
+        )?;
+        entries.push(ServerCertificateEntry::new(certificate, stapling));
+    }
+    let resolver = Arc::new(ServerCertificateResolver::new(entries));
     let versions = rustls_protocol_versions(server.context.ssl_protocols);
     let provider = Arc::new(tls_crypto_provider(&server.context.ssl_ciphers));
     let builder = tokio_rustls::rustls::ServerConfig::builder_with_provider(provider.clone())
@@ -228,6 +308,16 @@ pub(super) fn build_http_server_tls_config(
         server.context.ssl_crl.as_deref(),
         &provider,
     )?;
+    let client_ocsp = ocsp::ClientOcspVerifier::build(ocsp::ClientOcspOptions {
+        mode: server.context.ssl_ocsp,
+        verify_client: server.context.ssl_verify_client,
+        responder: server.context.ssl_ocsp_responder.as_deref(),
+        cache: server.context.ssl_ocsp_cache.as_deref(),
+        client_certificate: server.context.ssl_client_certificate.as_deref(),
+        trusted_certificate: server.context.ssl_trusted_certificate.as_deref(),
+        resolver: &server.context.resolver,
+        resolver_timeout: server.context.resolver_timeout,
+    })?;
     let mut server_config = match client_verifier {
         Some(verifier) => builder
             .with_client_cert_verifier(verifier)
@@ -240,7 +330,10 @@ pub(super) fn build_http_server_tls_config(
     } else {
         vec![b"http/1.1".to_vec()]
     };
-    Ok(server_config)
+    Ok(HttpTlsEntry {
+        config: Arc::new(server_config),
+        client_ocsp,
+    })
 }
 
 pub(super) fn server_uses_http2(server: &ServerConfig, address: &ListenAddress) -> bool {

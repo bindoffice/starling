@@ -1,15 +1,5 @@
 use super::*;
 
-pub(in crate::server) fn load_certificate(
-    context: &EffectiveConfig,
-) -> io::Result<Arc<CertifiedKey>> {
-    load_certificate_paths(
-        context.ssl_certificate.as_deref(),
-        context.ssl_certificate_key.as_deref(),
-        &context.ssl_passwords,
-    )
-}
-
 pub(in crate::server) fn load_certificate_paths(
     certificate_path: Option<&Path>,
     key_path: Option<&Path>,
@@ -32,6 +22,33 @@ pub(in crate::server) fn load_certificate_paths(
     let signing_key = tokio_rustls::rustls::crypto::ring::sign::any_supported_type(&private_key)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
     Ok(Arc::new(CertifiedKey::new(certificates, signing_key)))
+}
+
+pub(in crate::server) fn load_certificate_entries(
+    certificate_paths: &[PathBuf],
+    key_paths: &[PathBuf],
+    certificate_path: Option<&Path>,
+    key_path: Option<&Path>,
+    passwords: &[Vec<u8>],
+) -> io::Result<Vec<Arc<CertifiedKey>>> {
+    if certificate_paths.is_empty() {
+        return Ok(vec![load_certificate_paths(
+            certificate_path,
+            key_path,
+            passwords,
+        )?]);
+    }
+    if certificate_paths.len() != key_paths.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the number of ssl_certificate directives does not match ssl_certificate_key",
+        ));
+    }
+    certificate_paths
+        .iter()
+        .zip(key_paths)
+        .map(|(certificate, key)| load_certificate_paths(Some(certificate), Some(key), passwords))
+        .collect()
 }
 
 pub(in crate::server) fn load_certificates(
@@ -99,3 +116,44 @@ pub(in crate::server) fn install_crypto_provider() {
 pub(in crate::server) struct NoCertificateVerification(
     pub(in crate::server) Arc<tokio_rustls::rustls::crypto::CryptoProvider>,
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loads_multiple_certificate_entries_in_order() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let certificate = fixture.join("test.crt");
+        let key = fixture.join("test.key");
+        let entries = load_certificate_entries(
+            &[certificate.clone(), certificate],
+            &[key.clone(), key],
+            None,
+            None,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn rejects_mismatched_certificate_and_key_counts() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let error = load_certificate_entries(
+            &[fixture.join("test.crt"), fixture.join("test.crt")],
+            &[fixture.join("test.key")],
+            None,
+            None,
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(
+            error
+                .to_string()
+                .contains("does not match ssl_certificate_key"),
+            "{error}"
+        );
+    }
+}

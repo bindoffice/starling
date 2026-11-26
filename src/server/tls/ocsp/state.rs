@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 use tokio_rustls::rustls::sign::CertifiedKey;
@@ -51,6 +52,7 @@ impl StaplingState {
         state: &Arc<Self>,
         identity: Arc<CertificateIdentity>,
         responder: ResponderUrl,
+        trusted_certificate: Option<PathBuf>,
         resolver: Resolver,
         timeout: std::time::Duration,
     ) {
@@ -58,7 +60,14 @@ impl StaplingState {
             return;
         };
         let weak = Arc::downgrade(state);
-        let task = runtime.spawn(refresh::run(weak, identity, responder, resolver, timeout));
+        let task = runtime.spawn(refresh::run(
+            weak,
+            identity,
+            responder,
+            trusted_certificate,
+            resolver,
+            timeout,
+        ));
         *state
             .task
             .lock()

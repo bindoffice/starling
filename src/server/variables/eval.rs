@@ -135,6 +135,7 @@ pub(in crate::server) fn variable_value(
         "ssl_cipher" => variables.ssl_cipher.clone(),
         "ssl_server_name" => variables.ssl_server_name.clone(),
         "ssl_alpn_protocol" => variables.ssl_alpn_protocol.clone(),
+        "ssl_session_reused" => variables.ssl_session_reused.clone(),
         "ssl_client_verify" => variables.ssl_client_verify.clone(),
         "ssl_client_cert" => variables.ssl_client_cert.clone(),
         "ssl_client_escaped_cert" => variables.ssl_client_escaped_cert.clone(),

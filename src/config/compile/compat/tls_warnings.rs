@@ -36,6 +36,28 @@ pub(super) fn collect_tls_warning(directive: &Directive, warnings: &mut Vec<Conf
             ));
         }
     }
+
+    let ignored = match directive.name.as_str() {
+        "ssl_dhparam" => Some(
+            "\"ssl_dhparam\" is ignored by the rustls TLS backend; \
+             finite-field DHE is unavailable, use ECDHE cipher suites instead",
+        ),
+        "ssl_ecdh_curve" => Some(
+            "\"ssl_ecdh_curve\" is ignored by the rustls TLS backend; \
+             the backend's built-in X25519/P-256/P-384 preference is used",
+        ),
+        "ssl_early_data" if directive.args.first().is_some_and(|value| value == "on") => {
+            Some("\"ssl_early_data on\" is not supported by the rustls TLS backend and was ignored")
+        }
+        "ssl_buffer_size" => Some(
+            "\"ssl_buffer_size\" is ignored by the rustls TLS backend; \
+             record buffering is managed by rustls",
+        ),
+        _ => None,
+    };
+    if let Some(message) = ignored {
+        warnings.push(ConfigWarning::at(directive.location.clone(), message));
+    }
 }
 
 fn is_legacy_tls_protocol(protocol: &str) -> bool {

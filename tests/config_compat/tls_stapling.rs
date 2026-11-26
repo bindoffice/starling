@@ -86,3 +86,59 @@ fn rejects_invalid_stapling_configuration() {
     }
     let _ = fs::remove_dir_all(prefix);
 }
+
+#[test]
+fn preserves_multiple_certificate_and_key_pairs_in_order() {
+    let prefix = temp_prefix();
+    fs::create_dir_all(&prefix).unwrap();
+    let config_path = prefix.join("nginx.conf");
+    fs::write(
+        &config_path,
+        r#"
+            events {}
+            http {
+                server {
+                    listen 127.0.0.1:18473 ssl;
+                    ssl_certificate rsa.crt;
+                    ssl_certificate ec.crt;
+                    ssl_certificate_key rsa.key;
+                    ssl_certificate_key ec.key;
+                }
+            }
+            stream {
+                server {
+                    listen 127.0.0.1:18474 ssl;
+                    ssl_certificate rsa.crt;
+                    ssl_certificate ec.crt;
+                    ssl_certificate_key rsa.key;
+                    ssl_certificate_key ec.key;
+                    proxy_pass 127.0.0.1:19443;
+                }
+            }
+        "#,
+    )
+    .unwrap();
+    let document = ConfigLoader::new(prefix.clone())
+        .load(&config_path)
+        .unwrap();
+    let config = compile(document, prefix.clone(), config_path).unwrap();
+    let http = &config.http.as_ref().unwrap().servers[0].context;
+    assert_eq!(
+        http.ssl_certificates,
+        vec![prefix.join("rsa.crt"), prefix.join("ec.crt")]
+    );
+    assert_eq!(
+        http.ssl_certificate_keys,
+        vec![prefix.join("rsa.key"), prefix.join("ec.key")]
+    );
+    let stream = &config.stream.as_ref().unwrap().servers[0];
+    assert_eq!(
+        stream.ssl_certificates,
+        vec![prefix.join("rsa.crt"), prefix.join("ec.crt")]
+    );
+    assert_eq!(
+        stream.ssl_certificate_keys,
+        vec![prefix.join("rsa.key"), prefix.join("ec.key")]
+    );
+    let _ = fs::remove_dir_all(prefix);
+}

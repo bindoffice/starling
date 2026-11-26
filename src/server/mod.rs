@@ -82,7 +82,7 @@ use tls::{
 use tls::{
     ClientTlsConfigCache, ClientTlsOptions, HttpTlsConfigs, StreamTlsConfigs, TlsConnectionInfo,
     accept_http_tls, accept_stream_tls, build_stream_tls_configs, build_tls_configs,
-    tls_connection_info,
+    client_certificate_verify_failure, tls_connection_info,
 };
 mod upstream;
 use upstream::*;

@@ -1,3 +1,4 @@
+use super::super::compat::reject_ssl_conf_command;
 use super::*;
 
 impl<'a> HttpCompileState<'a> {
@@ -63,6 +64,9 @@ impl<'a> HttpCompileState<'a> {
             | "ssl_stapling_verify"
             | "ssl_stapling_file"
             | "ssl_stapling_responder"
+            | "ssl_ocsp"
+            | "ssl_ocsp_responder"
+            | "ssl_ocsp_cache"
             | "resolver"
             | "resolver_timeout" => {
                 try_apply_stapling_directive(
@@ -72,6 +76,9 @@ impl<'a> HttpCompileState<'a> {
                     Scope::Server,
                     &mut self.seen_scope.stapling,
                 )?;
+            }
+            "ssl_conf_command" => {
+                reject_ssl_conf_command(child, "ssl_conf_command")?;
             }
             "ssl_crl" => {
                 self.context.ssl_crl = Some(resolve_path(self.prefix, one_arg(child)?));

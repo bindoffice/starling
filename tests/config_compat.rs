@@ -7,7 +7,7 @@ use starling::config::{
     AutoindexFormat, ClientCertificateVerify, ConfigLoader, DavMethod, DisableSymlinksMode,
     ExpiresOffset, ExpiresValue, GzipHttpVersion, GzipStatic, IfModifiedSince, LingeringClose,
     ListenAddress, ListenKeepalive, ListenSocketOptions, LogDestination, LogEscapeMode, LogLevel,
-    ProxyStoreConfig, ServerTokens, StoreConfig, SyslogServer, TlsCipherSuite, compile,
+    OcspMode, ProxyStoreConfig, ServerTokens, StoreConfig, SyslogServer, TlsCipherSuite, compile,
 };
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -104,6 +104,8 @@ mod tls_ciphers;
 mod tls_client;
 #[path = "config_compat/tls_conf_commands.rs"]
 mod tls_conf_commands;
+#[path = "config_compat/tls_ocsp.rs"]
+mod tls_ocsp;
 #[path = "config_compat/tls_protocols.rs"]
 mod tls_protocols;
 #[path = "config_compat/tls_stapling.rs"]

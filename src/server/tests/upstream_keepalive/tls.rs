@@ -47,7 +47,7 @@ async fn configures_stream_tls_termination() {
         .unwrap()
         .remove(&routes[0].address)
         .unwrap();
-    assert!(tls_config.default.ignore_client_order);
+    assert!(tls_config.default.config.ignore_client_order);
 
     let (client_io, server_io) = tokio::io::duplex(64 * 1024);
     let server_task = tokio::spawn(async move {

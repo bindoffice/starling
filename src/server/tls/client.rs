@@ -248,17 +248,85 @@ pub(in crate::server) fn build_client_tls_config(
     Ok(Arc::new(config))
 }
 
+pub(in crate::server) enum HttpTlsAcceptError<S> {
+    Handshake(io::Error),
+    ClientOcsp {
+        stream: Box<tokio_rustls::server::TlsStream<S>>,
+        error: io::Error,
+        session_reused: bool,
+    },
+}
+
+impl<S> std::fmt::Debug for HttpTlsAcceptError<S> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Handshake(error) => formatter.debug_tuple("Handshake").field(error).finish(),
+            Self::ClientOcsp { error, .. } => formatter
+                .debug_struct("ClientOcsp")
+                .field("error", error)
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+impl<S> std::fmt::Display for HttpTlsAcceptError<S> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Handshake(error) | Self::ClientOcsp { error, .. } => error.fmt(formatter),
+        }
+    }
+}
+
+impl<S> HttpTlsAcceptError<S> {
+    pub(in crate::server) fn into_client_ocsp_failure(
+        self,
+    ) -> Option<(Box<tokio_rustls::server::TlsStream<S>>, io::Error, bool)> {
+        match self {
+            Self::ClientOcsp {
+                stream,
+                error,
+                session_reused,
+            } => Some((stream, error, session_reused)),
+            Self::Handshake(_) => None,
+        }
+    }
+}
+
 pub(in crate::server) async fn accept_http_tls<S>(
     stream: S,
     configs: Arc<HttpTlsConfigs>,
-) -> io::Result<tokio_rustls::server::TlsStream<S>>
+) -> Result<tokio_rustls::server::TlsStream<S>, HttpTlsAcceptError<S>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let start =
-        LazyConfigAcceptor::new(tokio_rustls::rustls::server::Acceptor::default(), stream).await?;
-    let config = configs.select(start.client_hello());
-    start.into_stream(config).await
+    let start = LazyConfigAcceptor::new(tokio_rustls::rustls::server::Acceptor::default(), stream)
+        .await
+        .map_err(HttpTlsAcceptError::Handshake)?;
+    let entry = configs.select(start.client_hello());
+    let stream = start
+        .into_stream(entry.config.clone())
+        .await
+        .map_err(HttpTlsAcceptError::Handshake)?;
+    if let Some(verifier) = &entry.client_ocsp {
+        let certificates = stream
+            .get_ref()
+            .1
+            .peer_certificates()
+            .map(|certificates| certificates.to_vec())
+            .unwrap_or_default();
+        if let Err(error) = verifier.validate(&certificates).await {
+            let session_reused = matches!(
+                stream.get_ref().1.handshake_kind(),
+                Some(tokio_rustls::rustls::HandshakeKind::Resumed)
+            );
+            return Err(HttpTlsAcceptError::ClientOcsp {
+                stream: Box::new(stream),
+                error,
+                session_reused,
+            });
+        }
+    }
+    Ok(stream)
 }
 
 pub(in crate::server) fn tls_connection_info(
@@ -286,6 +354,7 @@ pub(in crate::server) fn tls_connection_info(
             .unwrap_or_default(),
         client_certificate,
         client_certificate_verified: false,
+        client_certificate_error: None,
         session_reused: matches!(
             connection.handshake_kind(),
             Some(tokio_rustls::rustls::HandshakeKind::Resumed)

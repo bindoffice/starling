@@ -10,14 +10,19 @@ pub(super) struct ValidatedResponse {
     pub(super) next_update: Option<SystemTime>,
 }
 
-pub(super) fn validate_static(response: &[u8]) -> io::Result<()> {
-    let response = OcspResponse::from_der(response).map_err(openssl_error)?;
-    if response.status() != OcspResponseStatus::SUCCESSFUL {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("OCSP response status {:?}", response.status()),
-        ));
+pub(super) fn validate_static(identity: &CertificateIdentity, response: &[u8]) -> io::Result<()> {
+    if !identity.verify {
+        let response = OcspResponse::from_der(response).map_err(openssl_error)?;
+        if response.status() != OcspResponseStatus::SUCCESSFUL {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("OCSP response status {:?}", response.status()),
+            ));
+        }
+        response.basic().map_err(openssl_error)?;
+        return Ok(());
     }
+    validate(identity, response)?;
     Ok(())
 }
 
@@ -45,11 +50,26 @@ pub(super) fn validate(
     let status = basic
         .find_status(&certificate_id)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "OCSP status not found"))?;
-    if status.status != OcspCertStatus::GOOD {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("OCSP certificate status {:?}", status.status),
-        ));
+    match status.status {
+        OcspCertStatus::GOOD => {}
+        OcspCertStatus::REVOKED => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "certificate revoked",
+            ));
+        }
+        OcspCertStatus::UNKNOWN => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "certificate status unknown",
+            ));
+        }
+        status => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected OCSP certificate status {status:?}"),
+            ));
+        }
     }
     status.check_validity(300, None).map_err(openssl_error)?;
     let next_update = status.next_update().map(parse_time).transpose()?;
@@ -140,6 +160,8 @@ pub(super) fn refresh_delay(now: SystemTime, next_update: Option<SystemTime>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::tls::load_certificates;
+    use std::path::PathBuf;
 
     #[test]
     fn refresh_window_matches_nginx() {
@@ -157,5 +179,32 @@ mod tests {
             Duration::from_secs(3600)
         );
         assert_eq!(refresh_delay(now, None), Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn static_validation_rejects_a_response_for_another_certificate() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ocsp");
+        let chain = load_certificates(&fixture.join("ca.crt")).unwrap();
+        let identity = CertificateIdentity::load(&chain, Some(&fixture.join("ca.crt")), true)
+            .unwrap()
+            .unwrap();
+        let response = std::fs::read(fixture.join("response.der")).unwrap();
+        let error = validate_static(&identity, &response).unwrap_err();
+        assert!(
+            error.to_string().contains("OCSP status not found"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn static_validation_rejects_malformed_responses() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ocsp");
+        let chain = load_certificates(&fixture.join("server.crt")).unwrap();
+        let identity = CertificateIdentity::load(&chain, Some(&fixture.join("ca.crt")), true)
+            .unwrap()
+            .unwrap();
+        let response = std::fs::read(fixture.join("response.der")).unwrap();
+        let error = validate_static(&identity, &response[..response.len() / 2]).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 }

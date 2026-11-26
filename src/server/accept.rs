@@ -301,9 +301,22 @@ pub(in crate::server) async fn handle_http_connection_with_shutdown<S>(
                 .await;
             }
             Ok(Err(err)) => {
-                state
-                    .logger
-                    .log(LogLevel::Info, format!("SSL_do_handshake() failed: {err}"));
+                let message = format!("SSL_do_handshake() failed: {err}");
+                if let Some((mut stream, ocsp_error, session_reused)) =
+                    err.into_client_ocsp_failure()
+                {
+                    state.logger.log(LogLevel::Info, message);
+                    if let Err(error) =
+                        write_client_ocsp_rejection(&mut *stream, &ocsp_error, session_reused).await
+                    {
+                        state.logger.log(
+                            LogLevel::Info,
+                            format!("failed to send OCSP rejection response: {error}"),
+                        );
+                    }
+                } else {
+                    state.logger.log(LogLevel::Info, message);
+                }
             }
             Err(_) => {
                 state.logger.log(LogLevel::Info, "SSL handshake timed out");
@@ -334,6 +347,29 @@ pub(in crate::server) async fn handle_http_connection_with_shutdown<S>(
             .await;
         }
     }
+}
+
+async fn write_client_ocsp_rejection<S>(
+    stream: &mut tokio_rustls::server::TlsStream<S>,
+    error: &io::Error,
+    session_reused: bool,
+) -> io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let reason = client_certificate_verify_failure(error);
+    let reused = if session_reused { ":r" } else { "" };
+    let body = format!(
+        "<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body>\r\n<center><h1>400 Bad Request</h1></center>\r\n<center>client certificate verify error: FAILED:{reason}{reused}</center>\r\n</body>\r\n</html>\r\n"
+    );
+    let head = format!(
+        "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await?;
+    stream.write_all(body.as_bytes()).await?;
+    stream.flush().await?;
+    stream.shutdown().await
 }
 
 #[cfg(test)]

@@ -120,7 +120,7 @@ async fn negotiates_http2_with_alpn_and_serves_request() {
         .remove(&group.address)
         .unwrap();
     assert_eq!(
-        server_config.default.alpn_protocols,
+        server_config.default.config.alpn_protocols,
         vec![b"h2".to_vec(), b"http/1.1".to_vec()]
     );
     let state = test_state(&config);

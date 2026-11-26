@@ -1,7 +1,10 @@
 use super::stream_server_options::parse_stream_alpn;
 use super::*;
 
-use super::compat::{reject_proxy_ssl_conf_command, validate_certificate_cache};
+use super::compat::{
+    reject_proxy_ssl_conf_command, reject_ssl_conf_command, try_apply_compat_directive,
+    validate_certificate_cache,
+};
 
 #[derive(Clone)]
 pub(super) struct StreamTlsOptions {
@@ -21,6 +24,8 @@ pub(super) struct StreamTlsOptions {
     pub(super) proxy_ssl_alpn: Vec<String>,
     pub(super) ssl_certificate: Option<PathBuf>,
     pub(super) ssl_certificate_key: Option<PathBuf>,
+    pub(super) ssl_certificates: Vec<PathBuf>,
+    pub(super) ssl_certificate_keys: Vec<PathBuf>,
     pub(super) ssl_protocols: TlsProtocols,
     pub(super) ssl_prefer_server_ciphers: bool,
     pub(super) ssl_ciphers: TlsCipherConfig,
@@ -33,6 +38,9 @@ pub(super) struct StreamTlsOptions {
     pub(super) ssl_stapling_verify: bool,
     pub(super) ssl_stapling_file: Option<PathBuf>,
     pub(super) ssl_stapling_responder: Option<String>,
+    pub(super) ssl_ocsp: OcspMode,
+    pub(super) ssl_ocsp_responder: Option<String>,
+    pub(super) ssl_ocsp_cache: Option<String>,
     pub(super) resolver: ResolverConfig,
     pub(super) resolver_timeout: Duration,
     pub(super) ssl_passwords: Vec<Vec<u8>>,
@@ -60,6 +68,8 @@ impl Default for StreamTlsOptions {
             proxy_ssl_alpn: Vec::new(),
             ssl_certificate: None,
             ssl_certificate_key: None,
+            ssl_certificates: Vec::new(),
+            ssl_certificate_keys: Vec::new(),
             ssl_protocols: TlsProtocols::default(),
             ssl_prefer_server_ciphers: false,
             ssl_ciphers: TlsCipherConfig::default(),
@@ -72,6 +82,9 @@ impl Default for StreamTlsOptions {
             ssl_stapling_verify: false,
             ssl_stapling_file: None,
             ssl_stapling_responder: None,
+            ssl_ocsp: OcspMode::Off,
+            ssl_ocsp_responder: None,
+            ssl_ocsp_cache: None,
             resolver: ResolverConfig::default(),
             resolver_timeout: Duration::from_secs(30),
             ssl_passwords: Vec::new(),
@@ -88,10 +101,15 @@ pub(super) struct StreamTlsSeen {
     proxy_ssl_protocols: bool,
     proxy_ssl_alpn: bool,
     ssl_alpn: bool,
+    ssl_certificate: bool,
+    ssl_certificate_key: bool,
     ssl_stapling: bool,
     ssl_stapling_verify: bool,
     ssl_stapling_file: bool,
     ssl_stapling_responder: bool,
+    ssl_ocsp: bool,
+    ssl_ocsp_responder: bool,
+    ssl_ocsp_cache: bool,
     resolver: bool,
     resolver_timeout: bool,
 }
@@ -122,6 +140,9 @@ pub(super) fn apply_stream_tls_directive(
             options.ssl_prefer_server_ciphers = parse_flag(directive, "ssl_prefer_server_ciphers")?;
         }
         "ssl_ciphers" => options.ssl_ciphers = parse_tls_cipher_config(directive)?,
+        "ssl_session_cache" | "ssl_session_timeout" | "ssl_session_tickets" => {
+            try_apply_compat_directive(directive)?;
+        }
         "proxy_ssl_ciphers" => {
             options.proxy_ssl_ciphers = parse_tls_cipher_config(directive)?;
         }
@@ -131,11 +152,23 @@ pub(super) fn apply_stream_tls_directive(
         "ssl_verify_depth" => options.ssl_verify_depth = parse_ssl_verify_depth(directive)?,
         "ssl_certificate" => {
             validate_no_block(directive)?;
-            options.ssl_certificate = Some(resolve_path(prefix, one_arg(directive)?));
+            let path = resolve_path(prefix, one_arg(directive)?);
+            if !seen.ssl_certificate {
+                options.ssl_certificates.clear();
+                seen.ssl_certificate = true;
+            }
+            options.ssl_certificates.push(path.clone());
+            options.ssl_certificate = Some(path);
         }
         "ssl_certificate_key" => {
             validate_no_block(directive)?;
-            options.ssl_certificate_key = Some(resolve_path(prefix, one_arg(directive)?));
+            let path = resolve_path(prefix, one_arg(directive)?);
+            if !seen.ssl_certificate_key {
+                options.ssl_certificate_keys.clear();
+                seen.ssl_certificate_key = true;
+            }
+            options.ssl_certificate_keys.push(path.clone());
+            options.ssl_certificate_key = Some(path);
         }
         "ssl_client_certificate" => {
             validate_no_block(directive)?;
@@ -165,6 +198,35 @@ pub(super) fn apply_stream_tls_directive(
             reject_stream_stapling_duplicate(directive, &mut seen.ssl_stapling_responder)?;
             options.ssl_stapling_responder = Some(one_arg(directive)?.to_string());
         }
+        "ssl_ocsp" => {
+            reject_stream_stapling_duplicate(directive, &mut seen.ssl_ocsp)?;
+            validate_no_block(directive)?;
+            options.ssl_ocsp = match one_arg(directive)? {
+                "off" => OcspMode::Off,
+                "on" => OcspMode::On,
+                "leaf" => OcspMode::Leaf,
+                value => {
+                    return Err(ConfigError::at(
+                        directive.location.clone(),
+                        format!(
+                            "invalid value \"{value}\" in \"ssl_ocsp\" directive, \
+                             it must be \"off\", \"on\" or \"leaf\""
+                        ),
+                    ));
+                }
+            };
+        }
+        "ssl_ocsp_responder" => {
+            reject_stream_stapling_duplicate(directive, &mut seen.ssl_ocsp_responder)?;
+            validate_no_block(directive)?;
+            let responder = one_arg(directive)?;
+            validate_stream_ocsp_responder_url(responder, &directive.location)?;
+            options.ssl_ocsp_responder = Some(responder.to_string());
+        }
+        "ssl_ocsp_cache" => {
+            reject_stream_stapling_duplicate(directive, &mut seen.ssl_ocsp_cache)?;
+            options.ssl_ocsp_cache = parse_stream_ocsp_cache(directive)?;
+        }
         "resolver" => {
             reject_stream_stapling_duplicate(directive, &mut seen.resolver)?;
             options.resolver = parse_resolver(directive)?;
@@ -188,6 +250,9 @@ pub(super) fn apply_stream_tls_directive(
         }
         "proxy_ssl_conf_command" => {
             reject_proxy_ssl_conf_command(directive)?;
+        }
+        "ssl_conf_command" => {
+            reject_ssl_conf_command(directive, "ssl_conf_command")?;
         }
         "proxy_ssl_verify" => {
             options.proxy_ssl_verify = parse_flag(directive, "proxy_ssl_verify")?;
@@ -264,4 +329,44 @@ fn reject_stream_stapling_duplicate(directive: &Directive, seen: &mut bool) -> C
     }
     *seen = true;
     Ok(())
+}
+
+fn validate_stream_ocsp_responder_url(value: &str, location: &SourceLocation) -> ConfigResult<()> {
+    let lower = value.to_ascii_lowercase();
+    if (lower.starts_with("http://") || lower.starts_with("https://"))
+        && !value.contains(char::is_whitespace)
+        && value.len() > if lower.starts_with("https://") { 8 } else { 7 }
+    {
+        return Ok(());
+    }
+    Err(ConfigError::at(
+        location.clone(),
+        format!("invalid OCSP responder URL \"{value}\""),
+    ))
+}
+
+fn parse_stream_ocsp_cache(directive: &Directive) -> ConfigResult<Option<String>> {
+    validate_no_block(directive)?;
+    let value = one_arg(directive)?;
+    if value == "off" {
+        return Ok(None);
+    }
+    let mut parts = value.split(':');
+    let valid = parts.next() == Some("shared")
+        && parts.next().is_some_and(|name| !name.is_empty())
+        && parts.next().is_some_and(|size| {
+            let digits = size.strip_suffix(['k', 'K', 'm', 'M']).unwrap_or(size);
+            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        && parts.next().is_none();
+    if !valid {
+        return Err(ConfigError::at(
+            directive.location.clone(),
+            format!(
+                "invalid value \"{value}\" in \"ssl_ocsp_cache\" directive, \
+                 expected \"off\" or \"shared:name:size\""
+            ),
+        ));
+    }
+    Ok(Some(value.to_string()))
 }

@@ -22,6 +22,14 @@ pub enum ClientCertificateVerify {
     OptionalNoCa,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OcspMode {
+    #[default]
+    Off,
+    On,
+    Leaf,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TlsCipherSuite {
     EcdheEcdsaAes256GcmSha384,
@@ -245,6 +253,7 @@ pub(in crate::config::compile) fn cipher_token_candidates(
             | "KECDHE"
             | "KEECDH"
             | "ECDSA"
+            | "ECCDRAFT"
             | "AECDSA"
             | "RSA"
             | "ARSA"
@@ -365,7 +374,7 @@ pub(in crate::config::compile) fn cipher_alias_matches(alias: &str, suite: TlsCi
         "AES128" | "AES128GCM" => suite.bits() == 128 && !suite.uses_chacha20(),
         "AES256" | "AES256GCM" => suite.bits() == 256 && !suite.uses_chacha20(),
         "CHACHA20" | "POLY1305" => suite.uses_chacha20(),
-        "ECDSA" | "AECDSA" => suite.uses_ecdsa(),
+        "ECDSA" | "ECCDRAFT" | "AECDSA" => suite.uses_ecdsa(),
         "RSA" | "ARSA" => !suite.uses_ecdsa(),
         // Every rustls TLS 1.2 suite is AEAD, so legacy digest-only aliases do not match.
         "SHA256" | "SHA384" | "MEDIUM" => false,

@@ -48,7 +48,7 @@ async fn completes_tls_handshake_and_serves_https() {
         .unwrap()
         .remove(&group.address)
         .unwrap();
-    assert!(server_config.default.ignore_client_order);
+    assert!(server_config.default.config.ignore_client_order);
     let logger = Arc::new(Logger::new(&config.core.error_logs, &config.prefix).unwrap());
     let http_error_loggers = build_http_error_loggers(&config).unwrap();
     let (reload, _) = watch::channel(0_u64);

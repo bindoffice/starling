@@ -220,18 +220,25 @@ fn stream_variable_value(
             .as_ref()
             .map(|tls| tls.alpn_protocol.clone())
             .unwrap_or_default(),
+        "ssl_session_reused" => log
+            .tls
+            .as_ref()
+            .map(|tls| if tls.session_reused { "r" } else { "." })
+            .unwrap_or_default()
+            .into(),
         "ssl_client_verify" => log
             .tls
             .as_ref()
             .map(|tls| {
-                if tls.client_certificate.is_some() {
-                    "SUCCESS"
+                if let Some(error) = &tls.client_certificate_error {
+                    format!("FAILED:{error}")
+                } else if tls.client_certificate.is_some() {
+                    "SUCCESS".to_string()
                 } else {
-                    "NONE"
+                    "NONE".to_string()
                 }
             })
-            .unwrap_or_default()
-            .into(),
+            .unwrap_or_default(),
         name if name.starts_with("ssl_client_") => log
             .tls
             .as_ref()

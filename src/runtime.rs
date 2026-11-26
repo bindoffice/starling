@@ -10,7 +10,8 @@ use crate::logging::Logger;
 use crate::server;
 use crate::{SERVER_SOFTWARE, STARLING_VERSION};
 
-const CONFIGURE_ARGUMENTS: &str = "--with-http_starling_module --with-http_v2_module";
+const CONFIGURE_ARGUMENTS: &str = "--with-http_starling_module --with-http_ssl_module --with-http_v2_module \
+     --with-stream --with-stream_ssl_module";
 const WORKER_THREADS_PER_RUNTIME: usize = 4;
 
 // Match the usual Linux/Nginx worker stack. Nested internal redirects,
@@ -375,6 +376,7 @@ fn print_version(verbose: bool) {
     println!("nginx version: {SERVER_SOFTWARE} (starling/{STARLING_VERSION})");
     if verbose {
         println!("built by rustc");
+        println!("TLS SNI support enabled");
         println!("configure arguments: {CONFIGURE_ARGUMENTS}");
     }
 }

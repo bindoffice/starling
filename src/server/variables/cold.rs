@@ -6,6 +6,7 @@ pub(in crate::server) struct VariablesCold {
     pub(in crate::server) ssl_cipher: String,
     pub(in crate::server) ssl_server_name: String,
     pub(in crate::server) ssl_alpn_protocol: String,
+    pub(in crate::server) ssl_session_reused: String,
     pub(in crate::server) ssl_client_verify: String,
     pub(in crate::server) ssl_client_cert: String,
     pub(in crate::server) ssl_client_escaped_cert: String,
