@@ -2,6 +2,10 @@ use super::*;
 
 mod body;
 
+/// Inline bodies up to this size into the head buffer so a tiny response leaves
+/// in a single write. Larger bodies stay zero-copy and keep the split write.
+const INLINE_BODY_LIMIT: usize = 16 * 1024;
+
 pub struct ResponseWriteOptions<'a> {
     pub request_method: &'a str,
     pub request_version: &'a str,
@@ -40,6 +44,26 @@ pub(crate) async fn write_prepared_response_with_scratch<W: AsyncWrite + Unpin>(
 ) -> io::Result<()> {
     write_early_hints(writer, response.early_hints(), options.request_version).await?;
     build_response_head_into(response, scratch);
+
+    // A small in-memory body can ride along with the head in one write instead
+    // of a second syscall. Only when unframed, unrated and not a HEAD request.
+    if !chunked && options.rate.rate == 0 && !options.request_method.eq_ignore_ascii_case("HEAD") {
+        let inlinable = matches!(
+            &response.body,
+            ResponseBody::Bytes(body) if body.len() <= INLINE_BODY_LIMIT
+        );
+        if inlinable {
+            if let ResponseBody::Bytes(body) =
+                std::mem::replace(&mut response.body, ResponseBody::Empty)
+            {
+                scratch.extend_from_slice(&body);
+            }
+            writer.write_all(scratch).await?;
+            writer.flush().await?;
+            return Ok(());
+        }
+    }
+
     writer.write_all(scratch).await?;
 
     if options.request_method.eq_ignore_ascii_case("HEAD") {
