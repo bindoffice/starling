@@ -1,5 +1,7 @@
 use super::*;
 
+use chrono::{Datelike, Local, TimeZone, Timelike, Utc};
+
 const NAME_LENGTH: usize = 50;
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -203,23 +205,17 @@ fn xml_time(time: SystemTime) -> String {
     let seconds = time
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs() as libc::time_t;
-    // SAFETY: libc::tm consists of integer and pointer fields, so its all-zero
-    // representation is valid.
-    let mut value: libc::tm = unsafe { std::mem::zeroed() };
-    // SAFETY: both pointers reference live, correctly initialized storage for
-    // the duration of the call.
-    unsafe {
-        libc::gmtime_r(&seconds, &mut value);
-    }
+        .as_secs() as i64;
+    let epoch = Utc.timestamp_opt(0, 0).single().unwrap();
+    let value = Utc.timestamp_opt(seconds, 0).single().unwrap_or(epoch);
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        value.tm_year + 1900,
-        value.tm_mon + 1,
-        value.tm_mday,
-        value.tm_hour,
-        value.tm_min,
-        value.tm_sec
+        value.year(),
+        value.month(),
+        value.day(),
+        value.hour(),
+        value.minute(),
+        value.second()
     )
 }
 
@@ -227,35 +223,34 @@ fn autoindex_time(time: SystemTime, localtime: bool) -> String {
     let seconds = time
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs() as libc::time_t;
-    // SAFETY: libc::tm consists of integer and pointer fields, so its all-zero
-    // representation is valid.
-    let mut value: libc::tm = unsafe { std::mem::zeroed() };
-    if localtime {
-        // SAFETY: both pointers reference live, correctly initialized storage
-        // for the duration of the call.
-        unsafe {
-            libc::localtime_r(&seconds, &mut value);
-        }
+        .as_secs() as i64;
+    let parts = if localtime {
+        let epoch = Local.timestamp_opt(0, 0).earliest().unwrap();
+        let value = Local.timestamp_opt(seconds, 0).earliest().unwrap_or(epoch);
+        (
+            value.month(),
+            value.day(),
+            value.year(),
+            value.hour(),
+            value.minute(),
+        )
     } else {
-        // SAFETY: both pointers reference live, correctly initialized storage
-        // for the duration of the call.
-        unsafe {
-            libc::gmtime_r(&seconds, &mut value);
-        }
-    }
+        let epoch = Utc.timestamp_opt(0, 0).single().unwrap();
+        let value = Utc.timestamp_opt(seconds, 0).single().unwrap_or(epoch);
+        (
+            value.month(),
+            value.day(),
+            value.year(),
+            value.hour(),
+            value.minute(),
+        )
+    };
+    let (month_number, day, year, hour, minute) = parts;
     let month = MONTHS
-        .get(value.tm_mon.clamp(0, 11) as usize)
+        .get(month_number.saturating_sub(1) as usize)
         .copied()
         .unwrap_or("Jan");
-    format!(
-        "{:02}-{}-{:04} {:02}:{:02}",
-        value.tm_mday,
-        month,
-        value.tm_year + 1900,
-        value.tm_hour,
-        value.tm_min
-    )
+    format!("{:02}-{}-{:04} {:02}:{:02}", day, month, year, hour, minute)
 }
 
 #[cfg(test)]

@@ -280,6 +280,7 @@ fn blocking_thread_limit(worker_threads: usize) -> usize {
     worker_threads.saturating_mul(2).clamp(8, 64)
 }
 
+#[cfg(unix)]
 fn send_signal(signal: &str, pid_path: &Path) -> Result<(), String> {
     use rustix::process::Signal;
 
@@ -309,6 +310,11 @@ fn send_signal(signal: &str, pid_path: &Path) -> Result<(), String> {
             signal.as_raw()
         )
     })
+}
+
+#[cfg(not(unix))]
+fn send_signal(_signal: &str, _pid_path: &Path) -> Result<(), String> {
+    Err("sending signals is only supported on Unix".into())
 }
 
 fn write_pid(path: &Path) -> io::Result<()> {

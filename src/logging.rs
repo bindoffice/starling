@@ -4,6 +4,8 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use chrono::{Datelike, Local, TimeZone, Timelike};
+
 use crate::config::{LogDestination, LogLevel, LogTarget};
 
 mod access;
@@ -195,23 +197,19 @@ fn format_offset(offset: i64, colon: bool) -> String {
 }
 
 fn local_time_parts(timestamp: i64) -> (i32, u32, u32, u32, u32, u32, i64) {
-    // SAFETY: libc::tm consists of integer and pointer fields, so its all-zero
-    // representation is valid.
-    let mut time: libc::tm = unsafe { std::mem::zeroed() };
-    let raw = timestamp as libc::time_t;
-    // SAFETY: both pointers reference live, correctly initialized storage for
-    // the duration of the call.
-    unsafe {
-        libc::localtime_r(&raw, &mut time);
-    }
+    let epoch = Local.timestamp_opt(0, 0).earliest().unwrap();
+    let time = Local
+        .timestamp_opt(timestamp, 0)
+        .earliest()
+        .unwrap_or(epoch);
     (
-        time.tm_year + 1900,
-        (time.tm_mon + 1) as u32,
-        time.tm_mday as u32,
-        time.tm_hour as u32,
-        time.tm_min as u32,
-        time.tm_sec as u32,
-        time.tm_gmtoff as i64,
+        time.year(),
+        time.month(),
+        time.day(),
+        time.hour(),
+        time.minute(),
+        time.second(),
+        i64::from(time.offset().local_minus_utc()),
     )
 }
 

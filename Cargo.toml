@@ -13,6 +13,7 @@ path = "src/main.rs"
 arc-swap = "1.9"
 base64 = "0.22"
 bytes = "1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 crc32fast = "1.5"
 fancy-regex = "0.16"
 h2 = "0.4"
@@ -33,11 +34,13 @@ rustls-pemfile = "2.2"
 serde_json = "1"
 sha1 = "0.10"
 socket2 = { version = "0.6", features = ["all"] }
-tikv-jemallocator = "0.7"
 tokio = { version = "1.54", features = ["full"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 wasmtime = { version = "51", default-features = false, features = ["async", "cranelift", "runtime", "std", "wat"] }
 x509-parser = "0.18"
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.7"
 
 [dev-dependencies]
 tokio = { version = "1.54", features = ["full", "test-util"] }

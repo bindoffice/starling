@@ -1,6 +1,8 @@
 use super::state::State;
 use super::*;
-use std::ffi::CString;
+use std::fmt::Write as _;
+
+use chrono::{Local, TimeZone, Utc};
 
 pub(super) fn evaluate_text(
     text: &str,
@@ -152,40 +154,27 @@ pub(super) fn format_timestamp(format: &str, gmt: bool) -> String {
             .map(|duration| duration.as_secs().to_string())
             .unwrap_or_default();
     }
-    let Ok(format) = CString::new(format) else {
-        return String::new();
-    };
-    let now = std::time::SystemTime::now()
+    let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs() as libc::time_t;
-    // SAFETY: libc::tm consists of integer and pointer fields, so its all-zero
-    // representation is valid.
-    let mut time: libc::tm = unsafe { std::mem::zeroed() };
-    let converted = if gmt {
-        // SAFETY: both pointers reference live, correctly initialized storage
-        // for the duration of the call.
-        unsafe { libc::gmtime_r(&now, &mut time) }
+        .as_secs() as i64;
+    let mut output = String::new();
+    let result = if gmt {
+        let Some(time) = Utc.timestamp_opt(seconds, 0).single() else {
+            return String::new();
+        };
+        write!(output, "{}", time.format(&format.replace("%Z", "GMT")))
     } else {
-        // SAFETY: both pointers reference live, correctly initialized storage
-        // for the duration of the call.
-        unsafe { libc::localtime_r(&now, &mut time) }
+        let Some(time) = Local.timestamp_opt(seconds, 0).earliest() else {
+            return String::new();
+        };
+        write!(output, "{}", time.format(format))
     };
-    if converted.is_null() {
-        return String::new();
+    if result.is_err() {
+        String::new()
+    } else {
+        output
     }
-    let mut buffer = vec![0_u8; 2048];
-    // SAFETY: the output buffer, C format string, and libc::tm all remain live
-    // for the call, and strftime is passed the buffer capacity.
-    let length = unsafe {
-        libc::strftime(
-            buffer.as_mut_ptr().cast(),
-            buffer.len(),
-            format.as_ptr(),
-            &time,
-        )
-    };
-    String::from_utf8_lossy(&buffer[..length]).into_owned()
 }
 
 #[cfg(test)]

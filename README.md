@@ -166,13 +166,15 @@ tests/             配置兼容、服务器行为和运行时迁移测试
 
 - `.github/workflows/ci.yml`：在 push 到 `main`、Pull Request 和手动触发时运行
   `cargo fmt`、Clippy、完整测试，并构建一次发布包验证打包流程。
-- `.github/workflows/release.yml`：推送 `v*` 标签或手动触发时，在 Linux
-  x86_64 与 aarch64 runner 上构建二进制、生成 `tar.gz` 发布包和
-  `SHA256SUMS`，并创建或更新 GitHub Release。
+- `.github/workflows/release.yml`：推送 `v*` 标签或手动触发时，在 Linux、
+  macOS 和 Windows runner 上构建 Linux/macOS 的 x86_64/aarch64 及 Windows
+  x86_64 二进制，生成平台对应的 `tar.gz` 或 `zip` 发布包、`SHA256SUMS`，
+  并创建或更新 GitHub Release。
 - `scripts/ci.sh`：在本地执行与 CI 相同的格式、静态检查、测试和 release
   构建。
 - `scripts/package-release.sh`：生成包含二进制、默认配置、静态页面、日志目录
-  和文档的平台发布包。
+  和文档的平台发布包。Windows 目标默认生成包含 `starling.exe` 的 `zip`，
+  macOS/Linux 目标默认生成 `tar.gz`。
 
 发布标签必须与 `Cargo.toml` 中的版本一致：
 
@@ -186,6 +188,20 @@ git push origin v0.1.0
 ```bash
 cargo build --release --locked
 scripts/package-release.sh --version 0.1.0
+```
+
+也可以显式指定目标平台和归档格式：
+
+```bash
+scripts/package-release.sh \
+  --version 0.1.0 \
+  --target aarch64-apple-darwin \
+  --archive-format tar.gz
+
+scripts/package-release.sh \
+  --version 0.1.0 \
+  --target x86_64-pc-windows-msvc \
+  --archive-format zip
 ```
 
 ## 兼容性说明

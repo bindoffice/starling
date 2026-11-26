@@ -1,4 +1,5 @@
 use std::io;
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
 use super::super::*;
@@ -29,7 +30,7 @@ pub(super) async fn write_proxy_request_to_upstream(
     let head = proxy_request_head(outgoing, version);
     write_all_with_timeout(&mut connection.reader, &head, context.proxy_send_timeout).await?;
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     if let Some(stream) = connection.reader.get_mut().as_tcp_stream() {
         let file = body_file
             .open_sync()
@@ -56,7 +57,7 @@ pub(super) async fn write_proxy_request_to_upstream(
 /// file or writing the socket, so distinguish them by errno. A closed or reset
 /// upstream is a gateway failure (502/504); anything else is a local
 /// request-body file failure that nginx surfaces as a 500.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn classify_request_body_send_error(error: io::Error) -> io::Error {
     let upstream_side = error.kind() == io::ErrorKind::TimedOut
         || matches!(
@@ -75,7 +76,7 @@ fn classify_request_body_send_error(error: io::Error) -> io::Error {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 async fn sendfile_request_body(
     stream: &mut tokio::net::TcpStream,
     file: &std::fs::File,

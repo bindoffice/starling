@@ -1,5 +1,7 @@
 use super::*;
 
+use chrono::{Days, Local, TimeZone, Timelike};
+
 pub(in crate::server) fn apply_expires(
     response: &mut Response,
     context: &EffectiveConfig,
@@ -93,34 +95,16 @@ fn set_expiration(response: &mut Response, timestamp: i64, max_age: i64) {
 
 fn next_daily_timestamp(seconds: u32) -> Option<i64> {
     let now = unix_timestamp(SystemTime::now());
-    let now_time = libc::time_t::try_from(now).ok()?;
-    // SAFETY: libc::tm consists of integer and pointer fields, so its all-zero
-    // representation is valid.
-    let mut value: libc::tm = unsafe { std::mem::zeroed() };
-    // SAFETY: both pointers reference live, correctly initialized storage for
-    // the duration of the call; the null result is checked.
-    if unsafe { libc::localtime_r(&now_time, &mut value) }.is_null() {
-        return None;
+    let now = Local.timestamp_opt(now, 0).earliest()?;
+    let mut next = now
+        .with_hour(seconds / 3600)?
+        .with_minute((seconds % 3600) / 60)?
+        .with_second(seconds % 60)?
+        .with_nanosecond(0)?;
+    if next <= now {
+        next = next.checked_add_days(Days::new(1))?;
     }
-    value.tm_hour = (seconds / 3600) as libc::c_int;
-    value.tm_min = ((seconds % 3600) / 60) as libc::c_int;
-    value.tm_sec = (seconds % 60) as libc::c_int;
-    // SAFETY: value is a live, initialized libc::tm populated by localtime_r.
-    let mut next = unsafe { libc::mktime(&mut value) };
-    if next == -1 {
-        return None;
-    }
-    if next <= now_time {
-        value.tm_mday += 1;
-        // SAFETY: value remains a live, initialized libc::tm after normalization.
-        next = unsafe { libc::mktime(&mut value) };
-    }
-    if next == -1 {
-        return None;
-    }
-    // Keep this conversion for platforms where libc::time_t is not i64.
-    #[allow(clippy::useless_conversion)]
-    i64::try_from(next).ok()
+    Some(next.timestamp())
 }
 
 fn unix_timestamp(time: SystemTime) -> i64 {

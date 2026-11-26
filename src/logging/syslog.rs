@@ -6,6 +6,8 @@ use std::os::unix::net::UnixDatagram;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use chrono::{Datelike, Local, TimeZone, Timelike};
+
 use crate::config::{SyslogConfig, SyslogServer};
 
 static SYSLOG_PEERS: OnceLock<Mutex<HashMap<SyslogServer, SyslogPeer>>> = OnceLock::new();
@@ -66,6 +68,11 @@ impl SyslogPeer {
                 socket.connect(path)?;
                 Ok(Self::Unix(socket))
             }
+            #[cfg(not(unix))]
+            SyslogServer::Unix(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "UNIX domain syslog sockets are unsupported on this platform",
+            )),
         }
     }
 
@@ -107,30 +114,37 @@ fn syslog_timestamp(time: SystemTime) -> String {
     let seconds = time
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs() as libc::time_t;
-    // SAFETY: libc::tm consists of integer and pointer fields, so its all-zero
-    // representation is valid.
-    let mut value: libc::tm = unsafe { std::mem::zeroed() };
-    // SAFETY: both pointers reference live, correctly initialized storage for
-    // the duration of the call.
-    unsafe {
-        libc::localtime_r(&seconds, &mut value);
-    }
+        .as_secs() as i64;
+    let epoch = Local.timestamp_opt(0, 0).earliest().unwrap();
+    let value = Local.timestamp_opt(seconds, 0).earliest().unwrap_or(epoch);
     let month = MONTHS
-        .get(value.tm_mon.unsigned_abs() as usize)
+        .get(value.month().saturating_sub(1) as usize)
         .copied()
         .unwrap_or("Jan");
     format!(
         "{month} {:2} {:02}:{:02}:{:02}",
-        value.tm_mday, value.tm_hour, value.tm_min, value.tm_sec
+        value.day(),
+        value.hour(),
+        value.minute(),
+        value.second()
     )
 }
 
 fn hostname() -> String {
-    rustix::system::uname()
-        .nodename()
-        .to_string_lossy()
-        .to_ascii_lowercase()
+    #[cfg(unix)]
+    {
+        rustix::system::uname()
+            .nodename()
+            .to_string_lossy()
+            .to_ascii_lowercase()
+    }
+    #[cfg(not(unix))]
+    {
+        std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "localhost".into())
+            .to_ascii_lowercase()
+    }
 }
 
 #[cfg(test)]

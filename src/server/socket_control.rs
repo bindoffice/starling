@@ -1,11 +1,13 @@
 use std::io;
+#[cfg(unix)]
 use std::mem::MaybeUninit;
 use std::net::TcpStream as StdTcpStream;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "linux")]
 use std::task::{Context, Poll};
-#[cfg(unix)]
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -181,11 +183,11 @@ impl ClientSocketControl {
     }
 
     pub(in crate::server) fn supports_sendfile(&self) -> bool {
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
             matches!(self.socket(), Socket::Tcp(_))
         }
-        #[cfg(not(unix))]
+        #[cfg(not(target_os = "linux"))]
         {
             false
         }
@@ -202,7 +204,7 @@ impl ClientSocketControl {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     pub(in crate::server) async fn sendfile(
         &self,
         file: &tokio::fs::File,
@@ -278,9 +280,8 @@ impl ClientSocketControl {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 impl h2::SendFileSink for ClientSocketControl {
-    #[cfg(target_os = "linux")]
     fn set_cork(&self, cork: bool) -> io::Result<()> {
         let value = i32::from(cork);
         // SAFETY: `value` is a valid `c_int` for the duration of the call and
@@ -301,7 +302,6 @@ impl h2::SendFileSink for ClientSocketControl {
         }
     }
 
-    #[cfg(target_os = "linux")]
     fn poll_write_more(&self, buf: &[u8], cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
         loop {
             // SAFETY: `buf` is valid for the duration of the call and the
@@ -363,6 +363,22 @@ impl h2::SendFileSink for ClientSocketControl {
                 Err(error) => return Poll::Ready(Err(error.into())),
             }
         }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl h2::SendFileSink for ClientSocketControl {
+    fn poll_sendfile(
+        &self,
+        _file: &std::fs::File,
+        _offset: u64,
+        _len: usize,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<usize>> {
+        std::task::Poll::Ready(Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "sendfile is only supported on Linux",
+        )))
     }
 }
 

@@ -140,12 +140,19 @@ fn parse_syslog_server(value: &str) -> Result<SyslogServer, String> {
         if path.is_empty() {
             return Err("no path in the unix domain socket".into());
         }
-        let max_path =
-            std::mem::size_of::<libc::sockaddr_un>() - std::mem::size_of::<libc::sa_family_t>();
-        if path.len() + 1 > max_path {
-            return Err("too long path in the unix domain socket".into());
+        #[cfg(not(unix))]
+        {
+            return Err("unix domain sockets are unsupported on this platform".into());
         }
-        return Ok(SyslogServer::Unix(PathBuf::from(path)));
+        #[cfg(unix)]
+        {
+            let max_path =
+                std::mem::size_of::<libc::sockaddr_un>() - std::mem::size_of::<libc::sa_family_t>();
+            if path.len() + 1 > max_path {
+                return Err("too long path in the unix domain socket".into());
+            }
+            return Ok(SyslogServer::Unix(PathBuf::from(path)));
+        }
     }
 
     let bracketed = value.starts_with('[');

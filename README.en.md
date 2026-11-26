@@ -179,13 +179,15 @@ The repository provides the following automation:
   a release packaging check on pushes to `main`, pull requests, and manual
   dispatches.
 - `.github/workflows/release.yml`: on a `v*` tag push or manual dispatch,
-  builds Linux x86_64 and aarch64 binaries, creates `tar.gz` release archives
-  and `SHA256SUMS`, and creates or updates a GitHub Release.
+  builds Linux, macOS, and Windows binaries, creates platform-specific
+  `tar.gz` or `zip` release archives plus `SHA256SUMS`, and creates or updates
+  a GitHub Release.
 - `scripts/ci.sh`: runs the same formatting, lint, test, and release build
   checks locally.
 - `scripts/package-release.sh`: creates a platform archive containing the
   binary, default configuration, static pages, log directory, and
-  documentation.
+  documentation. Windows targets produce a `zip` containing `starling.exe`;
+  macOS/Linux targets produce `tar.gz` by default.
 
 The release tag must match the version in `Cargo.toml`:
 
@@ -199,6 +201,20 @@ Build a package locally:
 ```bash
 cargo build --release --locked
 scripts/package-release.sh --version 0.1.0
+```
+
+The target platform and archive format can also be selected explicitly:
+
+```bash
+scripts/package-release.sh \
+  --version 0.1.0 \
+  --target aarch64-apple-darwin \
+  --archive-format tar.gz
+
+scripts/package-release.sh \
+  --version 0.1.0 \
+  --target x86_64-pc-windows-msvc \
+  --archive-format zip
 ```
 
 ## Compatibility Notes
