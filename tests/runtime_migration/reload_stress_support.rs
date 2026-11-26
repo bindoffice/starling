@@ -241,7 +241,7 @@ pub(super) fn config(port: u16, upstream_port: u16, revision: u64) -> String {
     format!(
         r#"
             daemon off;
-            worker_processes 1;
+            worker_processes 8;
             worker_shutdown_timeout 250ms;
             pid logs/nginx.pid;
             error_log logs/error.log notice;

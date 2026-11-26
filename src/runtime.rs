@@ -11,6 +11,7 @@ use crate::server;
 use crate::{SERVER_SOFTWARE, STARLING_VERSION};
 
 const CONFIGURE_ARGUMENTS: &str = "--with-http_starling_module --with-http_v2_module";
+const WORKER_THREADS_PER_RUNTIME: usize = 4;
 
 // Match the usual Linux/Nginx worker stack. Nested internal redirects,
 // auth_request subrequests, and error-page handling can exceed 4 MiB.
@@ -242,17 +243,33 @@ fn run_async(config: RuntimeConfig, logger: Arc<Logger>) -> Result<(), String> {
             .unwrap_or(1),
         WorkerProcesses::Count(count) => count.max(1),
     };
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let worker_layout = worker_runtime_layout(worker_threads);
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .worker_threads(worker_threads)
-        .max_blocking_threads(blocking_thread_limit(worker_threads))
-        .thread_stack_size(WORKER_THREAD_STACK_SIZE)
-        .thread_name("starling-worker")
+        .max_blocking_threads(4)
+        .thread_name("starling-coordinator")
         .build()
         .map_err(|err| format!("failed to create async runtime: {err}"))?;
     runtime
-        .block_on(server::run(config, logger))
+        .block_on(server::run(
+            config,
+            logger,
+            worker_layout,
+            blocking_thread_limit(worker_threads),
+        ))
         .map_err(|err| format!("runtime error: {err}"))
+}
+
+fn worker_runtime_layout(worker_threads: usize) -> Vec<usize> {
+    let worker_threads = worker_threads.max(1);
+    let mut remaining = worker_threads;
+    let mut layout = Vec::new();
+    while remaining > 0 {
+        let threads = remaining.min(WORKER_THREADS_PER_RUNTIME);
+        layout.push(threads);
+        remaining -= threads;
+    }
+    layout
 }
 
 fn blocking_thread_limit(worker_threads: usize) -> usize {
@@ -423,6 +440,14 @@ mod tests {
         assert_eq!(blocking_thread_limit(1), 8);
         assert_eq!(blocking_thread_limit(16), 32);
         assert_eq!(blocking_thread_limit(64), 64);
+    }
+
+    #[test]
+    fn partitions_worker_threads_into_bounded_runtimes() {
+        assert_eq!(worker_runtime_layout(1), vec![1]);
+        assert_eq!(worker_runtime_layout(2), vec![2]);
+        assert_eq!(worker_runtime_layout(3), vec![3]);
+        assert_eq!(worker_runtime_layout(16), vec![4; 4]);
     }
 
     #[test]

@@ -48,4 +48,6 @@ mod runtime_migration {
     pub(crate) mod upstream_timeout;
     pub(crate) mod uwsgi_scgi_cache;
     pub(crate) mod virtual_hosts;
+    #[cfg(target_os = "linux")]
+    pub(crate) mod worker_pool;
 }

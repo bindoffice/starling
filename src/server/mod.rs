@@ -107,15 +107,17 @@ use request::*;
 use response::*;
 use socket_control::*;
 use temp_cleanup::cleanup_stale_temp_files;
+mod worker_pool;
+use worker_pool::*;
 mod limits;
 use limits::*;
 mod stream;
-#[cfg(test)]
-use stream::{StreamRoute, handle_stream_connection, handle_stream_udp_session};
 use stream::{
-    build_stream_loggers, build_stream_routes, reopen_stream_loggers, stream_accept_loop,
-    stream_udp_loop, stream_unix_accept_loop,
+    StreamRoute, build_stream_loggers, build_stream_routes, reopen_stream_loggers,
+    stream_accept_loop, stream_udp_loop, stream_unix_accept_loop,
 };
+#[cfg(test)]
+use stream::{handle_stream_connection, handle_stream_udp_session};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::server) enum ShutdownMode {

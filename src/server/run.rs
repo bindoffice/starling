@@ -1,6 +1,11 @@
 use super::*;
 
-pub async fn run(config: RuntimeConfig, logger: Arc<Logger>) -> io::Result<()> {
+pub async fn run(
+    config: RuntimeConfig,
+    logger: Arc<Logger>,
+    worker_layout: Vec<usize>,
+    blocking_thread_limit: usize,
+) -> io::Result<()> {
     cleanup_stale_temp_files(&config, &logger);
     for warning in &config.warnings {
         logger.log(LogLevel::Warn, warning.to_string());
@@ -44,51 +49,20 @@ pub async fn run(config: RuntimeConfig, logger: Arc<Logger>) -> io::Result<()> {
         let config = state.current_config();
         build_stream_routes(&config)
     };
-    let mut unix_socket_paths = UnixSocketCleanup::default();
-
     let no_http_listeners = groups.is_empty();
     let (shutdown_tx, shutdown_rx) = watch::channel(ShutdownMode::Running);
     let (background_shutdown_tx, background_shutdown_rx) = watch::channel(false);
     let mut tasks = JoinSet::new();
-    for group in groups {
-        let state = state.clone();
-        let shutdown = shutdown_rx.clone();
-        match group.address.clone() {
-            ListenAddress::Inet(address) => {
-                let listener =
-                    bind_tcp_listener(address, &group.socket_options).map_err(|err| {
-                        io::Error::new(err.kind(), format!("bind() to {address} failed: {err}"))
-                    })?;
-                tasks.spawn(async move {
-                    accept_loop(listener, group, state, shutdown).await;
-                });
-            }
-            ListenAddress::Unix(path) => {
-                #[cfg(unix)]
-                {
-                    let listener =
-                        bind_unix_listener(&path, &group.socket_options).map_err(|err| {
-                            io::Error::new(
-                                err.kind(),
-                                format!("bind() to unix:{} failed: {err}", path.display()),
-                            )
-                        })?;
-                    unix_socket_paths.paths.push(path);
-                    tasks.spawn(async move {
-                        accept_unix_loop(listener, group, state, shutdown).await;
-                    });
-                }
-                #[cfg(not(unix))]
-                {
-                    let _ = path;
-                    return Err(io::Error::new(
-                        io::ErrorKind::Unsupported,
-                        "UNIX domain listen sockets are unsupported on this platform",
-                    ));
-                }
-            }
-        }
-    }
+    let worker_pool = WorkerPool::start(
+        groups,
+        stream_routes,
+        state.clone(),
+        shutdown_rx.clone(),
+        shutdown_tx.clone(),
+        worker_layout,
+        blocking_thread_limit,
+    )
+    .await?;
 
     if no_http_listeners {
         state
@@ -112,63 +86,9 @@ pub async fn run(config: RuntimeConfig, logger: Arc<Logger>) -> io::Result<()> {
         });
     }
 
-    for route in stream_routes {
-        if route.udp {
-            let ListenAddress::Inet(address) = route.address else {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    format!("UDP bind() to {} is unsupported", route.address),
-                ));
-            };
-            let listener = bind_udp_socket(address, &route.socket_options).map_err(|err| {
-                io::Error::new(err.kind(), format!("bind() to udp:{address} failed: {err}"))
-            })?;
-            let state = state.clone();
-            let shutdown = shutdown_rx.clone();
-            tasks.spawn(async move {
-                stream_udp_loop(listener, route, state, shutdown).await;
-            });
-        } else {
-            let state = state.clone();
-            match route.address.clone() {
-                ListenAddress::Inet(address) => {
-                    let listener =
-                        bind_tcp_listener(address, &route.socket_options).map_err(|err| {
-                            io::Error::new(err.kind(), format!("bind() to {address} failed: {err}"))
-                        })?;
-                    let shutdown = shutdown_rx.clone();
-                    tasks.spawn(async move {
-                        stream_accept_loop(listener, route, state, shutdown).await;
-                    });
-                }
-                ListenAddress::Unix(path) => {
-                    #[cfg(unix)]
-                    {
-                        let listener =
-                            bind_unix_listener(&path, &route.socket_options).map_err(|err| {
-                                io::Error::new(
-                                    err.kind(),
-                                    format!("bind() to unix:{} failed: {err}", path.display()),
-                                )
-                            })?;
-                        unix_socket_paths.paths.push(path);
-                        let shutdown = shutdown_rx.clone();
-                        tasks.spawn(async move {
-                            stream_unix_accept_loop(listener, route, state, shutdown).await;
-                        });
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        let _ = path;
-                        return Err(io::Error::new(
-                            io::ErrorKind::Unsupported,
-                            "UNIX domain stream listen sockets are unsupported on this platform",
-                        ));
-                    }
-                }
-            }
-        }
-    }
+    tasks.spawn(async move {
+        worker_pool.wait().await;
+    });
 
     state.logger.log(LogLevel::Notice, "start worker process");
 
@@ -244,23 +164,9 @@ pub async fn run(config: RuntimeConfig, logger: Arc<Logger>) -> io::Result<()> {
             }
         }
     }
-    drop(unix_socket_paths);
     flush_access_logs();
     state.logger.log(LogLevel::Notice, "exit");
     Ok(())
-}
-
-#[derive(Default)]
-pub(in crate::server) struct UnixSocketCleanup {
-    paths: Vec<PathBuf>,
-}
-
-impl Drop for UnixSocketCleanup {
-    fn drop(&mut self) {
-        for path in self.paths.drain(..) {
-            let _ = std::fs::remove_file(path);
-        }
-    }
 }
 
 pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, prefix: &Path) {
