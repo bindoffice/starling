@@ -297,4 +297,4 @@ target/release/examples/h3load \
 
 ## 许可证
 
-BSD-2-Clause
+Starling 使用 Apache License 2.0 授权，完整条款见 [LICENSE](LICENSE)。

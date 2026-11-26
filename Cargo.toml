@@ -3,7 +3,7 @@ name = "starling"
 version = "0.1.0"
 edition = "2024"
 description = "A Rust implementation of an nginx-compatible web server and reverse proxy"
-license = "BSD-2-Clause"
+license = "Apache-2.0"
 
 [[bin]]
 name = "starling"
