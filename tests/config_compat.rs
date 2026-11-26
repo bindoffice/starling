@@ -4,10 +4,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use starling::config::{
-    AutoindexFormat, ClientCertificateVerify, ConfigLoader, DavMethod, DisableSymlinksMode,
-    ExpiresOffset, ExpiresValue, GzipHttpVersion, GzipStatic, IfModifiedSince, LingeringClose,
-    ListenAddress, ListenKeepalive, ListenSocketOptions, LogDestination, LogEscapeMode, LogLevel,
-    OcspMode, ProxyStoreConfig, ServerTokens, StoreConfig, SyslogServer, TlsCipherSuite, compile,
+    AutoHttpsChallenge, AutoindexFormat, ClientCertificateVerify, ConfigLoader, DavMethod,
+    DisableSymlinksMode, ExpiresOffset, ExpiresValue, GzipHttpVersion, GzipStatic, IfModifiedSince,
+    LingeringClose, ListenAddress, ListenKeepalive, ListenSocketOptions, LogDestination,
+    LogEscapeMode, LogLevel, OcspMode, ProxyStoreConfig, ServerTokens, StoreConfig, SyslogServer,
+    TlsCipherSuite, compile,
 };
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -18,6 +19,8 @@ mod access_auth;
 mod access_limits;
 #[path = "config_compat/access_logs.rs"]
 mod access_logs;
+#[path = "config_compat/auto_https.rs"]
+mod auto_https;
 #[path = "config_compat/autoindex.rs"]
 mod autoindex;
 #[path = "config_compat/basic.rs"]

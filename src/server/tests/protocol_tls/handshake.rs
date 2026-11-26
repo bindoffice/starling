@@ -72,6 +72,7 @@ async fn completes_tls_handshake_and_serves_https() {
         proxy_cache: Arc::new(ProxyCacheRegistry::new(config.http.as_ref())),
         client_tls_cache: Arc::new(ClientTlsConfigCache::default()),
         http2_budget: Arc::new(Http2Budget::new()),
+        auto_https: Arc::new(AutoHttpsState::new(config.auto_https.clone())),
     };
     let local = group.address.clone();
     let remote: SocketAddr = "127.0.0.1:45679".parse().unwrap();

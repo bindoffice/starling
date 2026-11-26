@@ -17,6 +17,7 @@ mod access_log;
 mod addition;
 mod auth_delay;
 mod auth_request_streaming;
+mod auto_https;
 mod autoindex;
 mod basic;
 mod browser;

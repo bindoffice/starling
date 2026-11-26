@@ -20,6 +20,7 @@ pub struct RuntimeConfig {
     pub files: Vec<PathBuf>,
     pub warnings: Vec<ConfigWarning>,
     pub core: CoreConfig,
+    pub auto_https: AutoHttpsConfig,
     pub http: Option<HttpConfig>,
     pub stream: Option<StreamConfig>,
 }
@@ -358,6 +359,7 @@ pub(super) const NEXT_UPSTREAM_HTTP_429: u32 = 1 << 10;
 pub(super) const NEXT_UPSTREAM_OFF: u32 = 1 << 31;
 
 mod access_log;
+mod auto_https;
 mod autoindex;
 mod browser;
 mod charset;
@@ -385,6 +387,7 @@ mod upstream_buffering;
 mod userid;
 
 pub use access_log::*;
+pub use auto_https::*;
 pub use autoindex::*;
 pub use browser::*;
 pub use charset::*;

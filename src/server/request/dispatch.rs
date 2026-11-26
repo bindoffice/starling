@@ -76,6 +76,19 @@ pub(in crate::server) async fn dispatch_http_request(
     } else {
         host
     };
+    if !invalid_host
+        && let Some(action) = automatic_https_action(
+            &config,
+            group,
+            server,
+            request,
+            &host,
+            state,
+            &http_error_loggers,
+        )
+    {
+        return Some(action);
+    }
     let effective_request_length =
         request_length.map(|length| length.saturating_add(request.buffered_body_len()));
     let mut variables = Variables::new_for_dispatch(

@@ -26,6 +26,7 @@ percent-encoding = "2.3"
 regex = "1.12"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2.2"
+serde_json = "1"
 sha1 = "0.10"
 socket2 = { version = "0.6", features = ["all"] }
 tikv-jemallocator = "0.7"

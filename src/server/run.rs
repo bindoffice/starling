@@ -1,7 +1,7 @@
 use super::*;
 
 pub async fn run(
-    config: RuntimeConfig,
+    mut config: RuntimeConfig,
     logger: Arc<Logger>,
     worker_layout: Vec<usize>,
     blocking_thread_limit: usize,
@@ -9,6 +9,11 @@ pub async fn run(
     cleanup_stale_temp_files(&config, &logger);
     for warning in &config.warnings {
         logger.log(LogLevel::Warn, warning.to_string());
+    }
+    let auto_https = Arc::new(AutoHttpsState::new(config.auto_https.clone()));
+    let auto_https_preparation = prepare_auto_https(&mut config, &auto_https)?;
+    for (level, message) in auto_https_preparation.notices {
+        logger.log(level, message);
     }
     let config_path = config.config_path.clone();
     let prefix = config.prefix.clone();
@@ -44,6 +49,7 @@ pub async fn run(
         proxy_cache,
         client_tls_cache: Arc::new(ClientTlsConfigCache::default()),
         http2_budget: Arc::new(Http2Budget::new()),
+        auto_https,
     };
     let stream_routes = {
         let config = state.current_config();
@@ -75,6 +81,13 @@ pub async fn run(
         let shutdown = background_shutdown_rx.clone();
         tasks.spawn(async move {
             cache.manage_loop(logger, shutdown).await;
+        });
+    }
+    {
+        let state = state.clone();
+        let shutdown = background_shutdown_rx.clone();
+        tasks.spawn(async move {
+            auto_https_manager_loop(state, shutdown).await;
         });
     }
     {
@@ -177,8 +190,8 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
         Ok(document) => compile(document, prefix.to_path_buf(), config_path.to_path_buf()),
         Err(err) => Err(err),
     };
-    let new_config = match loaded {
-        Ok(config) => Arc::new(config),
+    let mut new_config = match loaded {
+        Ok(config) => config,
         Err(err) => {
             state
                 .logger
@@ -186,6 +199,20 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
             return;
         }
     };
+    // Prepare against an isolated state so a rejected reload cannot replace the
+    // live ACME configuration or order queue.
+    let prepared_auto_https = AutoHttpsState::new(new_config.auto_https.clone());
+    let auto_https_preparation = match prepare_auto_https(&mut new_config, &prepared_auto_https) {
+        Ok(preparation) => preparation,
+        Err(err) => {
+            state.logger.log(
+                LogLevel::Error,
+                format!("reload failed: automatic HTTPS preparation failed: {err}"),
+            );
+            return;
+        }
+    };
+    let new_config = Arc::new(new_config);
     let old = state.current_config();
     if listener_signature(&old) != listener_signature(&new_config) {
         state.logger.log(
@@ -252,6 +279,10 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
     state.client_tls_cache.clear();
     let warnings = new_config.warnings.clone();
     let generation = state.upstream_keepalive.generation();
+    state
+        .auto_https
+        .update_config(new_config.auto_https.clone());
+    state.auto_https.set_orders(prepared_auto_https.orders());
     state.config.store(Arc::new(RuntimeSnapshot {
         config: new_config,
         listener_groups: groups.into(),
@@ -261,6 +292,9 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
     state.notify_reload();
     for warning in warnings {
         state.logger.log(LogLevel::Warn, warning.to_string());
+    }
+    for (level, message) in auto_https_preparation.notices {
+        state.logger.log(level, message);
     }
     state.logger.log(
         LogLevel::Notice,

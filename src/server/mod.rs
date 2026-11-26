@@ -69,9 +69,11 @@ use crate::logging::{
     render_log_format, render_log_format_bytes, reopen_access_logs, send_syslog,
 };
 
+mod auto_https;
 mod early_hints;
 mod tls;
 mod user_agent;
+use auto_https::*;
 use early_hints::*;
 #[cfg(test)]
 use tls::{
@@ -184,6 +186,7 @@ pub struct SharedState {
     proxy_cache: Arc<ProxyCacheRegistry>,
     client_tls_cache: Arc<ClientTlsConfigCache>,
     http2_budget: Arc<Http2Budget>,
+    auto_https: Arc<AutoHttpsState>,
 }
 
 #[derive(Clone)]

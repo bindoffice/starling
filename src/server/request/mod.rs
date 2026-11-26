@@ -1,6 +1,7 @@
 use super::*;
 
 mod access;
+mod auto_https;
 mod body;
 mod body_stream;
 mod browser;
@@ -24,6 +25,7 @@ mod upstream_redirect;
 mod userid;
 
 pub(super) use access::*;
+use auto_https::*;
 pub(super) use body::*;
 pub(super) use body_stream::H2BodyTask;
 #[cfg(test)]

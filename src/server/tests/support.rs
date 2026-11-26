@@ -165,6 +165,7 @@ pub(super) fn test_state(config: &Arc<RuntimeConfig>) -> SharedState {
         proxy_cache: Arc::new(ProxyCacheRegistry::new(config.http.as_ref())),
         client_tls_cache: Arc::new(ClientTlsConfigCache::default()),
         http2_budget: Arc::new(Http2Budget::new()),
+        auto_https: Arc::new(AutoHttpsState::new(config.auto_https.clone())),
     }
 }
 

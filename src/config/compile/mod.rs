@@ -13,6 +13,7 @@ use super::ast::{ConfigDocument, Directive};
 
 mod access_log;
 mod addition;
+mod auto_https;
 mod browser;
 mod common;
 mod compat;
@@ -43,6 +44,7 @@ mod variables;
 
 use access_log::*;
 use addition::*;
+use auto_https::*;
 use browser::*;
 use common::*;
 use compat::collect_compat_warnings;
@@ -90,6 +92,7 @@ pub fn compile(
     };
     let mut http: Option<HttpConfig> = None;
     let mut stream: Option<StreamConfig> = None;
+    let mut auto_https = AutoHttpsConfig::new(&prefix);
     let mut seen_events = false;
 
     for directive in &document.directives {
@@ -124,6 +127,7 @@ pub fn compile(
                 core.worker_shutdown_timeout =
                     Some(parse_duration(one_arg(directive)?, &directive.location)?);
             }
+            _ if apply_auto_https_directive(directive, &mut auto_https, &prefix)? => {}
             "events" => {
                 require_block(directive)?;
                 if seen_events {
@@ -196,6 +200,19 @@ pub fn compile(
             level: LogLevel::Error,
         });
     }
+    if auto_https.enabled && auto_https.http_port == auto_https.https_port {
+        return Err(ConfigError::new(
+            "auto_https http_port and https_port must be different",
+        ));
+    }
+    if auto_https.enabled
+        && auto_https.challenge == AutoHttpsChallenge::Dns01
+        && auto_https.dns_hook.is_none()
+    {
+        return Err(ConfigError::new(
+            "auto_https challenge=dns-01 requires a dns_hook",
+        ));
+    }
     validate_access_log_buffers(http.as_ref(), stream.as_ref())?;
 
     Ok(RuntimeConfig {
@@ -204,6 +221,7 @@ pub fn compile(
         files: document.files,
         warnings,
         core,
+        auto_https,
         http,
         stream,
     })
