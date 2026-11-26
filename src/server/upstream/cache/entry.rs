@@ -129,13 +129,9 @@ pub(super) async fn is_cache_entry(path: &Path) -> io::Result<bool> {
     }
     let body_offset = file.stream_position().await?;
     let file_length = file.metadata().await?.len();
-    if body_offset
+    Ok(!body_offset
         .checked_add(body_length)
-        .is_none_or(|end| end > file_length)
-    {
-        return Ok(false);
-    }
-    Ok(true)
+        .is_none_or(|end| end > file_length))
 }
 
 pub(super) async fn read_entry(path: &Path) -> io::Result<Option<CacheEntry>> {

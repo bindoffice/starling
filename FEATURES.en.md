@@ -711,7 +711,7 @@ they can be split further by responsibility.
   local and public names skips ACME and logs a warning to avoid covering both
   categories with one certificate. `auto_https_acme_directory` or `staging on`
   can target test directories such as Pebble or Let's Encrypt staging. See
-  `docs/auto-https.md` for complete configuration, DNS hook contracts, and
+  `docs/auto-https.en.md` for complete configuration, DNS hook contracts, and
   troubleshooting.
 - Stream: TCP and `listen unix:/path` streaming listeners, TCP or UNIX domain
   socket upstream `proxy_pass`, upstream load balancing, `proxy_timeout`,

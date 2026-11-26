@@ -142,7 +142,7 @@ http {
 }
 ```
 
-See [docs/auto-https.md](docs/auto-https.md) for the complete DNS hook
+See [docs/auto-https.en.md](docs/auto-https.en.md) for the complete DNS hook
 contract, configuration options, and troubleshooting guidance.
 
 ## Project Layout
@@ -166,10 +166,10 @@ corresponding submodules.
 - [FEATURES.en.md](FEATURES.en.md): implemented features, build and run
   instructions, configuration examples, compatibility boundaries, and the full
   code layout.
-- [docs/auto-https.md](docs/auto-https.md): automatic HTTPS, local CA, HTTP-01,
-  DNS-01 hooks, certificate renewal, and troubleshooting.
-- [docs/wasm.md](docs/wasm.md): WASM content handler configuration, resource
-  limits, core module ABI v1, and a minimal example.
+- [docs/auto-https.en.md](docs/auto-https.en.md): automatic HTTPS, local CA,
+  HTTP-01, DNS-01 hooks, certificate renewal, and troubleshooting.
+- [docs/wasm.en.md](docs/wasm.en.md): WASM content handler configuration,
+  resource limits, core module ABI v1, and a minimal example.
 
 ## CI and Releases
 

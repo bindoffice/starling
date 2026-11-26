@@ -186,7 +186,7 @@ pub(in crate::server) fn is_local_domain(domain: &str) -> bool {
         .trim_end_matches('.')
         .trim_start_matches("*.")
         .to_ascii_lowercase();
-    if domain.is_empty()
+    domain.is_empty()
         || domain == "localhost"
         || domain.ends_with(".localhost")
         || domain == "localhost.localdomain"
@@ -209,10 +209,6 @@ pub(in crate::server) fn is_local_domain(domain: &str) -> bool {
         || domain.ends_with(".example.org")
         || domain.parse::<IpAddr>().is_ok()
         || !domain.contains('.')
-    {
-        return true;
-    }
-    false
 }
 
 fn add_https_listeners(server: &mut crate::config::ServerConfig, settings: &AutoHttpsConfig) {

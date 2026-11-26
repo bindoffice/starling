@@ -1,5 +1,7 @@
 # 自动 HTTPS 配置指南
 
+[简体中文](auto-https.md) | [English](auto-https.en.md)
+
 本文档说明 Starling 自动 HTTPS 的配置方式，包括 HTTP-01、DNS-01、
 本地开发证书、ACME 测试目录、证书续期和常见问题。
 
