@@ -1310,6 +1310,7 @@ dependencies = [
  "openssl",
  "percent-encoding",
  "regex",
+ "rustix",
  "rustls",
  "rustls-pemfile",
  "serde_json",

@@ -120,12 +120,13 @@ impl RunningServer {
             "starling exited before reload:\n{}",
             self.diagnostics()
         );
-        let result = unsafe { libc::kill(self.child.id() as i32, libc::SIGHUP) };
-        assert_eq!(
-            result,
-            0,
-            "send SIGHUP failed: {}\n{}",
-            io::Error::last_os_error(),
+        let result = rustix::process::kill_process(
+            rustix::process::Pid::from_child(&self.child),
+            rustix::process::Signal::HUP,
+        );
+        assert!(
+            result.is_ok(),
+            "send SIGHUP failed: {result:?}\n{}",
             self.diagnostics()
         );
     }
@@ -140,12 +141,13 @@ impl RunningServer {
 
     pub(crate) fn shutdown_gracefully(&mut self) {
         self.assert_running();
-        let result = unsafe { libc::kill(self.child.id() as i32, libc::SIGQUIT) };
-        assert_eq!(
-            result,
-            0,
-            "send SIGQUIT failed: {}\n{}",
-            io::Error::last_os_error(),
+        let result = rustix::process::kill_process(
+            rustix::process::Pid::from_child(&self.child),
+            rustix::process::Signal::QUIT,
+        );
+        assert!(
+            result.is_ok(),
+            "send SIGQUIT failed: {result:?}\n{}",
             self.diagnostics()
         );
     }
@@ -213,9 +215,10 @@ impl RunningServer {
         if self.child.try_wait().unwrap().is_some() {
             return;
         }
-        unsafe {
-            libc::kill(self.child.id() as i32, libc::SIGTERM);
-        }
+        let _ = rustix::process::kill_process(
+            rustix::process::Pid::from_child(&self.child),
+            rustix::process::Signal::TERM,
+        );
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
             if self.child.try_wait().unwrap().is_some() {

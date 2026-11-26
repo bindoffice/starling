@@ -59,15 +59,11 @@ fn budget_limit(open_file_limit: u64, fds_per_request: u64) -> usize {
 
 #[cfg(unix)]
 fn open_file_limit() -> Option<u64> {
-    let mut limit = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: getrlimit only writes to the provided rlimit structure.
-    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
-        return None;
-    }
-    Some(limit.rlim_cur)
+    Some(
+        rustix::process::getrlimit(rustix::process::Resource::Nofile)
+            .current
+            .unwrap_or(u64::MAX),
+    )
 }
 
 #[cfg(not(unix))]

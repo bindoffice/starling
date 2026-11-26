@@ -155,17 +155,28 @@ pub(super) fn format_timestamp(format: &str, gmt: bool) -> String {
     let Ok(format) = CString::new(format) else {
         return String::new();
     };
-    let now = unsafe { libc::time(std::ptr::null_mut()) };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as libc::time_t;
+    // SAFETY: libc::tm consists of integer and pointer fields, so its all-zero
+    // representation is valid.
     let mut time: libc::tm = unsafe { std::mem::zeroed() };
     let converted = if gmt {
+        // SAFETY: both pointers reference live, correctly initialized storage
+        // for the duration of the call.
         unsafe { libc::gmtime_r(&now, &mut time) }
     } else {
+        // SAFETY: both pointers reference live, correctly initialized storage
+        // for the duration of the call.
         unsafe { libc::localtime_r(&now, &mut time) }
     };
     if converted.is_null() {
         return String::new();
     }
     let mut buffer = vec![0_u8; 2048];
+    // SAFETY: the output buffer, C format string, and libc::tm all remain live
+    // for the call, and strftime is passed the buffer capacity.
     let length = unsafe {
         libc::strftime(
             buffer.as_mut_ptr().cast(),

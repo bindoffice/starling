@@ -253,7 +253,7 @@ mod tests {
     async fn read_only_cache_directory_releases_lock_and_keeps_downstream_complete() {
         use std::os::unix::fs::PermissionsExt;
 
-        if unsafe { libc::geteuid() } == 0 {
+        if rustix::process::geteuid() == rustix::process::Uid::ROOT {
             return;
         }
         let root = std::env::temp_dir().join(format!(

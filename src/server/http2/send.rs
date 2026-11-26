@@ -156,54 +156,26 @@ pub(super) fn h2_header_value(
     value: &str,
 ) -> Result<http::header::HeaderValue, http::header::InvalidHeaderValue> {
     let bytes = crate::http::header_value_bytes(value);
-    if !bytes.iter().any(|byte| matches!(byte, b'\r' | b'\n')) {
-        if let Ok(value) = http::header::HeaderValue::from_bytes(&bytes) {
-            return Ok(value);
-        }
-        if !bytes.contains(&0) {
-            #[cfg(not(debug_assertions))]
-            {
-                return Ok(unsafe {
-                    http::header::HeaderValue::from_maybe_shared_unchecked(Bytes::copy_from_slice(
-                        &bytes,
-                    ))
-                });
-            }
-            #[cfg(debug_assertions)]
-            {
-                return http::header::HeaderValue::from_bytes(&bytes);
-            }
-        }
+    if bytes
+        .iter()
+        .all(|byte| matches!(byte, 32..=126 | 128..=255 | b'\t'))
+    {
+        return http::header::HeaderValue::from_bytes(&bytes);
+    }
+    // Header values cannot contain NUL. Other control bytes are sanitized to
+    // preserve the previous wire behavior without constructing an unchecked
+    // HeaderValue.
+    if bytes.contains(&0) {
         return http::header::HeaderValue::from_bytes(&bytes);
     }
     let sanitized: Vec<u8> = bytes
         .iter()
         .map(|byte| match byte {
-            b'\r' | b'\n' => b' ',
+            b'\r' | b'\n' | 0..=8 | 11..=31 | 127 => b' ',
             byte => *byte,
         })
         .collect();
-    if let Ok(value) = http::header::HeaderValue::from_bytes(&sanitized) {
-        return Ok(value);
-    }
-    if sanitized.contains(&0) {
-        return http::header::HeaderValue::from_bytes(&sanitized);
-    }
-
-    // HPACK carries opaque octets, while http::HeaderValue normally rejects
-    // control bytes and obs-text. The h2 encoder writes the bytes unchanged.
-    #[cfg(not(debug_assertions))]
-    {
-        return Ok(unsafe {
-            http::header::HeaderValue::from_maybe_shared_unchecked(Bytes::copy_from_slice(
-                &sanitized,
-            ))
-        });
-    }
-    #[cfg(debug_assertions)]
-    {
-        http::header::HeaderValue::from_bytes(&sanitized)
-    }
+    http::header::HeaderValue::from_bytes(&sanitized)
 }
 
 #[cfg(test)]
@@ -231,5 +203,17 @@ mod tests {
             "first  second"
         );
         assert!(h2_header_value("invalid\0value").is_err());
+    }
+
+    #[test]
+    fn sanitizes_other_control_bytes_in_header_values() {
+        assert_eq!(
+            h2_header_value("before\u{1}after").unwrap().as_bytes(),
+            b"before after"
+        );
+        assert_eq!(
+            h2_header_value("before\u{7f}after").unwrap().as_bytes(),
+            b"before after"
+        );
     }
 }

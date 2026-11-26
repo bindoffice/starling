@@ -94,19 +94,25 @@ fn set_expiration(response: &mut Response, timestamp: i64, max_age: i64) {
 fn next_daily_timestamp(seconds: u32) -> Option<i64> {
     let now = unix_timestamp(SystemTime::now());
     let now_time = libc::time_t::try_from(now).ok()?;
+    // SAFETY: libc::tm consists of integer and pointer fields, so its all-zero
+    // representation is valid.
     let mut value: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers reference live, correctly initialized storage for
+    // the duration of the call; the null result is checked.
     if unsafe { libc::localtime_r(&now_time, &mut value) }.is_null() {
         return None;
     }
     value.tm_hour = (seconds / 3600) as libc::c_int;
     value.tm_min = ((seconds % 3600) / 60) as libc::c_int;
     value.tm_sec = (seconds % 60) as libc::c_int;
+    // SAFETY: value is a live, initialized libc::tm populated by localtime_r.
     let mut next = unsafe { libc::mktime(&mut value) };
     if next == -1 {
         return None;
     }
     if next <= now_time {
         value.tm_mday += 1;
+        // SAFETY: value remains a live, initialized libc::tm after normalization.
         next = unsafe { libc::mktime(&mut value) };
     }
     if next == -1 {

@@ -281,11 +281,13 @@ fn blocking_thread_limit(worker_threads: usize) -> usize {
 }
 
 fn send_signal(signal: &str, pid_path: &Path) -> Result<(), String> {
-    let signal_number = match signal {
-        "stop" => libc::SIGTERM,
-        "quit" => libc::SIGQUIT,
-        "reload" => libc::SIGHUP,
-        "reopen" => libc::SIGUSR1,
+    use rustix::process::Signal;
+
+    let signal = match signal {
+        "stop" => Signal::TERM,
+        "quit" => Signal::QUIT,
+        "reload" => Signal::HUP,
+        "reopen" => Signal::USR1,
         _ => {
             return Err(format!(
                 "invalid option: \"-s {signal}\" (expected stop, quit, reload or reopen)"
@@ -298,14 +300,15 @@ fn send_signal(signal: &str, pid_path: &Path) -> Result<(), String> {
         .trim()
         .parse::<i32>()
         .map_err(|_| format!("invalid PID number in \"{}\"", pid_path.display()))?;
-    let result = unsafe { libc::kill(pid, signal_number) };
-    if result != 0 {
-        return Err(format!(
-            "kill({pid}, {signal_number}) failed: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    Ok(())
+    let pid = rustix::process::Pid::from_raw(pid)
+        .ok_or_else(|| format!("invalid PID number in \"{}\"", pid_path.display()))?;
+    rustix::process::kill_process(pid, signal).map_err(|error| {
+        format!(
+            "kill({}, {}) failed: {error}",
+            pid.as_raw_pid(),
+            signal.as_raw()
+        )
+    })
 }
 
 fn write_pid(path: &Path) -> io::Result<()> {
@@ -330,6 +333,8 @@ fn remove_pid(path: &Path) {
 fn daemonize() -> Result<(), String> {
     #[cfg(unix)]
     {
+        // SAFETY: daemonize runs before the Tokio runtime and worker threads are
+        // created, so fork does not duplicate a multithreaded process here.
         let first = unsafe { libc::fork() };
         if first < 0 {
             return Err(format!("fork() failed: {}", io::Error::last_os_error()));
@@ -337,9 +342,8 @@ fn daemonize() -> Result<(), String> {
         if first > 0 {
             std::process::exit(0);
         }
-        if unsafe { libc::setsid() } < 0 {
-            return Err(format!("setsid() failed: {}", io::Error::last_os_error()));
-        }
+        rustix::process::setsid().map_err(|error| format!("setsid() failed: {error}"))?;
+        // SAFETY: the process is still single-threaded after the first fork.
         let second = unsafe { libc::fork() };
         if second < 0 {
             return Err(format!("fork() failed: {}", io::Error::last_os_error()));
@@ -347,20 +351,18 @@ fn daemonize() -> Result<(), String> {
         if second > 0 {
             std::process::exit(0);
         }
-        unsafe {
-            libc::umask(0);
-        }
+        rustix::process::umask(rustix::fs::Mode::empty());
         let null = fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open("/dev/null")
             .map_err(|err| format!("open(\"/dev/null\") failed: {err}"))?;
-        unsafe {
-            libc::dup2(null.as_raw_fd(), libc::STDIN_FILENO);
-            libc::dup2(null.as_raw_fd(), libc::STDOUT_FILENO);
-            libc::dup2(null.as_raw_fd(), libc::STDERR_FILENO);
-        }
-        std::mem::forget(null);
+        rustix::stdio::dup2_stdin(&null)
+            .map_err(|error| format!("dup2(STDIN_FILENO) failed: {error}"))?;
+        rustix::stdio::dup2_stdout(&null)
+            .map_err(|error| format!("dup2(STDOUT_FILENO) failed: {error}"))?;
+        rustix::stdio::dup2_stderr(&null)
+            .map_err(|error| format!("dup2(STDERR_FILENO) failed: {error}"))?;
         Ok(())
     }
     #[cfg(not(unix))]
@@ -368,9 +370,6 @@ fn daemonize() -> Result<(), String> {
         Err("daemon mode is only supported on Unix".into())
     }
 }
-
-#[cfg(unix)]
-use std::os::fd::AsRawFd;
 
 fn print_version(verbose: bool) {
     println!("nginx version: {SERVER_SOFTWARE} (starling/{STARLING_VERSION})");

@@ -108,7 +108,11 @@ fn syslog_timestamp(time: SystemTime) -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as libc::time_t;
+    // SAFETY: libc::tm consists of integer and pointer fields, so its all-zero
+    // representation is valid.
     let mut value: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers reference live, correctly initialized storage for
+    // the duration of the call.
     unsafe {
         libc::localtime_r(&seconds, &mut value);
     }
@@ -123,16 +127,10 @@ fn syslog_timestamp(time: SystemTime) -> String {
 }
 
 fn hostname() -> String {
-    let mut buffer = [0_u8; 256];
-    let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
-    if result != 0 {
-        return "localhost".into();
-    }
-    let length = buffer
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(buffer.len());
-    String::from_utf8_lossy(&buffer[..length]).to_ascii_lowercase()
+    rustix::system::uname()
+        .nodename()
+        .to_string_lossy()
+        .to_ascii_lowercase()
 }
 
 #[cfg(test)]

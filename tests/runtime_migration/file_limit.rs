@@ -200,9 +200,10 @@ impl Drop for LimitedServer {
         if self.child.try_wait().unwrap().is_some() {
             return;
         }
-        unsafe {
-            libc::kill(self.child.id() as i32, libc::SIGTERM);
-        }
+        let _ = rustix::process::kill_process(
+            rustix::process::Pid::from_child(&self.child),
+            rustix::process::Signal::TERM,
+        );
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
             if self.child.try_wait().unwrap().is_some() {

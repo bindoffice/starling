@@ -204,7 +204,11 @@ fn xml_time(time: SystemTime) -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as libc::time_t;
+    // SAFETY: libc::tm consists of integer and pointer fields, so its all-zero
+    // representation is valid.
     let mut value: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers reference live, correctly initialized storage for
+    // the duration of the call.
     unsafe {
         libc::gmtime_r(&seconds, &mut value);
     }
@@ -224,11 +228,19 @@ fn autoindex_time(time: SystemTime, localtime: bool) -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as libc::time_t;
+    // SAFETY: libc::tm consists of integer and pointer fields, so its all-zero
+    // representation is valid.
     let mut value: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe {
-        if localtime {
+    if localtime {
+        // SAFETY: both pointers reference live, correctly initialized storage
+        // for the duration of the call.
+        unsafe {
             libc::localtime_r(&seconds, &mut value);
-        } else {
+        }
+    } else {
+        // SAFETY: both pointers reference live, correctly initialized storage
+        // for the duration of the call.
+        unsafe {
             libc::gmtime_r(&seconds, &mut value);
         }
     }

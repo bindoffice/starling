@@ -100,13 +100,17 @@ fn cleanup_temp_root_with(
 
 #[cfg(unix)]
 pub(in crate::server) fn process_is_alive(pid: u32) -> bool {
-    let Ok(pid) = libc::pid_t::try_from(pid) else {
+    let Ok(pid) = i32::try_from(pid) else {
         return true;
     };
-    if unsafe { libc::kill(pid, 0) } == 0 {
+    let Some(pid) = rustix::process::Pid::from_raw(pid) else {
         return true;
+    };
+    match rustix::process::test_kill_process(pid) {
+        Ok(()) => true,
+        Err(rustix::io::Errno::PERM) => true,
+        Err(_) => false,
     }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 #[cfg(not(unix))]

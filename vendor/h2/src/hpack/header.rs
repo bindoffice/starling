@@ -7,19 +7,7 @@ use http::{Method, StatusCode};
 use std::fmt;
 
 fn header_value_from_bytes(value: Bytes) -> Result<HeaderValue, Bytes> {
-    if value
-        .iter()
-        .any(|byte| matches!(byte, 0 | b'\r' | b'\n'))
-    {
-        return Err(value);
-    }
-    match HeaderValue::from_bytes(&value) {
-        Ok(value) => Ok(value),
-        #[cfg(not(debug_assertions))]
-        Err(_) => Ok(unsafe { HeaderValue::from_maybe_shared_unchecked(value) }),
-        #[cfg(debug_assertions)]
-        Err(_) => Err(value),
-    }
+    HeaderValue::from_bytes(&value).map_err(|_| value)
 }
 
 /// HTTP/2 Header

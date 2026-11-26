@@ -144,18 +144,15 @@ fn compute_hostname() -> Arc<str> {
         .map(Arc::from)
         .unwrap_or_else(|| {
             #[cfg(unix)]
-            {
-                let mut buffer = [0_u8; 256];
-                let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
-                if result == 0 {
-                    let length = buffer
-                        .iter()
-                        .position(|byte| *byte == 0)
-                        .unwrap_or(buffer.len());
-                    return Arc::from(String::from_utf8_lossy(&buffer[..length]));
-                }
-            }
-            Arc::from("localhost")
+            let hostname = Arc::from(
+                rustix::system::uname()
+                    .nodename()
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            #[cfg(not(unix))]
+            let hostname = Arc::from("localhost");
+            hostname
         })
 }
 

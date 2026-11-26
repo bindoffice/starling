@@ -1,9 +1,6 @@
 use std::io;
 use std::time::Duration;
 
-#[cfg(unix)]
-use std::os::fd::AsRawFd;
-
 use super::super::*;
 use super::write::{proxy_request_head, write_remaining_proxy_body};
 use crate::http::RequestBodyStream;
@@ -85,32 +82,23 @@ async fn sendfile_request_body(
     length: u64,
     timeout: Duration,
 ) -> io::Result<()> {
-    let output_fd = stream.as_raw_fd();
-    let input_fd = file.as_raw_fd();
     let mut offset = 0_u64;
     while offset < length {
         let chunk = (length - offset).min(1024 * 1024);
         let send = stream.async_io(tokio::io::Interest::WRITABLE, || {
-            let mut file_offset = i64::try_from(offset).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "file offset exceeds i64")
-            })?;
-            let result = unsafe {
-                libc::sendfile(
-                    output_fd,
-                    input_fd,
-                    &mut file_offset,
-                    chunk.min(usize::MAX as u64) as usize,
-                )
-            };
-            if result > 0 {
-                Ok(result as usize)
-            } else if result == 0 {
-                Err(io::Error::new(
+            let mut file_offset = offset;
+            match rustix::fs::sendfile(
+                &*stream,
+                file,
+                Some(&mut file_offset),
+                chunk.min(usize::MAX as u64) as usize,
+            ) {
+                Ok(0) => Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "request body file ended before its recorded length",
-                ))
-            } else {
-                Err(io::Error::last_os_error())
+                )),
+                Ok(sent) => Ok(sent),
+                Err(error) => Err(error.into()),
             }
         });
         let sent = if timeout == Duration::ZERO {

@@ -195,8 +195,12 @@ fn format_offset(offset: i64, colon: bool) -> String {
 }
 
 fn local_time_parts(timestamp: i64) -> (i32, u32, u32, u32, u32, u32, i64) {
+    // SAFETY: libc::tm consists of integer and pointer fields, so its all-zero
+    // representation is valid.
     let mut time: libc::tm = unsafe { std::mem::zeroed() };
     let raw = timestamp as libc::time_t;
+    // SAFETY: both pointers reference live, correctly initialized storage for
+    // the duration of the call.
     unsafe {
         libc::localtime_r(&raw, &mut time);
     }

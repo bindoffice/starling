@@ -1,4 +1,5 @@
 use std::io;
+use std::mem::MaybeUninit;
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -135,30 +136,24 @@ impl ClientSocketControl {
     pub(in crate::server) fn close_state(&self) -> ClientCloseState {
         #[cfg(unix)]
         {
-            let fd: RawFd = self.socket().as_raw_fd();
-
-            let mut byte = 0_u8;
-            let result = unsafe {
-                libc::recv(
-                    fd,
-                    (&mut byte as *mut u8).cast(),
-                    1,
-                    libc::MSG_PEEK | libc::MSG_DONTWAIT,
-                )
+            let mut byte = [MaybeUninit::<u8>::uninit()];
+            let result = match self.socket() {
+                Socket::Tcp(socket) => socket2::SockRef::from(socket).peek(&mut byte),
+                Socket::Unix(socket) => socket2::SockRef::from(socket).peek(&mut byte),
             };
-            if result > 0 {
-                return ClientCloseState::Open;
-            }
-            if result == 0 {
-                return ClientCloseState::ReadHalfClosed;
-            }
-            let Some(error) = io::Error::last_os_error().raw_os_error() else {
-                return ClientCloseState::Reset;
-            };
-            if error == libc::EAGAIN || error == libc::EWOULDBLOCK || error == libc::EINTR {
-                ClientCloseState::Open
-            } else {
-                ClientCloseState::Reset
+            match result {
+                Ok(0) => ClientCloseState::ReadHalfClosed,
+                Ok(_) => ClientCloseState::Open,
+                Err(error) => match error.raw_os_error() {
+                    Some(code)
+                        if code == libc::EAGAIN
+                            || code == libc::EWOULDBLOCK
+                            || code == libc::EINTR =>
+                    {
+                        ClientCloseState::Open
+                    }
+                    _ => ClientCloseState::Reset,
+                },
             }
         }
         #[cfg(not(unix))]
@@ -202,43 +197,36 @@ impl ClientSocketControl {
         mut length: u64,
         timeout: Duration,
     ) -> io::Result<()> {
-        let Socket::Tcp(_) = self.socket() else {
+        let Socket::Tcp(output) = self.socket() else {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "sendfile requires a TCP client socket",
             ));
         };
-        let output_fd = self.socket().as_raw_fd();
-        let input_fd = file.as_raw_fd();
         while length > 0 {
             let chunk = length.min(1024 * 1024);
-            let mut file_offset = i64::try_from(offset).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "file offset exceeds i64")
-            })?;
-            let result = unsafe {
-                libc::sendfile(
-                    output_fd,
-                    input_fd,
-                    &mut file_offset,
-                    chunk.min(usize::MAX as u64) as usize,
-                )
-            };
-            if result > 0 {
-                let sent = result as u64;
-                offset = offset.saturating_add(sent);
-                length -= sent;
-                continue;
-            }
-            if result == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "static file ended before Content-Length",
-                ));
-            }
-            let error = io::Error::last_os_error();
-            match error.raw_os_error() {
-                Some(libc::EINTR) => {}
-                Some(error) if error == libc::EAGAIN || error == libc::EWOULDBLOCK => {
+            let mut file_offset = offset;
+            match rustix::fs::sendfile(
+                output,
+                file,
+                Some(&mut file_offset),
+                chunk.min(usize::MAX as u64) as usize,
+            ) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "static file ended before Content-Length",
+                    ));
+                }
+                Ok(sent) => {
+                    offset = offset.saturating_add(sent as u64);
+                    length -= sent as u64;
+                }
+                Err(rustix::io::Errno::INTR) => {}
+                Err(error)
+                    if error == rustix::io::Errno::AGAIN
+                        || error == rustix::io::Errno::WOULDBLOCK =>
+                {
                     let mut readiness = if timeout == Duration::ZERO {
                         self.inner.socket.writable().await
                     } else {
@@ -250,7 +238,7 @@ impl ClientSocketControl {
                     }?;
                     readiness.clear_ready();
                 }
-                _ => return Err(error),
+                Err(error) => return Err(error.into()),
             }
         }
         Ok(())

@@ -1,19 +1,11 @@
 use super::*;
 
-#[cfg(unix)]
-use std::ffi::CString;
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
-
 pub(super) fn available_space(path: &Path) -> io::Result<Option<u64>> {
     #[cfg(unix)]
     {
-        let path = CString::new(path.as_os_str().as_bytes())
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "cache path contains NUL"))?;
-        let mut stats = unsafe { std::mem::zeroed::<libc::statvfs>() };
-        if unsafe { libc::statvfs(path.as_ptr(), &mut stats) } != 0 {
+        let Ok(stats) = rustix::fs::statvfs(path) else {
             return Ok(None);
-        }
+        };
         let bytes = u128::from(stats.f_bavail) * u128::from(stats.f_frsize);
         Ok(Some(u64::try_from(bytes).unwrap_or(u64::MAX)))
     }

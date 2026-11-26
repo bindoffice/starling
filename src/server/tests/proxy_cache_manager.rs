@@ -128,7 +128,7 @@ async fn enforces_min_free() {
 async fn delete_failure_keeps_the_entry_and_recovers_after_permissions_return() {
     use std::os::unix::fs::PermissionsExt;
 
-    if unsafe { libc::geteuid() } == 0 {
+    if rustix::process::geteuid() == rustix::process::Uid::ROOT {
         eprintln!("skipping cache manager delete failure test as root");
         return;
     }
