@@ -343,6 +343,7 @@ fn variable_expansion_supports_braces_and_headers() {
             proxy_redirect: crate::config::ProxyRedirectConfig::Rules(vec![
                 crate::config::ProxyRedirectRule::Default,
             ]),
+            wasm: crate::config::WasmConfig::default(),
         }
         .into(),
         locations: Vec::new(),

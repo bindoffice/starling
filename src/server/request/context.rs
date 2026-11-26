@@ -357,6 +357,8 @@ pub(in crate::server) fn content_handler_for_context(
         Some(ContentHandlerKind::Memcached)
     } else if context.proxy_pass.is_some() {
         Some(ContentHandlerKind::Proxy)
+    } else if context.wasm.has_plugin() {
+        Some(ContentHandlerKind::Wasm)
     } else {
         context
             .tunnel

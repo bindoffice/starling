@@ -234,7 +234,7 @@ pub(in crate::server) async fn dispatch_http_request(
     };
     let processed_logger = variables.error_logger_for(&processed.context);
     variables.set_variable_warning_context(&processed.context, processed_logger);
-    let max_body = processed.context.client_max_body_size;
+    let max_body = effective_request_body_limit(&processed.context);
     let mut response = if max_body != 0 && request.buffered_body_len() > max_body {
         error_response(413)
     } else {

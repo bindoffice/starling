@@ -385,6 +385,7 @@ mod tls_stapling;
 mod upstream;
 mod upstream_buffering;
 mod userid;
+mod wasm;
 
 pub use access_log::*;
 pub use auto_https::*;
@@ -413,3 +414,4 @@ pub use tls_stapling::*;
 pub use upstream::*;
 pub use upstream_buffering::*;
 pub use userid::*;
+pub use wasm::*;

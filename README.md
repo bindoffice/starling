@@ -154,6 +154,8 @@ tests/             配置兼容、服务器行为和运行时迁移测试
   和完整代码结构说明。
 - [docs/auto-https.md](docs/auto-https.md)：自动 HTTPS、本地 CA、HTTP-01、
   DNS-01 hook、证书续期和排障。
+- [docs/wasm.md](docs/wasm.md)：WASM content handler 配置、资源限制、
+  core module ABI v1 和最小示例。
 
 ## 兼容性说明
 

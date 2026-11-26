@@ -83,6 +83,7 @@ pub(super) fn compile_server(
         }
     }
     finalize_scope_directives(&mut context, &mut seen);
+    validate_wasm_config(&context, &directive.location)?;
     validate_upstream_buffering(&context, &directive.location)?;
     validate_charset_map(&context, &directive.location)?;
     compile_rewrite_script(&rewrite_directives, &mut context, prefix, Scope::Server)?;
@@ -192,6 +193,7 @@ pub(super) fn compile_location(
         }
     }
     finalize_scope_directives(&mut context, &mut seen);
+    validate_wasm_config(&context, &directive.location)?;
     if directive.children.iter().any(|child| child.name == "alias") {
         context.alias_uri_prefix = match &matcher {
             LocationMatcher::Exact(path)

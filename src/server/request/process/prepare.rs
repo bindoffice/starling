@@ -39,16 +39,10 @@ pub(super) async fn prepare_request(
                         request_body_error_response(&error),
                     );
                 }
-                if let Err(error) = validate_declared_request_body_size(
-                    request,
-                    server_context.client_max_body_size,
-                )
-                .and_then(|()| {
-                    validate_buffered_request_body_size(
-                        request,
-                        server_context.client_max_body_size,
-                    )
-                }) {
+                let body_limit = effective_request_body_limit(&server_context);
+                if let Err(error) = validate_declared_request_body_size(request, body_limit)
+                    .and_then(|()| validate_buffered_request_body_size(request, body_limit))
+                {
                     request.keep_alive = false;
                     return response_outcome(
                         server_context.clone(),
@@ -111,10 +105,9 @@ pub(super) async fn prepare_request(
                 request.keep_alive = false;
                 return response_outcome(context.clone(), request_body_error_response(&error));
             }
-            if let Err(error) =
-                validate_declared_request_body_size(request, context.client_max_body_size).and_then(
-                    |()| validate_buffered_request_body_size(request, context.client_max_body_size),
-                )
+            let body_limit = effective_request_body_limit(&context);
+            if let Err(error) = validate_declared_request_body_size(request, body_limit)
+                .and_then(|()| validate_buffered_request_body_size(request, body_limit))
             {
                 request.keep_alive = false;
                 return response_outcome(context.clone(), request_body_error_response(&error));
@@ -257,7 +250,8 @@ async fn pre_rewrite_response(
     variables: &mut Variables,
     connection_guard: &mut Option<ConnectionLimitGuard>,
 ) -> Option<Processed> {
-    if let Err(error) = validate_declared_request_body_size(request, context.client_max_body_size) {
+    let body_limit = effective_request_body_limit(context);
+    if let Err(error) = validate_declared_request_body_size(request, body_limit) {
         return Some(Processed {
             response: request_body_error_response(&error),
             context: context.clone(),
@@ -265,9 +259,7 @@ async fn pre_rewrite_response(
             upgrade: None,
         });
     }
-    if context.client_max_body_size != 0
-        && request.buffered_body_len() > context.client_max_body_size
-    {
+    if body_limit != 0 && request.buffered_body_len() > body_limit {
         return Some(Processed {
             response: error_response(413),
             context: context.clone(),

@@ -313,6 +313,7 @@ impl EffectiveConfig {
             stub_status: false,
             limit_except: None,
             proxy_redirect: ProxyRedirectConfig::Rules(vec![ProxyRedirectRule::Default]),
+            wasm: WasmConfig::default(),
         }
     }
 }

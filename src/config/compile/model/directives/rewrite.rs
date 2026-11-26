@@ -82,6 +82,7 @@ pub enum ContentHandlerKind {
     Memcached,
     Proxy,
     Tunnel,
+    Wasm,
 }
 
 #[derive(Debug, Clone)]

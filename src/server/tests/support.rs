@@ -286,10 +286,21 @@ pub(super) fn test_config(source: &str, files: &[(&str, &str)]) -> (PathBuf, Arc
 }
 
 pub(super) fn test_config_error(source: &str) -> String {
+    test_config_error_with_files(source, &[])
+}
+
+pub(super) fn test_config_error_with_files(source: &str, files: &[(&str, &str)]) -> String {
     let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let prefix = std::env::temp_dir().join(format!("starling-test-{}-{id}", std::process::id()));
     std::fs::create_dir_all(prefix.join("conf")).unwrap();
     std::fs::create_dir_all(prefix.join("logs")).unwrap();
+    for (path, contents) in files {
+        let path = prefix.join(path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, contents).unwrap();
+    }
     let config_path = prefix.join("conf/nginx.conf");
     std::fs::write(&config_path, source).unwrap();
     let document = ConfigLoader::new(prefix.clone())

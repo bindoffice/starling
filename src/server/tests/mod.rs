@@ -129,3 +129,4 @@ mod upstream_socket;
 mod upstream_trailers;
 mod userid;
 mod variable_compat;
+mod wasm;

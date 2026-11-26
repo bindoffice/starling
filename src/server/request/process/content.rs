@@ -185,6 +185,7 @@ pub(super) async fn serve_content(
             }
         }
         Some(ContentHandlerKind::Tunnel) => error_response(500),
+        Some(ContentHandlerKind::Wasm) => serve_wasm(request, env, context, variables).await,
         None => {
             if let Some(response) = serve_dav(request, env, context, location, variables).await {
                 response
@@ -219,4 +220,154 @@ pub(super) async fn serve_content(
         return (response, kind, None);
     }
     (response, kind, upgrade)
+}
+
+async fn serve_wasm(
+    request: &Request,
+    env: &RequestEnv,
+    context: &EffectiveConfig,
+    variables: &Variables,
+) -> Response {
+    let Some(plugin) = &context.wasm.plugin else {
+        return error_response(500);
+    };
+    let logger = variables.error_logger_for(context);
+    let body = match wasm_request_body(request, context.wasm.request_body_max).await {
+        Ok(body) => body,
+        Err(status) => return error_response(status),
+    };
+    let permit = match tokio::time::timeout(
+        context.wasm.timeout,
+        context.wasm.instance_limiter.clone().acquire_owned(),
+    )
+    .await
+    {
+        Ok(Ok(permit)) => permit,
+        Ok(Err(_)) => return error_response(500),
+        Err(_) => {
+            log_wasm_error(
+                logger.as_ref(),
+                plugin,
+                "timed out waiting for an instance slot",
+            );
+            return error_response(500);
+        }
+    };
+    let wasm_request = crate::wasm::WasmRequest {
+        method: request.method.clone(),
+        target: request.target.clone(),
+        uri: env.uri.clone(),
+        args: env.args.clone().unwrap_or_default(),
+        version: request.version.clone(),
+        scheme: variables.scheme.to_string(),
+        host: variables.host.clone(),
+        remote_addr: request.remote_addr.to_string(),
+        local_addr: request.local_addr.to_string(),
+        headers: request
+            .headers
+            .iter()
+            .map(|header| (header.name.to_string(), header.value.clone()))
+            .collect(),
+        body,
+    };
+    let result = crate::wasm::call(
+        plugin.module.clone(),
+        wasm_request,
+        crate::wasm::WasmLimits {
+            timeout: context.wasm.timeout,
+            memory_max: context.wasm.memory_max,
+            fuel: context.wasm.fuel,
+            response_body_max: context.wasm.response_body_max,
+        },
+    )
+    .await;
+    drop(permit);
+    match result {
+        Ok((wasm_response, stats)) => {
+            if logger
+                .as_ref()
+                .is_some_and(|logger| logger.enabled(crate::config::LogLevel::Debug))
+            {
+                let fuel = stats
+                    .fuel_used
+                    .map(|fuel| fuel.to_string())
+                    .unwrap_or_else(|| "-".into());
+                logger.as_ref().unwrap().log(
+                    crate::config::LogLevel::Debug,
+                    format!(
+                        "wasm module {} sha1={} completed in {}ms fuel={} memory={}",
+                        plugin.path.display(),
+                        plugin.module.digest(),
+                        stats.elapsed.as_millis(),
+                        fuel,
+                        stats.memory_bytes
+                    ),
+                );
+            }
+            wasm_response_to_http(wasm_response, context)
+        }
+        Err(error) => {
+            log_wasm_error(logger.as_ref(), plugin, error.message());
+            error_response(500)
+        }
+    }
+}
+
+async fn wasm_request_body(request: &Request, limit: u64) -> Result<Vec<u8>, u16> {
+    let body = if let Some(stream) = request.body_stream.as_ref() {
+        stream
+            .read_to_end(limit)
+            .await
+            .map_err(|error| crate::http::request_body_error_status(&error).unwrap_or(500))?
+    } else {
+        if request.body.len() as u64 > limit {
+            return Err(413);
+        }
+        request.body.clone()
+    };
+    if body.len() as u64 > limit {
+        return Err(413);
+    }
+    Ok(body)
+}
+
+fn wasm_response_to_http(
+    wasm_response: crate::wasm::WasmResponse,
+    context: &EffectiveConfig,
+) -> Response {
+    let status = wasm_response.status;
+    let has_body = !wasm_response.body.is_empty();
+    let mut response = Response::new(status);
+    for (name, value) in wasm_response.headers {
+        response.add_header(&name, value);
+    }
+    if has_body && !matches!(status, 204 | 205 | 304) && response.header("Content-Type").is_none() {
+        response.set_header_static("Content-Type", context.default_type.clone());
+    }
+    if matches!(status, 204 | 304) {
+        response.body = ResponseBody::Empty;
+        response.remove_header("Content-Length");
+    } else {
+        response.body = ResponseBody::Bytes(wasm_response.body);
+        response.set_content_length();
+    }
+    response
+}
+
+fn log_wasm_error(
+    logger: Option<&Arc<crate::logging::Logger>>,
+    plugin: &crate::config::WasmPlugin,
+    message: &str,
+) {
+    if let Some(logger) = logger {
+        let message: String = message.chars().take(1024).collect();
+        logger.log(
+            crate::config::LogLevel::Error,
+            format!(
+                "wasm module {} sha1={} failed: {message}",
+                plugin.path.display(),
+                plugin.module.digest()
+            ),
+        );
+    }
 }

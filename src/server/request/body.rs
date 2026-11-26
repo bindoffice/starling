@@ -48,13 +48,14 @@ fn location_may_stream_request_body(location: &LocationConfig) -> bool {
 }
 
 fn config_may_stream_request_body(context: &EffectiveConfig) -> bool {
+    let wasm_content = context.wasm.has_plugin();
     let proxy_streaming = context.proxy_pass.is_some()
         && !context.proxy_request_buffering
         && context.proxy_set_body.is_none()
         && context.proxy_pass_request_body
         && !context.proxy_cache_background_update
         && (context.mirrors.is_empty() || !context.mirror_request_body);
-    gateway_request_body_streaming(context, None) || proxy_streaming
+    wasm_content || gateway_request_body_streaming(context, None) || proxy_streaming
 }
 
 fn gateway_request_body_streaming(context: &EffectiveConfig, request: Option<&Request>) -> bool {
@@ -92,7 +93,8 @@ pub(in crate::server) async fn prepare_request_body(
         return Ok(());
     }
     variables.request_body_prepared = true;
-    validate_declared_request_body_size(request, context.client_max_body_size)?;
+    let body_limit = effective_request_body_limit(context);
+    validate_declared_request_body_size(request, body_limit)?;
     if request_body_stream_enabled(request, context) {
         return Ok(());
     }
@@ -100,7 +102,7 @@ pub(in crate::server) async fn prepare_request_body(
         return Ok(());
     }
     buffer_request_body(request, context).await?;
-    validate_buffered_request_body_size(request, context.client_max_body_size)?;
+    validate_buffered_request_body_size(request, body_limit)?;
     set_buffered_request_body_variable(request, variables);
     Ok(())
 }
@@ -119,7 +121,8 @@ fn request_body_buffering_required(request: &Request, context: &EffectiveConfig)
     let grpc = context.grpc.pass.is_some();
     let mirror = !context.mirrors.is_empty() && context.mirror_request_body;
     let dav_put = request.method == "PUT" && context.dav.allows(crate::config::DavMethod::Put);
-    context.client_body.in_file_only.enabled()
+    context.wasm.has_plugin()
+        || context.client_body.in_file_only.enabled()
         || proxy
         || fastcgi
         || uwsgi
@@ -149,7 +152,7 @@ pub(in crate::server) async fn buffer_request_body(
             context.client_body.buffer_size,
             &context.client_body.temp_path,
             context.client_body.in_file_only,
-            context.client_max_body_size,
+            effective_request_body_limit(context),
         )
         .await?;
         request.body = spooled.body;
@@ -191,6 +194,18 @@ pub(in crate::server) fn set_buffered_request_body_variable(
         .map(|file| file.path().display().to_string())
         .unwrap_or_default();
     variables.request_body_file_guard = file;
+}
+
+pub(in crate::server) fn effective_request_body_limit(context: &EffectiveConfig) -> u64 {
+    let client_limit = context.client_max_body_size;
+    if !context.wasm.has_plugin() {
+        return client_limit;
+    }
+    if client_limit == 0 {
+        context.wasm.request_body_max
+    } else {
+        client_limit.min(context.wasm.request_body_max)
+    }
 }
 
 pub(in crate::server) async fn set_streamed_request_body_variable(

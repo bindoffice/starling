@@ -42,6 +42,7 @@ mod store;
 mod tls;
 mod tunnel;
 mod upstream_headers;
+mod wasm;
 
 use access::try_apply_access_directive;
 use auth::try_apply_auth_directive;
@@ -98,6 +99,8 @@ use tls::try_apply_tls_directive;
 pub(in crate::config::compile) use tunnel::parse_tunnel_pass;
 use tunnel::{TunnelSeen, try_apply_tunnel_directive};
 pub(super) use upstream_headers::{apply_header_list, apply_ignore_headers};
+pub(in crate::config::compile) use wasm::validate_wasm_config;
+use wasm::{WasmSeen, try_apply_wasm_http_directive, try_apply_wasm_scope_directive};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum Scope {
@@ -208,6 +211,7 @@ pub(super) struct SeenScopeDirectives {
     charset: CharsetSeen,
     pub(super) stapling: StaplingSeen,
     tunnel: TunnelSeen,
+    wasm: WasmSeen,
 }
 
 pub(super) fn apply_http_directive(
@@ -218,6 +222,9 @@ pub(super) fn apply_http_directive(
     browser_seen: &mut BrowserSeen,
     seen: &mut SeenScopeDirectives,
 ) -> ConfigResult<()> {
+    if try_apply_wasm_http_directive(directive, context, &mut seen.wasm)? {
+        return Ok(());
+    }
     if try_apply_upstream_buffering_directive(directive, context, prefix, &mut seen.buffering)? {
         return Ok(());
     }
@@ -309,6 +316,9 @@ pub(super) fn apply_scope_directive(
     scope: Scope,
     seen: &mut SeenScopeDirectives,
 ) -> ConfigResult<()> {
+    if try_apply_wasm_scope_directive(directive, context, prefix, &mut seen.wasm)? {
+        return Ok(());
+    }
     if try_apply_error_log_directive(directive, context, prefix, &mut seen.error_log)? {
         return Ok(());
     }

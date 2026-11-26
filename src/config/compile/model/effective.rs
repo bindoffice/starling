@@ -361,4 +361,5 @@ pub struct EffectiveConfig {
     pub stub_status: bool,
     pub limit_except: Option<LimitExcept>,
     pub proxy_redirect: ProxyRedirectConfig,
+    pub wasm: WasmConfig,
 }

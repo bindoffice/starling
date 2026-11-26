@@ -5,6 +5,7 @@ pub mod http;
 pub mod logging;
 pub mod runtime;
 pub mod server;
+pub mod wasm;
 
 pub const SERVER_SOFTWARE: &str = "nginx/1.31.9";
 pub const SERVER_SOFTWARE_BUILD: &str = SERVER_SOFTWARE;

@@ -133,6 +133,9 @@ TLS 与 stream 代理能力。
   上游和响应行为拆分。
 - `server/tests/`：HTTP/TLS、代理、stream、访问控制和静态文件等较大测试集
   按行为继续拆成子目录，测试入口只负责模块编排。
+- `wasm/{mod,abi,runtime}.rs` 与 `config/compile/{directives,model}/wasm.rs`：
+  Wasmtime 引擎、编译模块缓存、实例并发限制、core module ABI v1、配置
+  校验和 content handler 运行时接入。
 
 新增逻辑应优先放入对应子模块，避免继续堆叠到入口文件；生产代码和测试代码
 单文件接近 500 行时，应检查是否可以按职责继续拆分。
@@ -218,6 +221,16 @@ TLS 与 stream 代理能力。
   HTTP/server/location 继承；支持 PUT 原子替换、集合创建与递归删除、
   COPY/MOVE 文件和目录、`Destination`、`Depth`、`Overwrite` 校验、
   文件权限与修改时间保留。
+- WebAssembly content handler：HTTP 级 `wasm_engine`/`wasm_module_cache`
+  与 server/location 级 `wasm_module`、`wasm_phase content`、
+  `wasm_timeout`、`wasm_memory_max`、`wasm_fuel`、
+  `wasm_request_body_max`、`wasm_response_body_max`、
+  `wasm_max_instances`、`wasm_isolation in-process`；使用进程内
+  Wasmtime、epoch 墙钟超时、可选 fuel、线性内存/请求体/响应体/响应头/
+  实例并发限制、按 canonical path/size/mtime/digest 的编译模块缓存和 reload
+  快照切换。实现版本化 core module ABI v1（`starling_abi_version`、
+  `starling_alloc`、`starling_handle`），不暴露 WASI 文件、网络、
+  环境变量或子进程能力。
 - 错误页兼容：HTTP/server/location 继承的 `msie_padding on|off`（默认
   `on`）为 MSIE/Chrome 的 4xx/5xx 内置错误页追加兼容 padding；
   `msie_refresh on|off`（默认 `off`）将 MSIE 的 301/302 响应改为 200
