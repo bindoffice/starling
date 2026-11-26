@@ -7,12 +7,12 @@ fn main() {
     let cli = match starling::runtime::parse_cli(arguments) {
         Ok(cli) => cli,
         Err(error) => {
-            eprintln!("nginx: [emerg] {error}");
+            eprintln!("starling: [emerg] {error}");
             std::process::exit(1);
         }
     };
     if let Err(error) = starling::runtime::execute(cli) {
-        eprintln!("nginx: [emerg] {error}");
+        eprintln!("starling: [emerg] {error}");
         std::process::exit(1);
     }
 }

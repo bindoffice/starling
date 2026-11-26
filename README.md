@@ -1,5 +1,7 @@
 # Starling
 
+[简体中文](README.md) | [English](README.en.md)
+
 Starling 是一个使用 Rust 编写的 Nginx 兼容 Web 服务器与四层反向代理。
 它直接读取 Nginx 风格配置，并保留 `nginx` 风格的命令行、PID、信号和
 配置重载方式。
@@ -157,6 +159,34 @@ tests/             配置兼容、服务器行为和运行时迁移测试
   DNS-01 hook、证书续期和排障。
 - [docs/wasm.md](docs/wasm.md)：WASM content handler 配置、资源限制、
   core module ABI v1 和最小示例。
+
+## CI 与发布
+
+仓库提供以下自动化入口：
+
+- `.github/workflows/ci.yml`：在 push 到 `main`、Pull Request 和手动触发时运行
+  `cargo fmt`、Clippy、完整测试，并构建一次发布包验证打包流程。
+- `.github/workflows/release.yml`：推送 `v*` 标签或手动触发时，在 Linux
+  x86_64 与 aarch64 runner 上构建二进制、生成 `tar.gz` 发布包和
+  `SHA256SUMS`，并创建或更新 GitHub Release。
+- `scripts/ci.sh`：在本地执行与 CI 相同的格式、静态检查、测试和 release
+  构建。
+- `scripts/package-release.sh`：生成包含二进制、默认配置、静态页面、日志目录
+  和文档的平台发布包。
+
+发布标签必须与 `Cargo.toml` 中的版本一致：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+本地打包示例：
+
+```bash
+cargo build --release --locked
+scripts/package-release.sh --version 0.1.0
+```
 
 ## 兼容性说明
 

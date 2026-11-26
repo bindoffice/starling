@@ -107,7 +107,7 @@ pub(super) fn parse_syslog_config(
         server,
         facility: facility.unwrap_or(DEFAULT_FACILITY),
         severity: severity.unwrap_or(DEFAULT_SEVERITY),
-        tag: tag.unwrap_or_else(|| "nginx".into()),
+        tag: tag.unwrap_or_else(|| "starling".into()),
         nohostname,
     })
 }

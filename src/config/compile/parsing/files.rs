@@ -43,7 +43,7 @@ pub(in crate::config::compile) fn parse_log_target(
         value if value.starts_with("memory:") => {
             return Err(ConfigError::at(
                 directive.location.clone(),
-                "nginx was built without debug support",
+                "starling was built without debug support",
             ));
         }
         value => LogDestination::File(resolve_path(prefix, value)),

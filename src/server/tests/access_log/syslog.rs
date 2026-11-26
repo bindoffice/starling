@@ -51,7 +51,7 @@ fn compiles_syslog_access_log_parameters() {
     assert_eq!(defaults.facility, 23);
     assert_eq!(defaults.severity, 6);
     assert_eq!(defaults.priority(), 190);
-    assert_eq!(defaults.tag, "nginx");
+    assert_eq!(defaults.tag, "starling");
     assert!(!defaults.nohostname);
     assert_eq!(
         defaults.server,

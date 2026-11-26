@@ -175,7 +175,7 @@ pub fn execute(cli: Cli) -> Result<(), String> {
                     }
                     Err(err) => {
                         return Err(format!(
-                            "nginx: [emerg] could not read {}: {err}",
+                            "starling: [emerg] could not read {}: {err}",
                             file.display()
                         ));
                     }
@@ -184,11 +184,11 @@ pub fn execute(cli: Cli) -> Result<(), String> {
         }
         if !cli.quiet {
             println!(
-                "nginx: the configuration file {} syntax is ok",
+                "starling: the configuration file {} syntax is ok",
                 config.config_path.display()
             );
             println!(
-                "nginx: configuration file {} test is successful",
+                "starling: configuration file {} test is successful",
                 config.config_path.display()
             );
         }
@@ -233,7 +233,7 @@ pub fn execute(cli: Cli) -> Result<(), String> {
 
 fn print_config_warnings(config: &RuntimeConfig) {
     for warning in &config.warnings {
-        eprintln!("nginx: [warn] {warning}");
+        eprintln!("starling: [warn] {warning}");
     }
 }
 
@@ -372,7 +372,7 @@ fn daemonize() -> Result<(), String> {
 }
 
 fn print_version(verbose: bool) {
-    println!("nginx version: {SERVER_SOFTWARE} (starling/{STARLING_VERSION})");
+    println!("{}", version_summary());
     if verbose {
         println!("built by rustc");
         println!("TLS SNI support enabled");
@@ -382,7 +382,7 @@ fn print_version(verbose: bool) {
 
 fn print_help() {
     println!(
-        "nginx version: {SERVER_SOFTWARE} (starling/{STARLING_VERSION})\n\
+        "{}\n\
          Usage: starling [-?hvVtTq] [-s signal] [-p prefix]\n\
          \t\t[-e filename] [-c filename] [-g directives]\n\n\
          Options:\n\
@@ -396,8 +396,13 @@ fn print_help() {
          \t-p prefix     : set prefix path (default: /usr/local/nginx/)\n\
          \t-e filename   : set error log file (default: logs/error.log)\n\
          \t-c filename   : set configuration file (default: conf/nginx.conf)\n\
-         \t-g directives : set global directives out of configuration file"
+         \t-g directives : set global directives out of configuration file",
+        version_summary()
     );
+}
+
+fn version_summary() -> String {
+    format!("starling version: {STARLING_VERSION} (nginx-compatible: {SERVER_SOFTWARE})")
 }
 
 fn absolute_path(path: &Path) -> PathBuf {
@@ -454,5 +459,13 @@ mod tests {
     #[test]
     fn reports_http2_in_configure_arguments() {
         assert!(CONFIGURE_ARGUMENTS.contains("--with-http_v2_module"));
+    }
+
+    #[test]
+    fn version_summary_uses_starling_branding() {
+        let summary = version_summary();
+        assert!(summary.starts_with("starling version:"), "{summary}");
+        assert!(summary.contains(STARLING_VERSION), "{summary}");
+        assert!(summary.contains(SERVER_SOFTWARE), "{summary}");
     }
 }

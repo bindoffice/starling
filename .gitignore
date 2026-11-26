@@ -1,7 +1,9 @@
 /target/
+/dist/
 /logs/
 /nginx-release-1.31.9/
 /nginx-release-1.31.9.tar.gz
+/vendor/h2/target/
 *.pid
 *.log
 

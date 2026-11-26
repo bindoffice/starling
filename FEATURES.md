@@ -1,5 +1,7 @@
 # Starling 功能、构建与兼容性
 
+[简体中文](FEATURES.md) | [English](FEATURES.en.md)
+
 Starling 是一个用 Rust 实现的 Nginx 兼容 Web 服务器与四层反向代理。它直接读取
 Nginx 风格配置，并提供接近 `nginx` 的命令行、PID/信号、静态文件、HTTP 代理、
 TLS 与 stream 代理能力。
@@ -669,6 +671,31 @@ sudo ./target/release/starling -p /usr/local/nginx -c conf/nginx.conf
 ```bash
 ./target/release/starling -p "$PWD" -c conf/nginx.conf -s reload
 ```
+
+## CI 与发布
+
+`scripts/ci.sh` 会依次执行格式检查、Clippy、完整测试和 release 构建。
+GitHub Actions 的 `ci.yml` 在 push 到 `main`、Pull Request 和手动触发时执行
+相同检查，并额外验证发布包生成。
+
+`scripts/package-release.sh` 可生成如下结构的发布包：
+
+```text
+starling-<version>-<target>/
+├── bin/starling
+├── conf/
+├── docs/
+├── html/
+├── logs/
+├── README.md
+├── README.en.md
+├── FEATURES.md
+└── FEATURES.en.md
+```
+
+`release.yml` 在推送 `v*` 标签时构建 Linux x86_64/aarch64 包，生成
+`SHA256SUMS` 并发布到 GitHub Release。标签版本必须与 `Cargo.toml` 一致；
+也可以在 Actions 页面手动指定标签触发。
 
 ## 配置示例
 
