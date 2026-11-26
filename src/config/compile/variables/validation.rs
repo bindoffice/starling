@@ -31,6 +31,7 @@ const BUILTIN_VARIABLES: &[&str] = &[
     "host",
     "hostname",
     "http2",
+    "http3",
     "http_",
     "https",
     "invalid_referer",

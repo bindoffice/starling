@@ -238,6 +238,7 @@ fn add_https_listeners(server: &mut crate::config::ServerConfig, settings: &Auto
             address: crate::config::ListenAddress::Inet(https_address),
             ssl: true,
             http2: listen.http2,
+            quic: false,
             udp: false,
             proxy_protocol: listen.proxy_protocol,
             default_server: listen.default_server,

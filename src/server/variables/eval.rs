@@ -127,6 +127,7 @@ pub(in crate::server) fn variable_value(
         "scheme" => variables.scheme.to_owned(),
         "https" => variables.https.to_owned(),
         "http2" => variables.http2.to_owned(),
+        "http3" => variables.http3.to_owned(),
         "pipe" => variables.pipe_value().to_owned(),
         "connection" => variables.connection_value(),
         "connection_requests" => variables.connection_requests_value(),

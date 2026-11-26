@@ -120,11 +120,40 @@ run_h2load_request() {
     local data_file="$1"
     local requests="$2"
     local url="$3"
-    local -a args=(-t"$THREADS" -c"$H2_CLIENTS" -m"$H2_STREAMS" -n"$requests")
+    local streams="$4"
+    local log_file="$5"
+    local -a args=(-t"$THREADS" -c"$H2_CLIENTS" -m"$streams" -n"$requests")
     if [[ -n "$data_file" ]]; then
         args+=(-d"$data_file")
     fi
+    if [[ -n "$log_file" ]]; then
+        rm -f "$log_file"
+        args+=(--log-file "$log_file")
+    fi
     run_client "$H2LOAD_BIN" "${args[@]}" "$url"
+}
+
+h2_log_percentile() {
+    local log_file="$1"
+    local percentile="$2"
+    local count rank value
+    [[ -s "$log_file" ]] || {
+        printf '%s' "-"
+        return
+    }
+    count="$(wc -l <"$log_file")"
+    ((count > 0)) || {
+        printf '%s' "-"
+        return
+    }
+    rank=$(((count * percentile + 99) / 100))
+    ((rank >= 1)) || rank=1
+    value="$(sort -n -k3,3 "$log_file" | sed -n "${rank}p" | cut -f3)"
+    if [[ -n "$value" ]]; then
+        printf '%sus' "$value"
+    else
+        printf '%s' "-"
+    fi
 }
 
 run_h2_scenario() {
@@ -132,19 +161,21 @@ run_h2_scenario() {
     local scenario="$2"
     local path="$3"
     local requests="$4"
-    local data_file="${5:-}"
-    local round raw resources
+    local streams="$5"
+    local data_file="${6:-}"
+    local round raw log_file resources
     local warmup_requests=$((requests / 10))
     ((warmup_requests >= H2_CLIENTS)) || warmup_requests="$H2_CLIENTS"
     raw="$OUTPUT_DIR/$implementation-h2-$scenario-warmup.txt"
     run_h2load_request "$data_file" "$warmup_requests" \
-        "http://127.0.0.1:$PORT$path" >"$raw"
+        "http://127.0.0.1:$PORT$path" "$streams" "" >"$raw"
     for ((round = 1; round <= ROUNDS; round++)); do
         raw="$OUTPUT_DIR/$implementation-h2-$scenario-$round.txt"
+        log_file="$OUTPUT_DIR/$implementation-h2-$scenario-$round.h2log"
         resources="$OUTPUT_DIR/$implementation-h2-$scenario-$round.resources.tsv"
         start_sampler "$SERVER_PID" "$resources"
         run_h2load_request "$data_file" "$requests" \
-            "http://127.0.0.1:$PORT$path" >"$raw"
+            "http://127.0.0.1:$PORT$path" "$streams" "$log_file" >"$raw"
         stop_sampler
         local parsed
         parsed="$(awk '
@@ -180,10 +211,12 @@ run_h2_scenario() {
         IFS=$'\t' read -r req_s mean_raw transfer_raw requests succeeded failed errored timeout \
             <<<"$parsed"
         mean="$(normalize_ms "$mean_raw")"
+        p50="$(normalize_ms "$(h2_log_percentile "$log_file" 50)")"
+        p99="$(normalize_ms "$(h2_log_percentile "$log_file" 99)")"
         transfer="$(normalize_mb "$transfer_raw")"
         peak="$(peak_resources "$resources")"
         IFS=$'\t' read -r peak_rss peak_threads peak_fds <<<"$peak"
-        write_result_row "$implementation" h2c "$scenario" "$round" "$req_s" "-" "-" "$mean" \
+        write_result_row "$implementation" h2c "$scenario" "$round" "$req_s" "$p50" "$p99" "$mean" \
             "$transfer" "$requests" "$succeeded" "$failed" "$errored" "$timeout" \
             "$peak_rss" "$peak_threads" "$peak_fds" "$raw"
     done

@@ -1,7 +1,7 @@
 use super::*;
 use crate::http::valid_host;
 
-pub(super) fn h2_content_length(headers: &http::HeaderMap) -> io::Result<Option<u64>> {
+pub(in crate::server) fn h2_content_length(headers: &http::HeaderMap) -> io::Result<Option<u64>> {
     let mut content_length = None;
     for value in headers.get_all(http::header::CONTENT_LENGTH).iter() {
         let parsed = value
@@ -20,7 +20,10 @@ pub(super) fn h2_content_length(headers: &http::HeaderMap) -> io::Result<Option<
     Ok(content_length)
 }
 
-pub(super) fn h2_header_field_too_large(parts: &http::request::Parts, limit: usize) -> bool {
+pub(in crate::server) fn h2_header_field_too_large(
+    parts: &http::request::Parts,
+    limit: usize,
+) -> bool {
     if limit == 0 {
         return false;
     }
@@ -43,7 +46,10 @@ pub(super) fn h2_header_field_too_large(parts: &http::request::Parts, limit: usi
             .any(|(name, value)| name.as_str().len() > limit || value.as_bytes().len() > limit)
 }
 
-pub(super) fn h2_header_list_too_large(parts: &http::request::Parts, limit: usize) -> bool {
+pub(in crate::server) fn h2_header_list_too_large(
+    parts: &http::request::Parts,
+    limit: usize,
+) -> bool {
     if limit == 0 {
         return false;
     }
@@ -72,7 +78,7 @@ pub(super) fn h2_header_list_too_large(parts: &http::request::Parts, limit: usiz
     size > limit
 }
 
-pub(super) fn invalid_h2_request_headers(parts: &http::request::Parts) -> bool {
+pub(in crate::server) fn invalid_h2_request_headers(parts: &http::request::Parts) -> bool {
     let uri = &parts.uri;
     if !parts
         .method

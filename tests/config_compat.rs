@@ -53,6 +53,8 @@ mod gateway_stores;
 mod grpc;
 #[path = "config_compat/gzip.rs"]
 mod gzip;
+#[path = "config_compat/http3.rs"]
+mod http3;
 #[path = "config_compat/keepalive.rs"]
 mod keepalive;
 #[path = "config_compat/lingering.rs"]

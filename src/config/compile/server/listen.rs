@@ -36,6 +36,7 @@ pub(in crate::config::compile) fn parse_listen(
         address: addresses[0].clone(),
         ssl: false,
         http2: false,
+        quic: false,
         udp: false,
         proxy_protocol: false,
         default_server: false,
@@ -46,6 +47,7 @@ pub(in crate::config::compile) fn parse_listen(
         match option.as_str() {
             "ssl" => listen.ssl = true,
             "http2" => listen.http2 = true,
+            "quic" => listen.quic = true,
             "udp" => listen.udp = true,
             "proxy_protocol" => listen.proxy_protocol = true,
             "default_server" | "default" => listen.default_server = true,
@@ -156,6 +158,12 @@ pub(in crate::config::compile) fn validate_stream_listen_options(
         return Err(ConfigError::at(
             location.clone(),
             "invalid parameter \"http2\" in listen directive",
+        ));
+    }
+    if listen.quic {
+        return Err(ConfigError::at(
+            location.clone(),
+            "invalid parameter \"quic\" in listen directive",
         ));
     }
     if !listen.udp {

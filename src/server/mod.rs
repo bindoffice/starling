@@ -83,8 +83,8 @@ use tls::{
 };
 use tls::{
     ClientTlsConfigCache, ClientTlsOptions, HttpTlsConfigs, StreamTlsConfigs, TlsConnectionInfo,
-    accept_http_tls, accept_stream_tls, build_stream_tls_configs, build_tls_configs,
-    client_certificate_verify_failure, tls_connection_info,
+    accept_http_tls, accept_stream_tls, build_http3_server_config, build_stream_tls_configs,
+    build_tls_configs, client_certificate_verify_failure, tls_connection_info,
 };
 mod upstream;
 use upstream::*;
@@ -92,6 +92,7 @@ mod variables;
 use variables::*;
 mod http2;
 mod http2_budget;
+mod http3;
 mod http_error_log;
 mod listener_socket;
 mod prefixed;
@@ -103,6 +104,7 @@ mod temp_cleanup;
 use http_error_log::*;
 use http2::*;
 use http2_budget::Http2Budget;
+use http3::*;
 use listener_socket::*;
 use prefixed::*;
 use request::*;
@@ -340,6 +342,9 @@ struct ListenerGroup {
     default_server_id: usize,
     ssl: bool,
     http2: bool,
+    http3: bool,
+    tcp: bool,
+    quic: bool,
     proxy_protocol: bool,
     socket_options: ListenSocketOptions,
 }
@@ -389,7 +394,16 @@ fn address_variable_text(address: &ListenAddress) -> (Arc<str>, Arc<str>) {
 }
 
 type ListenerSignature = (
-    Vec<(ListenAddress, bool, bool, bool, ListenSocketOptions)>,
+    Vec<(
+        ListenAddress,
+        bool,
+        bool,
+        bool,
+        bool,
+        bool,
+        bool,
+        ListenSocketOptions,
+    )>,
     Vec<(ListenAddress, bool, bool, bool, ListenSocketOptions)>,
 );
 

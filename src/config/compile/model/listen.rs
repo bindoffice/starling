@@ -6,6 +6,7 @@ pub struct ListenConfig {
     pub address: ListenAddress,
     pub ssl: bool,
     pub http2: bool,
+    pub quic: bool,
     pub udp: bool,
     pub proxy_protocol: bool,
     pub default_server: bool,

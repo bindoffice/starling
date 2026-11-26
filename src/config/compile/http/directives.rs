@@ -21,6 +21,7 @@ impl<'a> HttpCompileState<'a> {
                 self.context.default_type = self.default_type.clone();
             }
             "http2" => self.context.http2 = parse_flag(child, "http2")?,
+            "http3" => self.context.http3 = parse_flag(child, "http3")?,
             "rewrite_log" => self.context.rewrite_log = parse_flag(child, "rewrite_log")?,
             "uninitialized_variable_warn" => {
                 self.context.uninitialized_variable_warn =

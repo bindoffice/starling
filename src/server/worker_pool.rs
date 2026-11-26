@@ -35,42 +35,59 @@ impl WorkerPool {
         let mut unix_socket_paths = UnixSocketCleanup::default();
 
         for group in groups {
-            match group.address.clone() {
-                ListenAddress::Inet(address) => {
-                    let listener =
-                        bind_tcp_listener(address, &group.socket_options).map_err(|err| {
-                            io::Error::new(err.kind(), format!("bind() to {address} failed: {err}"))
-                        })?;
-                    let listeners = clone_tcp_listener(listener.into_std()?, workers)?;
-                    for (spec, listener) in specs.iter_mut().zip(listeners) {
-                        spec.http_tcp.push((listener, group.clone()));
-                    }
-                }
-                ListenAddress::Unix(path) => {
-                    #[cfg(unix)]
-                    {
+            if group.tcp {
+                match group.address.clone() {
+                    ListenAddress::Inet(address) => {
                         let listener =
-                            bind_unix_listener(&path, &group.socket_options).map_err(|err| {
+                            bind_tcp_listener(address, &group.socket_options).map_err(|err| {
                                 io::Error::new(
                                     err.kind(),
-                                    format!("bind() to unix:{} failed: {err}", path.display()),
+                                    format!("bind() to {address} failed: {err}"),
                                 )
                             })?;
-                        unix_socket_paths.paths.push(path);
-                        let listeners = clone_unix_listener(listener.into_std()?, workers)?;
+                        let listeners = clone_tcp_listener(listener.into_std()?, workers)?;
                         for (spec, listener) in specs.iter_mut().zip(listeners) {
-                            spec.http_unix.push((listener, group.clone()));
+                            spec.http_tcp.push((listener, group.clone()));
                         }
                     }
-                    #[cfg(not(unix))]
-                    {
-                        let _ = path;
-                        return Err(io::Error::new(
-                            io::ErrorKind::Unsupported,
-                            "UNIX domain listen sockets are unsupported on this platform",
-                        ));
+                    ListenAddress::Unix(path) => {
+                        #[cfg(unix)]
+                        {
+                            let listener = bind_unix_listener(&path, &group.socket_options)
+                                .map_err(|err| {
+                                    io::Error::new(
+                                        err.kind(),
+                                        format!("bind() to unix:{} failed: {err}", path.display()),
+                                    )
+                                })?;
+                            unix_socket_paths.paths.push(path);
+                            let listeners = clone_unix_listener(listener.into_std()?, workers)?;
+                            for (spec, listener) in specs.iter_mut().zip(listeners) {
+                                spec.http_unix.push((listener, group.clone()));
+                            }
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            let _ = path;
+                            return Err(io::Error::new(
+                                io::ErrorKind::Unsupported,
+                                "UNIX domain listen sockets are unsupported on this platform",
+                            ));
+                        }
                     }
                 }
+            }
+            if group.quic {
+                let ListenAddress::Inet(address) = group.address.clone() else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        format!("QUIC bind() to {} is unsupported", group.address),
+                    ));
+                };
+                let socket = bind_udp_socket(address, &group.socket_options).map_err(|err| {
+                    io::Error::new(err.kind(), format!("bind() to udp:{address} failed: {err}"))
+                })?;
+                specs[0].http_quic.push((socket.into_std()?, group));
             }
         }
 
@@ -280,6 +297,7 @@ fn build_worker_runtime(
 struct WorkerSpec {
     id: usize,
     http_tcp: Vec<(StdTcpListener, ListenerGroup)>,
+    http_quic: Vec<(StdUdpSocket, ListenerGroup)>,
     stream_tcp: Vec<(StdTcpListener, StreamRoute)>,
     stream_udp: Vec<(StdUdpSocket, StreamRoute)>,
     #[cfg(unix)]
@@ -293,6 +311,7 @@ impl WorkerSpec {
         Self {
             id,
             http_tcp: Vec::new(),
+            http_quic: Vec::new(),
             stream_tcp: Vec::new(),
             stream_udp: Vec::new(),
             #[cfg(unix)]
@@ -307,6 +326,7 @@ impl WorkerSpec {
         for (listener, group) in self.http_tcp {
             http_tcp.push((TcpListener::from_std(listener)?, group));
         }
+        let http_quic = self.http_quic;
         let mut stream_tcp = Vec::with_capacity(self.stream_tcp.len());
         for (listener, route) in self.stream_tcp {
             stream_tcp.push((TcpListener::from_std(listener)?, route));
@@ -330,6 +350,7 @@ impl WorkerSpec {
         Ok(PreparedWorker {
             id: self.id,
             http_tcp,
+            http_quic,
             stream_tcp,
             stream_udp,
             #[cfg(unix)]
@@ -343,6 +364,7 @@ impl WorkerSpec {
 struct PreparedWorker {
     id: usize,
     http_tcp: Vec<(TcpListener, ListenerGroup)>,
+    http_quic: Vec<(StdUdpSocket, ListenerGroup)>,
     stream_tcp: Vec<(TcpListener, StreamRoute)>,
     stream_udp: Vec<(UdpSocket, StreamRoute)>,
     #[cfg(unix)]
@@ -360,6 +382,48 @@ async fn worker_main(
     for (listener, group) in worker.http_tcp {
         tasks.spawn(accept_loop(
             listener,
+            group,
+            state.clone(),
+            shutdown.clone(),
+        ));
+    }
+    for (socket, group) in worker.http_quic {
+        let tls_configs = state.tls_configs.read().await.get(&group.address).cloned();
+        let Some(tls_configs) = tls_configs else {
+            state.logger.log(
+                LogLevel::Error,
+                format!("no QUIC TLS configuration for listener {}", group.address),
+            );
+            continue;
+        };
+        let config = state.current_config();
+        let server_config = match build_http3_server_config(&config, &group, tls_configs) {
+            Ok(config) => config,
+            Err(err) => {
+                state.logger.log(
+                    LogLevel::Error,
+                    format!("cannot configure HTTP/3 for {}: {err}", group.address),
+                );
+                continue;
+            }
+        };
+        let endpoint = match quinn::Endpoint::new(
+            quinn::EndpointConfig::default(),
+            Some(server_config),
+            socket,
+            Arc::new(quinn::TokioRuntime),
+        ) {
+            Ok(endpoint) => endpoint,
+            Err(err) => {
+                state.logger.log(
+                    LogLevel::Error,
+                    format!("cannot start HTTP/3 listener {}: {err}", group.address),
+                );
+                continue;
+            }
+        };
+        tasks.spawn(http3_accept_loop(
+            endpoint,
             group,
             state.clone(),
             shutdown.clone(),

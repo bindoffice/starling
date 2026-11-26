@@ -48,6 +48,7 @@ mod not_modified;
 mod p0_streaming_failures;
 mod post_action;
 mod protocol_http2;
+mod protocol_http3;
 mod protocol_tls;
 mod proxy;
 mod proxy_cache;

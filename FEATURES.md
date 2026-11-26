@@ -124,6 +124,8 @@ TLS 与 stream 代理能力。
   `multipart/byteranges` 响应的独立实现。
 - `server/http2/body.rs`：HTTP/2 响应体流式发送，包括文件、前缀体和多段
   Range 响应。
+- `server/http3/`：基于 `quinn` + `h3` 的 QUIC 监听、HTTP/3 请求映射、
+  请求体桥接、响应头/正文/trailer 发送，以及 TLSv1.3/ALPN `h3` 配置。
 - `server/upstream/proxy_v2/`：HTTP/2 upstream 连接、请求构造、informational
   响应头、正文/trailer、流式正文和 keepalive 连接生命周期分别拆分实现。
 - `server/upstream/grpc/`：gRPC 目标解析、请求伪头/正文构造、HTTP/2
@@ -196,6 +198,11 @@ TLS 与 stream 代理能力。
   request trailers 按 Nginx 语义作为连接级协议错误发送
   `GOAWAY(PROTOCOL_ERROR)`，未消费的普通请求体会后台 drain 后继续复用连接；
   同时保留 HTTP/1.1 回退。
+- HTTP/3/QUIC：`listen ... quic` 建立 UDP QUIC 监听，使用 TLSv1.3 和
+  ALPN `h3`；支持 HTTP/server 级 `http3 on|off` 配置继承、`$http3` 变量、
+  多请求并发、请求体增量读取、现有 router/proxy/static 响应管线、流式响应
+  body 和响应 trailers。QUIC listener 复用同一地址的 HTTP TLS 证书与 SNI
+  配置；当前 UDP endpoint 只在首个 worker shard 建立，0-RTT 关闭。
 - PROXY protocol v1/v2：HTTP 与 stream 流式监听的 `listen ... proxy_protocol`，
   支持 v1 的 `TCP4`、`TCP6`、`UNKNOWN`，v2 的 IPv4/IPv6 地址头、TLV 及
   `LOCAL`/不支持命令的无地址语义，以及
@@ -732,7 +739,11 @@ stream {
 
 以下能力尚未完成，配置中会明确报错而不是静默运行错误行为：
 
-- HTTP/3 与 QUIC。
+- HTTP/3/QUIC 初始实现边界：尚无 0-RTT、Alt-Svc 自动注入、HTTP/3 请求
+  trailers、informational response、客户端证书变量/OCSP 运行时集成，以及
+  QUIC endpoint 的 reload 热更新；UDP socket 当前只由首个 worker shard
+  持有，未实现 `SO_REUSEPORT` 多 worker 分发。`listen ... quic` 当前隐式
+  启用 HTTP/3；`http3 off` 只记录配置继承状态，尚不关闭 QUIC listener。
 - 旧版 SSL/TLS 协议；rustls 仅支持 TLSv1.2 与 TLSv1.3。为兼容存量配置，
   `ssl_protocols` 中的 SSLv2、SSLv3、TLSv1、TLSv1.1 会与 TLSv1.2/TLSv1.3
   一起被接受，但 `-t` 和运行时错误日志会输出 `[warn]`，实际只启用

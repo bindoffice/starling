@@ -121,7 +121,7 @@ pub(in crate::server) fn is_h2_connection_header(name: &str) -> bool {
     .any(|candidate| name.eq_ignore_ascii_case(candidate))
 }
 
-pub(super) fn h2_header_name(name: &str) -> Option<http::header::HeaderName> {
+pub(in crate::server) fn h2_header_name(name: &str) -> Option<http::header::HeaderName> {
     const STATIC_NAMES: &[&str] = &[
         "content-type",
         "content-length",
@@ -152,7 +152,7 @@ pub(super) fn h2_header_name(name: &str) -> Option<http::header::HeaderName> {
     http::header::HeaderName::from_bytes(name.as_bytes()).ok()
 }
 
-pub(super) fn h2_header_value(
+pub(in crate::server) fn h2_header_value(
     value: &str,
 ) -> Result<http::header::HeaderValue, http::header::InvalidHeaderValue> {
     let bytes = crate::http::header_value_bytes(value);

@@ -25,6 +25,8 @@ Options:
   --h2-clients N            HTTP/2 clients (default: 64)
   --h2-streams N            HTTP/2 streams per connection (default: 16)
   --h2-requests N           HTTP/2 total requests (default: 500000)
+  --h2-large-streams N      HTTP/2 streams per connection for large-file downloads (default: 4)
+  --h2-large-requests N     HTTP/2 large-file total requests (default: 1024)
   --upload-requests N       HTTP/2 1 MiB upload requests (default: 1024)
   --workers VALUE           worker_processes value (default: auto)
   --small-bytes N           Small response size (default: 14)
@@ -65,6 +67,8 @@ LARGE_CONNECTIONS=16
 H2_CLIENTS=64
 H2_STREAMS=16
 H2_REQUESTS=500000
+H2_LARGE_STREAMS=4
+H2_LARGE_REQUESTS=1024
 UPLOAD_REQUESTS=1024
 WORKERS=auto
 SMALL_BYTES=14
@@ -94,6 +98,8 @@ while (($#)); do
         --h2-clients) H2_CLIENTS="${2:?missing value}"; shift 2 ;;
         --h2-streams) H2_STREAMS="${2:?missing value}"; shift 2 ;;
         --h2-requests) H2_REQUESTS="${2:?missing value}"; shift 2 ;;
+        --h2-large-streams) H2_LARGE_STREAMS="${2:?missing value}"; shift 2 ;;
+        --h2-large-requests) H2_LARGE_REQUESTS="${2:?missing value}"; shift 2 ;;
         --upload-requests) UPLOAD_REQUESTS="${2:?missing value}"; shift 2 ;;
         --workers) WORKERS="${2:?missing value}"; shift 2 ;;
         --small-bytes) SMALL_BYTES="${2:?missing value}"; shift 2 ;;
@@ -118,8 +124,11 @@ done
 [[ "$H2_CLIENTS" =~ ^[1-9][0-9]*$ ]] || die "invalid h2 clients: $H2_CLIENTS"
 [[ "$H2_STREAMS" =~ ^[1-9][0-9]*$ ]] || die "invalid h2 streams: $H2_STREAMS"
 [[ "$H2_REQUESTS" =~ ^[1-9][0-9]*$ ]] || die "invalid h2 requests: $H2_REQUESTS"
+[[ "$H2_LARGE_STREAMS" =~ ^[1-9][0-9]*$ ]] || die "invalid h2 large streams: $H2_LARGE_STREAMS"
+[[ "$H2_LARGE_REQUESTS" =~ ^[1-9][0-9]*$ ]] || die "invalid h2 large requests: $H2_LARGE_REQUESTS"
 [[ "$UPLOAD_REQUESTS" =~ ^[1-9][0-9]*$ ]] || die "invalid upload requests: $UPLOAD_REQUESTS"
 ((H2_REQUESTS >= H2_CLIENTS)) || die "h2 requests must be at least h2 clients"
+((H2_LARGE_REQUESTS >= H2_CLIENTS)) || die "h2 large requests must be at least h2 clients"
 if ((RUN_UPLOAD)); then
     ((UPLOAD_REQUESTS >= H2_CLIENTS)) || die "upload requests must be at least h2 clients"
 fi
@@ -373,10 +382,14 @@ run_implementation() {
     if ((RUN_LARGE)); then
         run_wrk_scenario "$implementation" h1-large /large.bin "$LARGE_CONNECTIONS"
     fi
-    run_h2_scenario "$implementation" small /small "$H2_REQUESTS"
+    run_h2_scenario "$implementation" small /small "$H2_REQUESTS" "$H2_STREAMS"
+    if ((RUN_LARGE)); then
+        run_h2_scenario "$implementation" large /large.bin "$H2_LARGE_REQUESTS" \
+            "$H2_LARGE_STREAMS"
+    fi
     if ((RUN_UPLOAD)); then
         run_h2_scenario "$implementation" upload-1mib /upload "$UPLOAD_REQUESTS" \
-            "$OUTPUT_DIR/upload-1mib.bin"
+            "$H2_STREAMS" "$OUTPUT_DIR/upload-1mib.bin"
     fi
     stop_server
 }

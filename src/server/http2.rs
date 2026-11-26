@@ -17,12 +17,14 @@ use frame_timeout::{FrameTimeoutEvents, FrameTimeoutTracker};
 use frame_validation::FrameValidatedStream;
 pub(in crate::server) use informational::send_h2_early_hints;
 pub(in crate::server) use plaintext::handle_plaintext_http_connection;
-use request::{
+pub(in crate::server) use request::{
     h2_content_length, h2_header_field_too_large, h2_header_list_too_large,
-    invalid_h2_request_headers, receive_header_list_limit, request_from_h2_parts,
+    invalid_h2_request_headers,
 };
-pub(super) use send::{
-    is_h2_connection_header, send_h2_response, send_h2_response_discarding_request_body,
+use request::{receive_header_list_limit, request_from_h2_parts};
+pub(in crate::server) use send::{
+    h2_header_name, h2_header_value, is_h2_connection_header, send_h2_response,
+    send_h2_response_discarding_request_body,
 };
 
 // Let the frame-level tracker win the race for a partially received DATA

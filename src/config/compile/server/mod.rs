@@ -28,6 +28,8 @@ pub(super) fn compile_server(
     let mut listens = Vec::new();
     let mut http2 = context.http2;
     let mut http2_seen = false;
+    let mut http3 = context.http3;
+    let mut http3_seen = false;
     let mut names = Vec::new();
     let mut rewrite_directives = Vec::new();
     let mut location_directives = Vec::new();
@@ -64,6 +66,16 @@ pub(super) fn compile_server(
                 http2_seen = true;
                 http2 = parse_flag(child, "http2")?;
             }
+            "http3" => {
+                if http3_seen {
+                    return Err(ConfigError::at(
+                        child.location.clone(),
+                        "\"http3\" directive is duplicate",
+                    ));
+                }
+                http3_seen = true;
+                http3 = parse_flag(child, "http3")?;
+            }
             "location" => {
                 require_block(child)?;
                 location_directives.push(child);
@@ -93,6 +105,7 @@ pub(super) fn compile_server(
             address: ListenAddress::Inet(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 80)),
             ssl: false,
             http2: false,
+            quic: false,
             udp: false,
             proxy_protocol: false,
             default_server: false,
@@ -102,6 +115,29 @@ pub(super) fn compile_server(
     }
     if names.is_empty() {
         names.push(ServerName::Exact(String::new()));
+    }
+    for listen in &listens {
+        if !listen.quic {
+            continue;
+        }
+        if listen.address.unix_path().is_some() {
+            return Err(ConfigError::at(
+                directive.location.clone(),
+                "\"quic\" is incompatible with UNIX domain listen sockets",
+            ));
+        }
+        if listen.proxy_protocol {
+            return Err(ConfigError::at(
+                directive.location.clone(),
+                "\"proxy_protocol\" is not supported with \"quic\"",
+            ));
+        }
+        if !context.ssl_protocols.tls13 {
+            return Err(ConfigError::at(
+                directive.location.clone(),
+                "HTTP/3 requires TLSv1.3",
+            ));
+        }
     }
     validate_ssl_client_verification(
         &directive.location,
@@ -132,6 +168,7 @@ pub(super) fn compile_server(
         id,
         listens,
         http2,
+        http3,
         names: Arc::from(names),
         default_server_name,
         has_real_ip,

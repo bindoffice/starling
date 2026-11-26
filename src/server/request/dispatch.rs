@@ -201,6 +201,11 @@ pub(in crate::server) async fn dispatch_http_request(
     } else {
         ""
     };
+    variables.http3 = if request.version == "HTTP/3.0" {
+        "h3"
+    } else {
+        ""
+    };
     let post_action_env = env.clone();
     let mut connection_guard = None;
     let mut processed = if invalid_host {

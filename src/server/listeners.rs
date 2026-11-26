@@ -8,6 +8,9 @@ pub(in crate::server) fn listener_signature(config: &RuntimeConfig) -> ListenerS
                 group.address,
                 group.ssl,
                 group.http2,
+                group.http3,
+                group.tcp,
+                group.quic,
                 group.proxy_protocol,
                 group.socket_options,
             )
@@ -44,6 +47,9 @@ pub(in crate::server) fn build_listener_groups(config: &RuntimeConfig) -> Vec<Li
             }
             entry.ssl |= listen.ssl;
             entry.http2 |= listen.http2 || server.http2;
+            entry.http3 |= server.http3;
+            entry.tcp |= !listen.quic;
+            entry.quic |= listen.quic;
             entry.proxy_protocol |= listen.proxy_protocol;
             if listen.socket_options_set {
                 entry.socket_options = listen.socket_options.clone();
@@ -56,8 +62,11 @@ pub(in crate::server) fn build_listener_groups(config: &RuntimeConfig) -> Vec<Li
             address,
             default_server_id: group.default_server_id.unwrap_or(group.server_ids[0]),
             server_ids: group.server_ids,
-            ssl: group.ssl,
+            ssl: group.ssl || group.quic,
             http2: group.http2,
+            http3: group.http3,
+            tcp: group.tcp,
+            quic: group.quic,
             proxy_protocol: group.proxy_protocol,
             socket_options: group.socket_options,
         })
@@ -82,6 +91,9 @@ pub(in crate::server) struct ListenerAccumulator {
     default_server_id: Option<usize>,
     ssl: bool,
     http2: bool,
+    http3: bool,
+    tcp: bool,
+    quic: bool,
     proxy_protocol: bool,
     socket_options: ListenSocketOptions,
 }
