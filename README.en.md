@@ -240,16 +240,16 @@ per-request `h2load` logs. HTTP/1.1 warms up for 1 second per group; HTTP/2
 warmup rounds use 10% of the requests per round. Results are the median of 3
 rounds.
 
-| Scenario | Implementation | Throughput | p50 | p99 | Failures |
-| :--- | :--- | ---: | ---: | ---: | ---: |
-| HTTP/1.1 small response | Starling | 195,061 req/s | 0.657 ms | 0.675 ms | 0 |
-| HTTP/1.1 small response | Nginx 1.31.9 | 272,925 req/s | 0.469 ms | 0.484 ms | 0 |
-| HTTP/1.1 8 MiB download | Starling | 4,127.64 req/s / 32.26 GiB/s | 7.800 ms | 15.950 ms | 0 |
-| HTTP/1.1 8 MiB download | Nginx 1.31.9 | 4,165.32 req/s / 32.57 GiB/s | 7.700 ms | 13.330 ms | 0 |
-| HTTP/2 small response | Starling | 136,059 req/s | 0.902 ms | 1.145 ms | 0 |
-| HTTP/2 small response | Nginx 1.31.9 | 223,423 req/s | 0.568 ms | 1.110 ms | 0 |
-| HTTP/2 8 MiB download | Starling | 1,448.15 req/s / 10.54 GiB/s | 22.300 ms | 45.378 ms | 0 |
-| HTTP/2 8 MiB download | Nginx 1.31.9 | 1,050.55 req/s / 8.220 GiB/s | 28.444 ms | 36.162 ms | 0 |
+| Scenario | Implementation | Request throughput (req/s) | Transfer throughput (GiB/s) | p50 (ms) | p99 (ms) | Failures |
+| :--- | :--- | ---: | ---: | ---: | ---: | ---: |
+| HTTP/1.1 small response | Starling | 195,061 | - | 0.657 | 0.675 | 0 |
+| HTTP/1.1 small response | Nginx 1.31.9 | 272,925 | - | 0.469 | 0.484 | 0 |
+| HTTP/1.1 8 MiB download | Starling | 4,127.64 | 32.26 | 7.800 | 15.950 | 0 |
+| HTTP/1.1 8 MiB download | Nginx 1.31.9 | 4,165.32 | 32.57 | 7.700 | 13.330 | 0 |
+| HTTP/2 small response | Starling | 136,059 | - | 0.902 | 1.145 | 0 |
+| HTTP/2 small response | Nginx 1.31.9 | 223,423 | - | 0.568 | 1.110 | 0 |
+| HTTP/2 8 MiB download | Starling | 1,448.15 | 10.54 | 22.300 | 45.378 | 0 |
+| HTTP/2 8 MiB download | Nginx 1.31.9 | 1,050.55 | 8.220 | 28.444 | 36.162 | 0 |
 
 For small HTTP/1.1 responses, Starling reaches 71.5% of Nginx throughput and
 trails by about 1.40x. For small HTTP/2 responses it reaches 60.9% and trails
@@ -293,12 +293,12 @@ connection. Each group warms up for 1 second, then runs 3 independent rounds of
 5 seconds and takes the median. Client connections are re-established for each
 round so connection-level keep-alive limits do not distort throughput.
 
-| Scenario | Implementation | Throughput | p50 | p99 | Failures |
-| :--- | :--- | ---: | ---: | ---: | ---: |
-| HTTP/3 small response | Starling `quinn` + `h3` | 122,647 req/s | 1.054 ms | 1.231 ms | 0 |
-| HTTP/3 small response | Nginx 1.31.9 | 166,581 req/s | 0.622 ms | 2.105 ms | 0 |
-| HTTP/3 8 MiB download | Starling `quinn` + `h3` | 190.82 req/s / 1.491 GiB/s | 167.483 ms | 171.169 ms | 0 |
-| HTTP/3 8 MiB download | Nginx 1.31.9 | 108.16 req/s / 0.845 GiB/s | 244.966 ms | 790.959 ms | 0 |
+| Scenario | Implementation | Request throughput (req/s) | Transfer throughput (GiB/s) | p50 (ms) | p99 (ms) | Failures |
+| :--- | :--- | ---: | ---: | ---: | ---: | ---: |
+| HTTP/3 small response | Starling `quinn` + `h3` | 122,647 | - | 1.054 | 1.231 | 0 |
+| HTTP/3 small response | Nginx 1.31.9 | 166,581 | - | 0.622 | 2.105 | 0 |
+| HTTP/3 8 MiB download | Starling `quinn` + `h3` | 190.82 | 1.491 | 167.483 | 171.169 | 0 |
+| HTTP/3 8 MiB download | Nginx 1.31.9 | 108.16 | 0.845 | 244.966 | 790.959 | 0 |
 
 These results show different path characteristics. For small responses, Nginx
 single-core request throughput is about 1.36x Starling, but Starling has lower
