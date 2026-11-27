@@ -58,6 +58,15 @@ The executable is written to:
 target/release/starling
 ```
 
+Linux release packages use the `vendored-openssl` feature to statically link
+OpenSSL into the executable, so the server does not fail to start on hosts
+without `libssl.so.3`:
+
+```bash
+cargo build --release --locked --features vendored-openssl
+scripts/package-release.sh --version 0.1.0
+```
+
 Run the tests:
 
 ```bash
@@ -199,7 +208,7 @@ git push origin v0.1.0
 Build a package locally:
 
 ```bash
-cargo build --release --locked
+cargo build --release --locked --features vendored-openssl
 scripts/package-release.sh --version 0.1.0
 ```
 

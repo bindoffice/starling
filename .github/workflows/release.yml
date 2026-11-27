@@ -141,7 +141,18 @@ jobs:
           $opensslDir = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed\x64-windows-static-md"
           "OPENSSL_DIR=$opensslDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "OPENSSL_STATIC=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Build release binary
+      - name: Build Linux release binary
+        if: runner.os == 'Linux'
+        run: cargo build --release --locked --features vendored-openssl --target "${{ matrix.target }}"
+      - name: Verify OpenSSL is statically linked
+        if: runner.os == 'Linux'
+        run: |
+          if readelf -d "target/${{ matrix.target }}/release/starling" | grep -Eq 'NEEDED.*lib(ssl|crypto)'; then
+            echo "release binary still depends on shared OpenSSL libraries" >&2
+            exit 1
+          fi
+      - name: Build macOS/Windows release binary
+        if: runner.os != 'Linux'
         run: cargo build --release --locked --target "${{ matrix.target }}"
       - name: Package release archive
         shell: bash

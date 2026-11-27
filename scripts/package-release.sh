@@ -144,7 +144,7 @@ fi
 
 if [[ ! -f "$BINARY" ]]; then
     echo "release binary not found: $BINARY" >&2
-    echo "run: cargo build --release --locked --target $TARGET" >&2
+    echo "run: cargo build --release --locked --features vendored-openssl --target $TARGET" >&2
     exit 1
 fi
 if [[ "$PLATFORM" != "windows" && ! -x "$BINARY" ]]; then

@@ -76,7 +76,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config zlib1g-dev
       - name: Build release binary
-        run: cargo build --release --locked
+        run: cargo build --release --locked --features vendored-openssl
+      - name: Verify OpenSSL is statically linked
+        run: |
+          if readelf -d target/release/starling | grep -Eq 'NEEDED.*lib(ssl|crypto)'; then
+            echo "release binary still depends on shared OpenSSL libraries" >&2
+            exit 1
+          fi
       - name: Build release archive
         run: scripts/package-release.sh
       - uses: actions/upload-artifact@v7

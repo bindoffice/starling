@@ -9,6 +9,10 @@ license = "Apache-2.0"
 name = "starling"
 path = "src/main.rs"
 
+[features]
+default = []
+vendored-openssl = ["openssl/vendored"]
+
 [dependencies]
 arc-swap = "1.9"
 base64 = "0.22"

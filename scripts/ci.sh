@@ -21,6 +21,6 @@ echo "==> cargo test"
 cargo test --all-targets --locked
 
 echo "==> cargo build --release"
-cargo build --release --locked
+cargo build --release --locked --features vendored-openssl
 
 echo "CI checks passed."
