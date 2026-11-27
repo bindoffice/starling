@@ -12,7 +12,7 @@ with common Nginx configurations. This includes HTTP/1.1, HTTP/2, HTTP/3, TLS,
 static files, upstream proxying, caching, compression, FastCGI, uWSGI, SCGI,
 gRPC, and TCP/UDP stream proxying.
 
-> The current version is `0.1.2` and remains under active development. Starling
+> The current version is `0.1.3` and remains under active development. Starling
 > does not claim full Nginx module coverage. Before production use, validate
 > your actual configuration with `-t` and run integration tests.
 
@@ -70,7 +70,7 @@ sudo apt-get install musl-tools  # Debian/Ubuntu
 CC_x86_64_unknown_linux_musl=musl-gcc \
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
 cargo build --release --locked --features vendored-openssl --target x86_64-unknown-linux-musl
-scripts/package-release.sh --version 0.1.2 --target x86_64-unknown-linux-musl
+scripts/package-release.sh --version 0.1.3 --target x86_64-unknown-linux-musl
 ```
 
 Run the tests:
@@ -207,27 +207,27 @@ The repository provides the following automation:
 The release tag must match the version in `Cargo.toml`:
 
 ```bash
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
 Build a package locally:
 
 ```bash
 cargo build --release --locked --features vendored-openssl
-scripts/package-release.sh --version 0.1.2
+scripts/package-release.sh --version 0.1.3
 ```
 
 The target platform and archive format can also be selected explicitly:
 
 ```bash
 scripts/package-release.sh \
-  --version 0.1.2 \
+  --version 0.1.3 \
   --target aarch64-apple-darwin \
   --archive-format tar.gz
 
 scripts/package-release.sh \
-  --version 0.1.2 \
+  --version 0.1.3 \
   --target x86_64-pc-windows-msvc \
   --archive-format zip
 ```
