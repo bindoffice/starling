@@ -259,6 +259,20 @@ impl ClientSocketControl {
         Ok(())
     }
 
+    #[cfg(not(target_os = "linux"))]
+    pub(in crate::server) async fn sendfile(
+        &self,
+        _file: &tokio::fs::File,
+        _offset: u64,
+        _length: u64,
+        _timeout: Duration,
+    ) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "sendfile is only supported on Linux",
+        ))
+    }
+
     #[cfg(test)]
     pub(in crate::server) fn enabled(&self) -> io::Result<bool> {
         match self.socket() {

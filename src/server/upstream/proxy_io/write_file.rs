@@ -26,6 +26,8 @@ pub(super) async fn write_proxy_request_to_upstream(
         )
         .await;
     };
+    #[cfg(not(target_os = "linux"))]
+    let _ = &body_file;
 
     let head = proxy_request_head(outgoing, version);
     write_all_with_timeout(&mut connection.reader, &head, context.proxy_send_timeout).await?;
