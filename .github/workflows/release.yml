@@ -129,8 +129,10 @@ jobs:
           sudo apt-get install -y musl-tools pkg-config
       - name: Configure Linux musl toolchain
         if: runner.os == 'Linux'
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          target_env="${matrix.target//-/_}"
+          target_env="${TARGET//-/_}"
           target_upper="$(printf '%s' "$target_env" | tr '[:lower:]' '[:upper:]')"
           {
             echo "CC_${target_env}=musl-gcc"
