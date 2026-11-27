@@ -12,7 +12,7 @@ with common Nginx configurations. This includes HTTP/1.1, HTTP/2, HTTP/3, TLS,
 static files, upstream proxying, caching, compression, FastCGI, uWSGI, SCGI,
 gRPC, and TCP/UDP stream proxying.
 
-> The current version is `0.1.0` and remains under active development. Starling
+> The current version is `0.1.1` and remains under active development. Starling
 > does not claim full Nginx module coverage. Before production use, validate
 > your actual configuration with `-t` and run integration tests.
 
@@ -64,7 +64,7 @@ without `libssl.so.3`:
 
 ```bash
 cargo build --release --locked --features vendored-openssl
-scripts/package-release.sh --version 0.1.0
+scripts/package-release.sh --version 0.1.1
 ```
 
 Run the tests:
@@ -201,27 +201,27 @@ The repository provides the following automation:
 The release tag must match the version in `Cargo.toml`:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 Build a package locally:
 
 ```bash
 cargo build --release --locked --features vendored-openssl
-scripts/package-release.sh --version 0.1.0
+scripts/package-release.sh --version 0.1.1
 ```
 
 The target platform and archive format can also be selected explicitly:
 
 ```bash
 scripts/package-release.sh \
-  --version 0.1.0 \
+  --version 0.1.1 \
   --target aarch64-apple-darwin \
   --archive-format tar.gz
 
 scripts/package-release.sh \
-  --version 0.1.0 \
+  --version 0.1.1 \
   --target x86_64-pc-windows-msvc \
   --archive-format zip
 ```

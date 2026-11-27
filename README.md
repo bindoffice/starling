@@ -11,7 +11,7 @@ Starling 是一个使用 Rust 编写的 Nginx 兼容 Web 服务器与四层反�
 TLS、静态文件、上游代理、缓存、压缩、FastCGI、uWSGI、SCGI、gRPC 和
 TCP/UDP stream 代理。
 
-> 当前版本为 `0.1.0`，仍处于持续开发阶段。Starling 不声称覆盖 Nginx
+> 当前版本为 `0.1.1`，仍处于持续开发阶段。Starling 不声称覆盖 Nginx
 > 全部模块，生产使用前应使用实际配置执行 `-t` 并进行集成验证。
 
 ## 核心能力
@@ -56,7 +56,7 @@ Linux 发布包使用 `vendored-openssl` 特性构建，将 OpenSSL 静态链接
 
 ```bash
 cargo build --release --locked --features vendored-openssl
-scripts/package-release.sh --version 0.1.0
+scripts/package-release.sh --version 0.1.1
 ```
 
 运行测试：
@@ -187,27 +187,27 @@ tests/             配置兼容、服务器行为和运行时迁移测试
 发布标签必须与 `Cargo.toml` 中的版本一致：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 本地打包示例：
 
 ```bash
 cargo build --release --locked --features vendored-openssl
-scripts/package-release.sh --version 0.1.0
+scripts/package-release.sh --version 0.1.1
 ```
 
 也可以显式指定目标平台和归档格式：
 
 ```bash
 scripts/package-release.sh \
-  --version 0.1.0 \
+  --version 0.1.1 \
   --target aarch64-apple-darwin \
   --archive-format tar.gz
 
 scripts/package-release.sh \
-  --version 0.1.0 \
+  --version 0.1.1 \
   --target x86_64-pc-windows-msvc \
   --archive-format zip
 ```
