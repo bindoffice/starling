@@ -4,6 +4,8 @@ use std::io::Write;
 use std::time::Instant;
 
 pub(super) fn atomic_write(path: &Path, data: &[u8], mode: u32) -> io::Result<()> {
+    #[cfg(not(unix))]
+    let _ = mode;
     let parent = path.parent().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "path has no parent directory")
     })?;
@@ -48,6 +50,8 @@ pub(super) fn restrict_directory(path: &Path) -> io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 

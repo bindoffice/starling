@@ -1,4 +1,6 @@
+#[cfg(unix)]
 use std::ffi::CString;
+#[cfg(unix)]
 use std::sync::Mutex;
 
 use base64::Engine;
@@ -211,7 +213,7 @@ fn crypt_password(password: &str, stored: &str) -> Option<String> {
 
     static CRYPT_LOCK: Mutex<()> = Mutex::new(());
 
-    #[link(name = "crypt")]
+    #[cfg_attr(all(unix, not(target_vendor = "apple")), link(name = "crypt"))]
     unsafe extern "C" {
         fn crypt(key: *const libc::c_char, salt: *const libc::c_char) -> *const libc::c_char;
     }
@@ -280,6 +282,7 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
     #[test]
     fn verifies_system_crypt_hashes() {
         assert!(verify_password(

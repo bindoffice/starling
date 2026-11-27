@@ -51,8 +51,8 @@ cargo build --release
 target/release/starling
 ```
 
-Linux 发布包使用 `vendored-openssl` 特性构建，将 OpenSSL 静态链接到
-可执行文件，避免目标机器缺少 `libssl.so.3` 时无法启动：
+Linux 和 macOS 发布包使用 `vendored-openssl` 特性构建，将 OpenSSL
+静态链接到可执行文件，避免目标机器缺少 OpenSSL 共享库时无法启动：
 
 ```bash
 cargo build --release --locked --features vendored-openssl

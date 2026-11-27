@@ -117,11 +117,12 @@ mod limits;
 use limits::*;
 mod stream;
 use stream::{
-    StreamRoute, build_stream_loggers, build_stream_routes, reopen_stream_loggers,
-    stream_accept_loop, stream_udp_loop, stream_unix_accept_loop,
+    StreamRoute, build_stream_loggers, build_stream_routes, stream_accept_loop, stream_udp_loop,
 };
 #[cfg(test)]
 use stream::{handle_stream_connection, handle_stream_udp_session};
+#[cfg(unix)]
+use stream::{reopen_stream_loggers, stream_unix_accept_loop};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::server) enum ShutdownMode {

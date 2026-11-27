@@ -33,6 +33,7 @@ impl RequestBodyFile {
         tokio::fs::File::open(self.path()).await
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn open_sync(&self) -> io::Result<std::fs::File> {
         std::fs::File::open(self.path())
     }

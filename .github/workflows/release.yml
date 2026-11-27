@@ -125,14 +125,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config zlib1g-dev
-      - name: Install macOS build dependencies
-        if: runner.os == 'macOS'
-        run: |
-          brew install openssl@3 pkgconf
-          openssl_prefix="$(brew --prefix openssl@3)"
-          echo "OPENSSL_DIR=$openssl_prefix" >>"$GITHUB_ENV"
-          echo "OPENSSL_STATIC=1" >>"$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=$openssl_prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >>"$GITHUB_ENV"
       - name: Install Windows build dependencies
         if: runner.os == 'Windows'
         shell: pwsh
@@ -141,18 +133,25 @@ jobs:
           $opensslDir = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed\x64-windows-static-md"
           "OPENSSL_DIR=$opensslDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "OPENSSL_STATIC=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Build Linux release binary
-        if: runner.os == 'Linux'
+      - name: Build Linux/macOS release binary
+        if: runner.os != 'Windows'
         run: cargo build --release --locked --features vendored-openssl --target "${{ matrix.target }}"
       - name: Verify OpenSSL is statically linked
-        if: runner.os == 'Linux'
+        if: runner.os != 'Windows'
         run: |
-          if readelf -d "target/${{ matrix.target }}/release/starling" | grep -Eq 'NEEDED.*lib(ssl|crypto)'; then
-            echo "release binary still depends on shared OpenSSL libraries" >&2
+          binary="target/${{ matrix.target }}/release/starling"
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            shared_openssl="$(readelf -d "$binary" | grep -E 'NEEDED.*lib(ssl|crypto)' || true)"
+          else
+            shared_openssl="$(otool -L "$binary" | grep -E '(^|[[:space:]])[^[:space:]]*lib(ssl|crypto)([.[:space:]]|$)' || true)"
+          fi
+          if [[ -n "$shared_openssl" ]]; then
+            echo "release binary still depends on shared OpenSSL libraries:" >&2
+            echo "$shared_openssl" >&2
             exit 1
           fi
-      - name: Build macOS/Windows release binary
-        if: runner.os != 'Linux'
+      - name: Build Windows release binary
+        if: runner.os == 'Windows'
         run: cargo build --release --locked --target "${{ matrix.target }}"
       - name: Package release archive
         shell: bash

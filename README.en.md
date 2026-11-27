@@ -58,9 +58,9 @@ The executable is written to:
 target/release/starling
 ```
 
-Linux release packages use the `vendored-openssl` feature to statically link
-OpenSSL into the executable, so the server does not fail to start on hosts
-without `libssl.so.3`:
+Linux and macOS release packages use the `vendored-openssl` feature to
+statically link OpenSSL into the executable, so the server does not fail to
+start on hosts without OpenSSL shared libraries:
 
 ```bash
 cargo build --release --locked --features vendored-openssl

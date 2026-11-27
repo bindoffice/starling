@@ -15,7 +15,9 @@ pub async fn run(
     for (level, message) in auto_https_preparation.notices {
         logger.log(level, message);
     }
+    #[cfg(unix)]
     let config_path = config.config_path.clone();
+    #[cfg(unix)]
     let prefix = config.prefix.clone();
     let config = Arc::new(config);
     let worker_shutdown_timeout = config

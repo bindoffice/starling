@@ -32,6 +32,7 @@ impl WorkerPool {
         let workers = worker_layout.len();
         let blocking_threads = (blocking_thread_limit / workers).max(1);
         let mut specs: Vec<WorkerSpec> = (0..workers).map(WorkerSpec::new).collect();
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut unix_socket_paths = UnixSocketCleanup::default();
 
         for group in groups {
