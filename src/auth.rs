@@ -213,7 +213,10 @@ fn crypt_password(password: &str, stored: &str) -> Option<String> {
 
     static CRYPT_LOCK: Mutex<()> = Mutex::new(());
 
-    #[cfg_attr(all(unix, not(target_vendor = "apple")), link(name = "crypt"))]
+    #[cfg_attr(
+        all(unix, not(target_vendor = "apple"), not(target_env = "musl")),
+        link(name = "crypt")
+    )]
     unsafe extern "C" {
         fn crypt(key: *const libc::c_char, salt: *const libc::c_char) -> *const libc::c_char;
     }

@@ -60,11 +60,17 @@ target/release/starling
 
 Linux and macOS release packages use the `vendored-openssl` feature to
 statically link OpenSSL into the executable, so the server does not fail to
-start on hosts without OpenSSL shared libraries:
+start on hosts without OpenSSL shared libraries. Linux release binaries target
+`x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`, which also avoids
+requiring the glibc version of the machine that built the package:
 
 ```bash
-cargo build --release --locked --features vendored-openssl
-scripts/package-release.sh --version 0.1.1
+rustup target add x86_64-unknown-linux-musl
+sudo apt-get install musl-tools  # Debian/Ubuntu
+CC_x86_64_unknown_linux_musl=musl-gcc \
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
+cargo build --release --locked --features vendored-openssl --target x86_64-unknown-linux-musl
+scripts/package-release.sh --version 0.1.1 --target x86_64-unknown-linux-musl
 ```
 
 Run the tests:

@@ -103,9 +103,9 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
           - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
           - runner: macos-15-intel
             target: x86_64-apple-darwin
           - runner: macos-15
@@ -117,6 +117,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
@@ -124,7 +126,17 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config zlib1g-dev
+          sudo apt-get install -y musl-tools pkg-config
+      - name: Configure Linux musl toolchain
+        if: runner.os == 'Linux'
+        run: |
+          target_env="${matrix.target//-/_}"
+          target_upper="$(printf '%s' "$target_env" | tr '[:lower:]' '[:upper:]')"
+          {
+            echo "CC_${target_env}=musl-gcc"
+            echo "AR_${target_env}=ar"
+            echo "CARGO_TARGET_${target_upper}_LINKER=musl-gcc"
+          } >>"$GITHUB_ENV"
       - name: Install Windows build dependencies
         if: runner.os == 'Windows'
         shell: pwsh
@@ -148,6 +160,18 @@ jobs:
           if [[ -n "$shared_openssl" ]]; then
             echo "release binary still depends on shared OpenSSL libraries:" >&2
             echo "$shared_openssl" >&2
+            exit 1
+          fi
+      - name: Verify Linux binary is static
+        if: runner.os == 'Linux'
+        run: |
+          binary="target/${{ matrix.target }}/release/starling"
+          if readelf -l "$binary" | grep -Eq 'Requesting program interpreter|INTERP'; then
+            echo "release binary still requires a dynamic loader" >&2
+            exit 1
+          fi
+          if objdump -T "$binary" | grep -q 'GLIBC_'; then
+            echo "release binary still references glibc symbols" >&2
             exit 1
           fi
       - name: Build Windows release binary

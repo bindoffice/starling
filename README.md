@@ -52,11 +52,17 @@ target/release/starling
 ```
 
 Linux 和 macOS 发布包使用 `vendored-openssl` 特性构建，将 OpenSSL
-静态链接到可执行文件，避免目标机器缺少 OpenSSL 共享库时无法启动：
+静态链接到可执行文件，避免目标机器缺少 OpenSSL 共享库时无法启动。Linux
+发布包使用 `x86_64-unknown-linux-musl` 或 `aarch64-unknown-linux-musl`
+目标，避免依赖构建机器的 glibc 版本：
 
 ```bash
-cargo build --release --locked --features vendored-openssl
-scripts/package-release.sh --version 0.1.1
+rustup target add x86_64-unknown-linux-musl
+sudo apt-get install musl-tools  # Debian/Ubuntu
+CC_x86_64_unknown_linux_musl=musl-gcc \
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
+cargo build --release --locked --features vendored-openssl --target x86_64-unknown-linux-musl
+scripts/package-release.sh --version 0.1.1 --target x86_64-unknown-linux-musl
 ```
 
 运行测试：

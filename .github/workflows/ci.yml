@@ -67,24 +67,36 @@ jobs:
     name: Package
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      AR_x86_64_unknown_linux_musl: ar
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config zlib1g-dev
+          sudo apt-get install -y musl-tools pkg-config
       - name: Build release binary
-        run: cargo build --release --locked --features vendored-openssl
-      - name: Verify OpenSSL is statically linked
+        run: cargo build --release --locked --features vendored-openssl --target x86_64-unknown-linux-musl
+      - name: Verify release binary is static
         run: |
-          if readelf -d target/release/starling | grep -Eq 'NEEDED.*lib(ssl|crypto)'; then
-            echo "release binary still depends on shared OpenSSL libraries" >&2
+          binary="target/x86_64-unknown-linux-musl/release/starling"
+          if readelf -d "$binary" | grep -Eq 'NEEDED'; then
+            echo "release binary still has shared-library dependencies" >&2
+            readelf -d "$binary" | grep -E 'NEEDED' >&2
+            exit 1
+          fi
+          if objdump -T "$binary" | grep -q 'GLIBC_'; then
+            echo "release binary still references glibc symbols" >&2
             exit 1
           fi
       - name: Build release archive
-        run: scripts/package-release.sh
+        run: scripts/package-release.sh --target x86_64-unknown-linux-musl
       - uses: actions/upload-artifact@v7
         with:
           name: starling-ci-package
