@@ -28,7 +28,18 @@ pub(in crate::server) fn listener_signature(config: &RuntimeConfig) -> ListenerS
             )
         })
         .collect();
-    (http, stream)
+    let mail = build_mail_routes(config)
+        .into_iter()
+        .map(|route| {
+            (
+                route.address,
+                route.ssl,
+                route.proxy_protocol,
+                route.socket_options,
+            )
+        })
+        .collect();
+    (http, stream, mail)
 }
 
 pub(in crate::server) fn build_listener_groups(config: &RuntimeConfig) -> Vec<ListenerGroup> {
@@ -98,7 +109,7 @@ pub(in crate::server) struct ListenerAccumulator {
     socket_options: ListenSocketOptions,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(in crate::server) struct ProxyProtocolAddresses {
     pub(in crate::server) remote: ListenAddress,
     pub(in crate::server) transport_remote: ListenAddress,

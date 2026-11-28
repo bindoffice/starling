@@ -62,10 +62,15 @@ async fn completes_tls_handshake_and_serves_https() {
         reload: Arc::new(reload),
         tls_configs: Arc::new(RwLock::new(HashMap::new())),
         stream_tls_configs: Arc::new(RwLock::new(HashMap::new())),
+        mail_tls_configs: Arc::new(RwLock::new(HashMap::new())),
         logger,
         stream_loggers: Arc::new(RwLock::new(
             build_stream_loggers(&config).expect("stream error loggers"),
         )),
+        mail_loggers: Arc::new(RwLock::new(
+            build_mail_loggers(&config).expect("mail error loggers"),
+        )),
+        mail_resolvers: Arc::new(RwLock::new(build_mail_resolvers(&config))),
         limits: Arc::new(Mutex::new(LimitState::default())),
         stats: Arc::new(ConnectionStats::default()),
         upstream_keepalive: Arc::new(UpstreamKeepalivePool::default()),

@@ -22,6 +22,7 @@ mod directives;
 mod expires;
 mod helpers;
 mod http;
+mod mail;
 mod memcached;
 mod mirror;
 mod parsing;
@@ -53,6 +54,7 @@ use directives::*;
 use expires::*;
 use helpers::*;
 use http::*;
+use mail::*;
 use memcached::*;
 use mirror::*;
 use parsing::*;
@@ -91,6 +93,7 @@ pub fn compile(
         worker_connections: 512,
     };
     let mut http: Option<HttpConfig> = None;
+    let mut mail: Option<MailConfig> = None;
     let mut stream: Option<StreamConfig> = None;
     let mut auto_https = AutoHttpsConfig::new(&prefix);
     let mut seen_events = false;
@@ -149,6 +152,16 @@ pub fn compile(
                 }
                 http = Some(compile_http(directive, &prefix)?);
             }
+            "mail" => {
+                require_block(directive)?;
+                if mail.is_some() {
+                    return Err(ConfigError::at(
+                        directive.location.clone(),
+                        "\"mail\" directive is duplicate",
+                    ));
+                }
+                mail = Some(compile_mail(directive, &prefix)?);
+            }
             "stream" => {
                 require_block(directive)?;
                 if stream.is_some() {
@@ -174,12 +187,6 @@ pub fn compile(
                 return Err(ConfigError::at(
                     directive.location.clone(),
                     "load_module is not supported by the Rust runtime",
-                ));
-            }
-            "mail" => {
-                return Err(ConfigError::at(
-                    directive.location.clone(),
-                    format!("\"{}\" is not implemented yet", directive.name),
                 ));
             }
             other => {
@@ -223,6 +230,7 @@ pub fn compile(
         core,
         auto_https,
         http,
+        mail,
         stream,
     })
 }

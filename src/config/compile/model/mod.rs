@@ -8,6 +8,8 @@ mod cache;
 pub use cache::*;
 mod listen;
 pub use listen::*;
+mod mail;
+pub use mail::*;
 mod memcached;
 pub use memcached::*;
 mod open_file_cache;
@@ -22,6 +24,7 @@ pub struct RuntimeConfig {
     pub core: CoreConfig,
     pub auto_https: AutoHttpsConfig,
     pub http: Option<HttpConfig>,
+    pub mail: Option<MailConfig>,
     pub stream: Option<StreamConfig>,
 }
 

@@ -7,6 +7,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 
 pub(super) const TYPE_A: u16 = 1;
+pub(super) const TYPE_PTR: u16 = 12;
 pub(super) const TYPE_AAAA: u16 = 28;
 
 const CLASS_IN: u16 = 1;
@@ -15,6 +16,7 @@ const MAX_DNS_MESSAGE: usize = 65_535;
 #[derive(Debug)]
 pub(super) struct Lookup {
     pub(super) addresses: Vec<IpAddr>,
+    pub(super) names: Vec<String>,
     pub(super) ttl: Option<u32>,
 }
 
@@ -152,6 +154,7 @@ fn parse_response(packet: &[u8], expected_id: u16) -> io::Result<ParsedResponse>
     }
 
     let mut addresses = Vec::new();
+    let mut names = Vec::new();
     let mut ttl = None;
     for _ in 0..answers {
         skip_name(packet, &mut position)?;
@@ -163,6 +166,7 @@ fn parse_response(packet: &[u8], expected_id: u16) -> io::Result<ParsedResponse>
         let record_ttl = u32::from_be_bytes([record[4], record[5], record[6], record[7]]);
         let length = u16::from_be_bytes([record[8], record[9]]) as usize;
         position += 10;
+        let data_position = position;
         let data = packet
             .get(position..position + length)
             .ok_or_else(|| invalid_data("truncated DNS record data"))?;
@@ -183,13 +187,67 @@ fn parse_response(packet: &[u8], expected_id: u16) -> io::Result<ParsedResponse>
         if let Some(address) = address {
             addresses.push(address);
             ttl = Some(ttl.map_or(record_ttl, |current: u32| current.min(record_ttl)));
+        } else if record_type == TYPE_PTR {
+            let mut name_position = data_position;
+            let name = decode_name(packet, &mut name_position)?;
+            if !name.is_empty() {
+                names.push(name);
+                ttl = Some(ttl.map_or(record_ttl, |current: u32| current.min(record_ttl)));
+            }
         }
     }
 
     Ok(ParsedResponse {
-        lookup: Lookup { addresses, ttl },
+        lookup: Lookup {
+            addresses,
+            names,
+            ttl,
+        },
         truncated,
     })
+}
+
+fn decode_name(packet: &[u8], position: &mut usize) -> io::Result<String> {
+    let mut cursor = *position;
+    let mut next_position = None;
+    let mut labels = Vec::new();
+    let mut jumps = 0;
+    loop {
+        let length = *packet
+            .get(cursor)
+            .ok_or_else(|| invalid_data("truncated DNS name"))?;
+        if length == 0 {
+            cursor += 1;
+            next_position.get_or_insert(cursor);
+            break;
+        }
+        if length & 0xc0 == 0xc0 {
+            let low = *packet
+                .get(cursor + 1)
+                .ok_or_else(|| invalid_data("truncated DNS compression pointer"))?;
+            next_position.get_or_insert(cursor + 2);
+            cursor = (usize::from(length & 0x3f) << 8) | usize::from(low);
+            jumps += 1;
+            if jumps > 64 {
+                return Err(invalid_data("DNS compression pointer loop"));
+            }
+            continue;
+        }
+        if length & 0xc0 != 0 {
+            return Err(invalid_data("invalid DNS label"));
+        }
+        let start = cursor + 1;
+        let end = start + usize::from(length);
+        let label = packet
+            .get(start..end)
+            .ok_or_else(|| invalid_data("truncated DNS label"))?;
+        labels.push(
+            std::str::from_utf8(label).map_err(|_| invalid_data("DNS label is not valid UTF-8"))?,
+        );
+        cursor = end;
+    }
+    *position = next_position.unwrap_or(cursor);
+    Ok(labels.join("."))
 }
 
 fn skip_name(packet: &[u8], position: &mut usize) -> io::Result<()> {
@@ -246,6 +304,26 @@ mod tests {
             parsed.lookup.addresses,
             vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))]
         );
+        assert!(parsed.lookup.names.is_empty());
+        assert_eq!(parsed.lookup.ttl, Some(60));
+    }
+
+    #[test]
+    fn decodes_ptr_and_compressed_names() {
+        let query = build_query(8, "10.2.0.192.in-addr.arpa", TYPE_PTR).unwrap();
+        let mut response = query[..2].to_vec();
+        response.extend_from_slice(&0x8180_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&[0; 4]);
+        response.extend_from_slice(&query[12..]);
+        response.extend_from_slice(&[0xc0, 0x0c, 0, TYPE_PTR as u8, 0, 1]);
+        response.extend_from_slice(&60_u32.to_be_bytes());
+        response.extend_from_slice(&16_u16.to_be_bytes());
+        response.extend_from_slice(b"\x01a\x07example\x04test\x00");
+
+        let parsed = parse_response(&response, 8).unwrap();
+        assert_eq!(parsed.lookup.names, vec!["a.example.test"]);
         assert_eq!(parsed.lookup.ttl, Some(60));
     }
 }

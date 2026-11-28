@@ -28,8 +28,11 @@ pub async fn run(
     let listener_groups: Arc<[ListenerGroup]> = groups.clone().into();
     let tls_configs = build_tls_configs(&config, &groups)?;
     let stream_tls_configs = build_stream_tls_configs(&config)?;
+    let mail_tls_configs = build_mail_tls_configs(&config)?;
     let http_error_loggers = build_http_error_loggers(&config)?;
     let stream_loggers = build_stream_loggers(&config)?;
+    let mail_loggers = build_mail_loggers(&config)?;
+    let mail_resolvers = build_mail_resolvers(&config);
     let proxy_cache = Arc::new(ProxyCacheRegistry::new(config.http.as_ref()));
     let upstream_keepalive = Arc::new(UpstreamKeepalivePool::default());
     let (reload_tx, _) = watch::channel(0_u64);
@@ -43,8 +46,11 @@ pub async fn run(
         reload: Arc::new(reload_tx),
         tls_configs: Arc::new(RwLock::new(tls_configs)),
         stream_tls_configs: Arc::new(RwLock::new(stream_tls_configs)),
+        mail_tls_configs: Arc::new(RwLock::new(mail_tls_configs)),
         logger,
         stream_loggers: Arc::new(RwLock::new(stream_loggers)),
+        mail_loggers: Arc::new(RwLock::new(mail_loggers)),
+        mail_resolvers: Arc::new(RwLock::new(mail_resolvers)),
         limits: Arc::new(Mutex::new(LimitState::default())),
         stats: Arc::new(ConnectionStats::default()),
         upstream_keepalive,
@@ -57,6 +63,10 @@ pub async fn run(
         let config = state.current_config();
         build_stream_routes(&config)
     };
+    let mail_routes = {
+        let config = state.current_config();
+        build_mail_routes(&config)
+    };
     let no_http_listeners = groups.is_empty();
     let (shutdown_tx, shutdown_rx) = watch::channel(ShutdownMode::Running);
     let (background_shutdown_tx, background_shutdown_rx) = watch::channel(false);
@@ -64,6 +74,7 @@ pub async fn run(
     let worker_pool = WorkerPool::start(
         groups,
         stream_routes,
+        mail_routes,
         state.clone(),
         shutdown_rx.clone(),
         shutdown_tx.clone(),
@@ -141,6 +152,7 @@ pub async fn run(
                     state.logger.reopen();
                     reopen_http_error_loggers(&state);
                     reopen_stream_loggers(&state).await;
+                    reopen_mail_loggers(&state).await;
                     state.logger.log(LogLevel::Notice, "reopening logs");
                 }
             }
@@ -242,6 +254,15 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
             return;
         }
     };
+    let mail_tls_configs = match build_mail_tls_configs(&new_config) {
+        Ok(configs) => configs,
+        Err(err) => {
+            state
+                .logger
+                .log(LogLevel::Error, format!("reload failed: {err}"));
+            return;
+        }
+    };
     let stream_loggers = match build_stream_loggers(&new_config) {
         Ok(loggers) => loggers,
         Err(err) => {
@@ -262,6 +283,17 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
             return;
         }
     };
+    let mail_loggers = match build_mail_loggers(&new_config) {
+        Ok(loggers) => loggers,
+        Err(err) => {
+            state.logger.log(
+                LogLevel::Error,
+                format!("reload failed: cannot open new mail error log: {err}"),
+            );
+            return;
+        }
+    };
+    let mail_resolvers = build_mail_resolvers(&new_config);
     if let Err(err) = state
         .logger
         .reconfigure(&new_config.core.error_logs, prefix)
@@ -275,7 +307,10 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
     reopen_access_logs();
     *state.tls_configs.write().await = tls_configs;
     *state.stream_tls_configs.write().await = stream_tls_configs;
+    *state.mail_tls_configs.write().await = mail_tls_configs;
     *state.stream_loggers.write().await = stream_loggers;
+    *state.mail_loggers.write().await = mail_loggers;
+    *state.mail_resolvers.write().await = mail_resolvers;
     state.upstream_keepalive.clear().await;
     state.proxy_cache.reload(new_config.http.as_ref());
     state.client_tls_cache.clear();

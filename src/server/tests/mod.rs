@@ -39,6 +39,7 @@ mod header_inheritance;
 mod http_error_log;
 mod keepalive_disable;
 mod listener_options;
+mod mail;
 mod max_headers;
 mod memcached;
 mod memcached_timeouts;

@@ -146,6 +146,8 @@ pub(super) fn test_state(config: &Arc<RuntimeConfig>) -> SharedState {
         Arc::new(Logger::new(&config.core.error_logs, &config.prefix).expect("error logger"));
     let http_error_loggers = build_http_error_loggers(config).expect("HTTP error loggers");
     let stream_loggers = build_stream_loggers(config).expect("stream error loggers");
+    let mail_loggers = build_mail_loggers(config).expect("mail error loggers");
+    let mail_resolvers = build_mail_resolvers(config);
     let (reload, _) = watch::channel(0_u64);
     SharedState {
         config: Arc::new(ArcSwap::from_pointee(RuntimeSnapshot {
@@ -157,8 +159,11 @@ pub(super) fn test_state(config: &Arc<RuntimeConfig>) -> SharedState {
         reload: Arc::new(reload),
         tls_configs: Arc::new(RwLock::new(HashMap::new())),
         stream_tls_configs: Arc::new(RwLock::new(HashMap::new())),
+        mail_tls_configs: Arc::new(RwLock::new(HashMap::new())),
         logger,
         stream_loggers: Arc::new(RwLock::new(stream_loggers)),
+        mail_loggers: Arc::new(RwLock::new(mail_loggers)),
+        mail_resolvers: Arc::new(RwLock::new(mail_resolvers)),
         limits: Arc::new(Mutex::new(LimitState::default())),
         stats: Arc::new(ConnectionStats::default()),
         upstream_keepalive: Arc::new(UpstreamKeepalivePool::default()),

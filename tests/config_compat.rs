@@ -63,6 +63,8 @@ mod lingering;
 mod listen_socket;
 #[path = "config_compat/log_format.rs"]
 mod log_format;
+#[path = "config_compat/mail.rs"]
+mod mail;
 #[path = "config_compat/max_headers.rs"]
 mod max_headers;
 #[path = "config_compat/memcached.rs"]

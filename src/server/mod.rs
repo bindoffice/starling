@@ -18,7 +18,8 @@ use h2::server::{self as h2_server, SendResponse};
 use http::{Request as HttpRequest, Response as HttpResponse, StatusCode};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use tokio::io::{
-    AsyncBufRead, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf,
+    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
+    ReadBuf,
 };
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 #[cfg(unix)]
@@ -42,14 +43,16 @@ use crate::config::{
     ExpiresValue, FastCgiPassConfig, FileTest, GeoVariable, GrpcPassConfig, GzipDisableConfig,
     GzipProxiedConfig, GzipStatic, Http2Limits, HttpConfig, IfModifiedSince, LimitExcept,
     LimitReqLimit, LingeringClose, ListenAddress, ListenKeepalive, ListenSocketOptions,
-    LocationConfig, LocationMatcher, LogEscapeMode, LogLevel, MapVariable, MemcachedPassConfig,
-    NextUpstreamConfig, OpenLogFileCacheConfig, ProxyCookieFlagsRule, ProxyPassConfig,
-    ProxyRedirectConfig, ProxyRedirectRule, RewriteAction, RewriteFlag, RuntimeConfig,
-    STREAM_PROXY_RESPONSES_UNLIMITED, ScgiPassConfig, ServerConfig, ServerName, ServerTokens,
-    SetVariable, SplitClientsVariable, StoreConfig, StreamHandler, TlsCipherConfig, TlsCipherSuite,
-    TlsProtocols, UpstreamAttemptTiming, UpstreamConfig, UpstreamKeepaliveConfig,
-    UpstreamPeerGuard, UpstreamServer, UserIdConfig, UserIdEnable, UserIdExpires, UwsgiPassConfig,
-    match_location, normalize_uri, normalize_uri_with_merge, parse_size_value,
+    LocationConfig, LocationMatcher, LogEscapeMode, LogLevel, MailAuthHttpAddress,
+    MailAuthHttpConfig, MailAuthMethod, MailConfig, MailProtocol, MailProxyProtocol, MailServer,
+    MailSessionCache, MailStartTls, MapVariable, MemcachedPassConfig, NextUpstreamConfig,
+    OpenLogFileCacheConfig, ProxyCookieFlagsRule, ProxyPassConfig, ProxyRedirectConfig,
+    ProxyRedirectRule, RewriteAction, RewriteFlag, RuntimeConfig, STREAM_PROXY_RESPONSES_UNLIMITED,
+    ScgiPassConfig, ServerConfig, ServerName, ServerTokens, SetVariable, SplitClientsVariable,
+    StoreConfig, StreamHandler, TlsCipherConfig, TlsCipherSuite, TlsProtocols,
+    UpstreamAttemptTiming, UpstreamConfig, UpstreamKeepaliveConfig, UpstreamPeerGuard,
+    UpstreamServer, UserIdConfig, UserIdEnable, UserIdExpires, UwsgiPassConfig, match_location,
+    normalize_uri, normalize_uri_with_merge, parse_size_value,
 };
 #[cfg(test)]
 use crate::http::read_upstream_response_timed_with_rate;
@@ -79,12 +82,15 @@ use early_hints::*;
 use tls::{
     CertificateResolver, build_client_cert_verifier, build_client_tls_config,
     client_certificate_info, load_certificate_paths, load_certificates, load_revocation_lists,
-    load_root_certificates, rustls_protocol_versions, tls_crypto_provider,
+    load_root_certificates,
 };
 use tls::{
-    ClientTlsConfigCache, ClientTlsOptions, HttpTlsConfigs, StreamTlsConfigs, TlsConnectionInfo,
-    accept_http_tls, accept_stream_tls, build_http3_server_config, build_stream_tls_configs,
-    build_tls_configs, client_certificate_verify_failure, tls_connection_info,
+    ClientTlsConfigCache, ClientTlsOptions, HttpTlsConfigs, ServerCertificateEntry,
+    ServerCertificateResolver, StreamTlsConfigs, TlsConnectionInfo, accept_http_tls,
+    accept_stream_tls, build_http3_server_config, build_mail_client_cert_verifier,
+    build_mail_client_certificate_verifier, build_stream_tls_configs, build_tls_configs,
+    client_certificate_verify_failure, install_crypto_provider, load_certificate_entries,
+    rustls_protocol_versions, tls_connection_info, tls_crypto_provider,
 };
 mod upstream;
 use upstream::*;
@@ -115,6 +121,13 @@ mod worker_pool;
 use worker_pool::*;
 mod limits;
 use limits::*;
+mod mail;
+#[cfg(unix)]
+use mail::mail_unix_accept_loop;
+use mail::{
+    MailRoute, MailTlsRuntimeConfig, build_mail_loggers, build_mail_resolvers, build_mail_routes,
+    build_mail_tls_configs, mail_accept_loop, reopen_mail_loggers,
+};
 mod stream;
 use stream::{
     StreamRoute, build_stream_loggers, build_stream_routes, stream_accept_loop, stream_udp_loop,
@@ -181,8 +194,11 @@ pub struct SharedState {
     reload: Arc<watch::Sender<u64>>,
     tls_configs: Arc<RwLock<HashMap<ListenAddress, Arc<HttpTlsConfigs>>>>,
     stream_tls_configs: Arc<RwLock<HashMap<ListenAddress, Arc<StreamTlsConfigs>>>>,
+    mail_tls_configs: Arc<RwLock<HashMap<ListenAddress, Arc<MailTlsRuntimeConfig>>>>,
     logger: Arc<Logger>,
     stream_loggers: Arc<RwLock<HashMap<usize, Arc<Logger>>>>,
+    mail_loggers: Arc<RwLock<HashMap<usize, Arc<Logger>>>>,
+    mail_resolvers: Arc<RwLock<HashMap<usize, resolver::Resolver>>>,
     limits: Arc<Mutex<LimitState>>,
     stats: Arc<ConnectionStats>,
     upstream_keepalive: Arc<UpstreamKeepalivePool>,
@@ -406,6 +422,7 @@ type ListenerSignature = (
         ListenSocketOptions,
     )>,
     Vec<(ListenAddress, bool, bool, bool, ListenSocketOptions)>,
+    Vec<(ListenAddress, bool, bool, ListenSocketOptions)>,
 );
 
 const PROXY_PATH_ENCODE_SET: &AsciiSet = &CONTROLS

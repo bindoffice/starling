@@ -18,6 +18,7 @@ impl WorkerPool {
     pub(in crate::server) async fn start(
         groups: Vec<ListenerGroup>,
         stream_routes: Vec<StreamRoute>,
+        mail_routes: Vec<MailRoute>,
         state: SharedState,
         shutdown: watch::Receiver<ShutdownMode>,
         shutdown_tx: watch::Sender<ShutdownMode>,
@@ -141,6 +142,46 @@ impl WorkerPool {
                         return Err(io::Error::new(
                             io::ErrorKind::Unsupported,
                             "UNIX domain stream listen sockets are unsupported on this platform",
+                        ));
+                    }
+                }
+            }
+        }
+
+        for route in mail_routes {
+            match route.address.clone() {
+                ListenAddress::Inet(address) => {
+                    let listener =
+                        bind_tcp_listener(address, &route.socket_options).map_err(|err| {
+                            io::Error::new(err.kind(), format!("bind() to {address} failed: {err}"))
+                        })?;
+                    let listeners = clone_tcp_listener(listener.into_std()?, workers)?;
+                    for (spec, listener) in specs.iter_mut().zip(listeners) {
+                        spec.mail_tcp.push((listener, route.clone()));
+                    }
+                }
+                ListenAddress::Unix(path) => {
+                    #[cfg(unix)]
+                    {
+                        let listener =
+                            bind_unix_listener(&path, &route.socket_options).map_err(|err| {
+                                io::Error::new(
+                                    err.kind(),
+                                    format!("bind() to unix:{} failed: {err}", path.display()),
+                                )
+                            })?;
+                        unix_socket_paths.paths.push(path);
+                        let listeners = clone_unix_listener(listener.into_std()?, workers)?;
+                        for (spec, listener) in specs.iter_mut().zip(listeners) {
+                            spec.mail_unix.push((listener, route.clone()));
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = path;
+                        return Err(io::Error::new(
+                            io::ErrorKind::Unsupported,
+                            "UNIX domain mail listen sockets are unsupported on this platform",
                         ));
                     }
                 }
@@ -301,10 +342,13 @@ struct WorkerSpec {
     http_quic: Vec<(StdUdpSocket, ListenerGroup)>,
     stream_tcp: Vec<(StdTcpListener, StreamRoute)>,
     stream_udp: Vec<(StdUdpSocket, StreamRoute)>,
+    mail_tcp: Vec<(StdTcpListener, MailRoute)>,
     #[cfg(unix)]
     http_unix: Vec<(StdUnixListener, ListenerGroup)>,
     #[cfg(unix)]
     stream_unix: Vec<(StdUnixListener, StreamRoute)>,
+    #[cfg(unix)]
+    mail_unix: Vec<(StdUnixListener, MailRoute)>,
 }
 
 impl WorkerSpec {
@@ -315,10 +359,13 @@ impl WorkerSpec {
             http_quic: Vec::new(),
             stream_tcp: Vec::new(),
             stream_udp: Vec::new(),
+            mail_tcp: Vec::new(),
             #[cfg(unix)]
             http_unix: Vec::new(),
             #[cfg(unix)]
             stream_unix: Vec::new(),
+            #[cfg(unix)]
+            mail_unix: Vec::new(),
         }
     }
 
@@ -336,6 +383,10 @@ impl WorkerSpec {
         for (socket, route) in self.stream_udp {
             stream_udp.push((UdpSocket::from_std(socket)?, route));
         }
+        let mut mail_tcp = Vec::with_capacity(self.mail_tcp.len());
+        for (listener, route) in self.mail_tcp {
+            mail_tcp.push((TcpListener::from_std(listener)?, route));
+        }
         #[cfg(unix)]
         let mut http_unix = Vec::with_capacity(self.http_unix.len());
         #[cfg(unix)]
@@ -348,16 +399,25 @@ impl WorkerSpec {
         for (listener, route) in self.stream_unix {
             stream_unix.push((UnixListener::from_std(listener)?, route));
         }
+        #[cfg(unix)]
+        let mut mail_unix = Vec::with_capacity(self.mail_unix.len());
+        #[cfg(unix)]
+        for (listener, route) in self.mail_unix {
+            mail_unix.push((UnixListener::from_std(listener)?, route));
+        }
         Ok(PreparedWorker {
             id: self.id,
             http_tcp,
             http_quic,
             stream_tcp,
             stream_udp,
+            mail_tcp,
             #[cfg(unix)]
             http_unix,
             #[cfg(unix)]
             stream_unix,
+            #[cfg(unix)]
+            mail_unix,
         })
     }
 }
@@ -368,10 +428,13 @@ struct PreparedWorker {
     http_quic: Vec<(StdUdpSocket, ListenerGroup)>,
     stream_tcp: Vec<(TcpListener, StreamRoute)>,
     stream_udp: Vec<(UdpSocket, StreamRoute)>,
+    mail_tcp: Vec<(TcpListener, MailRoute)>,
     #[cfg(unix)]
     http_unix: Vec<(UnixListener, ListenerGroup)>,
     #[cfg(unix)]
     stream_unix: Vec<(UnixListener, StreamRoute)>,
+    #[cfg(unix)]
+    mail_unix: Vec<(UnixListener, MailRoute)>,
 }
 
 async fn worker_main(
@@ -458,6 +521,23 @@ async fn worker_main(
     }
     for (listener, route) in worker.stream_udp {
         tasks.spawn(stream_udp_loop(
+            listener,
+            route,
+            state.clone(),
+            shutdown.clone(),
+        ));
+    }
+    for (listener, route) in worker.mail_tcp {
+        tasks.spawn(mail_accept_loop(
+            listener,
+            route,
+            state.clone(),
+            shutdown.clone(),
+        ));
+    }
+    #[cfg(unix)]
+    for (listener, route) in worker.mail_unix {
+        tasks.spawn(mail_unix_accept_loop(
             listener,
             route,
             state.clone(),

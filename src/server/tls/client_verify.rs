@@ -1,6 +1,7 @@
 use super::*;
 use openssl::stack::Stack;
-use openssl::x509::store::{X509Store, X509StoreBuilder};
+use openssl::x509::store::{File as X509File, X509Lookup, X509Store, X509StoreBuilder};
+use openssl::x509::verify::X509VerifyFlags;
 use openssl::x509::{X509, X509PurposeId, X509StoreContext};
 
 pub(in crate::server) fn build_client_cert_verifier(
@@ -49,7 +50,7 @@ pub(in crate::server) fn build_client_cert_verifier(
                 )
             })?;
             let openssl_store = if crl.is_none() {
-                Some(build_openssl_client_store(certificate_path)?)
+                Some(build_openssl_client_store(&[certificate_path], None)?)
             } else {
                 None
             };
@@ -64,6 +65,160 @@ pub(in crate::server) fn build_client_cert_verifier(
         inner: verifier,
         max_depth: verify_depth as usize,
     })))
+}
+
+pub(in crate::server) fn build_mail_client_cert_verifier(
+    verify: ClientCertificateVerify,
+    client_certificate: Option<&Path>,
+    provider: &Arc<tokio_rustls::rustls::crypto::CryptoProvider>,
+) -> io::Result<Option<Arc<dyn tokio_rustls::rustls::server::danger::ClientCertVerifier>>> {
+    if verify == ClientCertificateVerify::Off {
+        return Ok(None);
+    }
+
+    let root_hint_subjects = match client_certificate {
+        Some(path) => load_root_certificates(path)?.subjects(),
+        None => Vec::new(),
+    };
+    Ok(Some(Arc::new(MailClientCertVerifier {
+        root_hint_subjects,
+        supported_algs: provider.signature_verification_algorithms,
+    })))
+}
+
+pub(in crate::server) fn build_mail_client_certificate_verifier(
+    verify: ClientCertificateVerify,
+    verify_depth: u32,
+    client_certificate: Option<&Path>,
+    trusted_certificate: Option<&Path>,
+    crl: Option<&Path>,
+) -> io::Result<Option<Arc<MailClientCertificateVerifier>>> {
+    if verify == ClientCertificateVerify::Off {
+        return Ok(None);
+    }
+
+    let mut paths = Vec::with_capacity(2);
+    for path in [client_certificate, trusted_certificate]
+        .into_iter()
+        .flatten()
+    {
+        if !paths.iter().any(|existing| *existing == path) {
+            paths.push(path);
+        }
+    }
+    let store = build_openssl_client_store(&paths, crl)?;
+    Ok(Some(Arc::new(MailClientCertificateVerifier {
+        max_depth: verify_depth as usize,
+        store,
+    })))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::server) enum MailClientCertificateStatus {
+    None,
+    Success,
+    Failed(String),
+}
+
+impl MailClientCertificateStatus {
+    pub(in crate::server) fn as_auth_http_value(&self) -> String {
+        match self {
+            Self::None => "NONE".into(),
+            Self::Success => "SUCCESS".into(),
+            Self::Failed(error) => format!("FAILED:{error}"),
+        }
+    }
+}
+
+pub(in crate::server) struct MailClientCertificateVerifier {
+    max_depth: usize,
+    store: X509Store,
+}
+
+impl MailClientCertificateVerifier {
+    pub(in crate::server) fn verify(
+        &self,
+        certificates: &[CertificateDer<'_>],
+    ) -> MailClientCertificateStatus {
+        let Some(end_entity) = certificates.first() else {
+            return MailClientCertificateStatus::None;
+        };
+        if certificates.len().saturating_sub(1) >= self.max_depth {
+            return MailClientCertificateStatus::Failed(format!(
+                "certificate chain exceeds ssl_verify_depth {}",
+                self.max_depth
+            ));
+        }
+
+        match verify_client_chain(&self.store, end_entity, &certificates[1..]) {
+            Ok(()) => MailClientCertificateStatus::Success,
+            Err(error) => MailClientCertificateStatus::Failed(error),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct MailClientCertVerifier {
+    root_hint_subjects: Vec<tokio_rustls::rustls::DistinguishedName>,
+    supported_algs: tokio_rustls::rustls::crypto::WebPkiSupportedAlgorithms,
+}
+
+impl tokio_rustls::rustls::server::danger::ClientCertVerifier for MailClientCertVerifier {
+    fn client_auth_mandatory(&self) -> bool {
+        false
+    }
+
+    fn root_hint_subjects(&self) -> &[tokio_rustls::rustls::DistinguishedName] {
+        &self.root_hint_subjects
+    }
+
+    fn verify_client_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _now: tokio_rustls::rustls::pki_types::UnixTime,
+    ) -> Result<tokio_rustls::rustls::server::danger::ClientCertVerified, tokio_rustls::rustls::Error>
+    {
+        Ok(tokio_rustls::rustls::server::danger::ClientCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &tokio_rustls::rustls::DigitallySignedStruct,
+    ) -> Result<
+        tokio_rustls::rustls::client::danger::HandshakeSignatureValid,
+        tokio_rustls::rustls::Error,
+    > {
+        tokio_rustls::rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.supported_algs,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &tokio_rustls::rustls::DigitallySignedStruct,
+    ) -> Result<
+        tokio_rustls::rustls::client::danger::HandshakeSignatureValid,
+        tokio_rustls::rustls::Error,
+    > {
+        tokio_rustls::rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.supported_algs,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<tokio_rustls::rustls::SignatureScheme> {
+        self.supported_algs.supported_schemes()
+    }
 }
 
 struct AcceptCaClientVerifier {
@@ -152,16 +307,60 @@ impl tokio_rustls::rustls::server::danger::ClientCertVerifier for AcceptCaClient
     }
 }
 
-fn build_openssl_client_store(path: &Path) -> io::Result<X509Store> {
+fn build_openssl_client_store(paths: &[&Path], crl: Option<&Path>) -> io::Result<X509Store> {
+    use openssl::ssl::SslFiletype;
+
     let mut store = X509StoreBuilder::new().map_err(openssl_error)?;
-    for certificate in load_certificates(path)? {
-        let certificate = X509::from_der(certificate.as_ref()).map_err(openssl_error)?;
-        store.add_cert(certificate).map_err(openssl_error)?;
+    for path in paths {
+        let lookup = store
+            .add_lookup(X509Lookup::<X509File>::file())
+            .map_err(openssl_error)?;
+        lookup
+            .load_cert_file(path, SslFiletype::PEM)
+            .map_err(openssl_error)?;
+    }
+    if let Some(crl) = crl {
+        let lookup = store
+            .add_lookup(X509Lookup::<X509File>::file())
+            .map_err(openssl_error)?;
+        lookup
+            .load_crl_file(crl, SslFiletype::PEM)
+            .map_err(openssl_error)?;
+        store
+            .set_flags(X509VerifyFlags::CRL_CHECK)
+            .map_err(openssl_error)?;
     }
     store
         .set_purpose(X509PurposeId::SSL_CLIENT)
         .map_err(openssl_error)?;
     Ok(store.build())
+}
+
+fn verify_client_chain(
+    store: &X509Store,
+    end_entity: &CertificateDer<'_>,
+    intermediates: &[CertificateDer<'_>],
+) -> Result<(), String> {
+    let verify = || -> io::Result<Result<(), String>> {
+        let end_entity = X509::from_der(end_entity.as_ref()).map_err(openssl_error)?;
+        let mut chain = Stack::new().map_err(openssl_error)?;
+        for certificate in intermediates {
+            chain
+                .push(X509::from_der(certificate.as_ref()).map_err(openssl_error)?)
+                .map_err(openssl_error)?;
+        }
+        let mut context = X509StoreContext::new().map_err(openssl_error)?;
+        context
+            .init(store, &end_entity, &chain, |context| {
+                if context.verify_cert()? {
+                    Ok(Ok(()))
+                } else {
+                    Ok(Err(context.error().error_string().to_string()))
+                }
+            })
+            .map_err(openssl_error)
+    };
+    verify().map_err(|error| error.to_string())?
 }
 
 fn verify_client_chain_with_openssl(

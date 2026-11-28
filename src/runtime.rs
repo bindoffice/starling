@@ -11,7 +11,7 @@ use crate::server;
 use crate::{SERVER_SOFTWARE, STARLING_VERSION};
 
 const CONFIGURE_ARGUMENTS: &str = "--with-http_starling_module --with-http_ssl_module --with-http_v2_module \
-     --with-stream --with-stream_ssl_module";
+     --with-mail --with-mail_ssl_module --with-stream --with-stream_ssl_module";
 const WORKER_THREADS_PER_RUNTIME: usize = 4;
 
 // Match the usual Linux/Nginx worker stack. Nested internal redirects,
@@ -125,20 +125,28 @@ pub fn load(cli: &Cli) -> Result<RuntimeConfig, String> {
     let mut config =
         compile(document, prefix.clone(), config_path.clone()).map_err(|err| err.to_string())?;
     if let Some(error_log) = &cli.error_log {
-        let level = config
+        let destination = if error_log == "stderr" {
+            LogDestination::Stderr
+        } else {
+            LogDestination::File(resolve(&prefix, error_log))
+        };
+        if !config
             .core
             .error_logs
-            .first()
-            .map(|target| target.level)
-            .unwrap_or(LogLevel::Error);
-        config.core.error_logs = vec![LogTarget {
-            destination: if error_log == "stderr" {
-                LogDestination::Stderr
-            } else {
-                LogDestination::File(resolve(&prefix, error_log))
-            },
-            level,
-        }];
+            .iter()
+            .any(|target| target.destination == destination)
+        {
+            let level = config
+                .core
+                .error_logs
+                .first()
+                .map(|target| target.level)
+                .unwrap_or(LogLevel::Error);
+            config
+                .core
+                .error_logs
+                .push(LogTarget { destination, level });
+        }
     }
     config.files = files;
     Ok(config)
@@ -228,6 +236,7 @@ fn start_server(config: RuntimeConfig, logger: Arc<Logger>) -> Result<(), String
             STARLING_VERSION
         ),
     );
+    logger.log(LogLevel::Notice, SERVER_SOFTWARE);
 
     run_async(config, logger)
 }
@@ -381,6 +390,7 @@ fn daemonize() -> Result<(), String> {
 fn print_version(verbose: bool) {
     println!("{}", version_summary());
     if verbose {
+        println!("nginx version: {SERVER_SOFTWARE}");
         println!("built by rustc");
         println!("TLS SNI support enabled");
         println!("configure arguments: {CONFIGURE_ARGUMENTS}");
@@ -530,6 +540,8 @@ mod tests {
     #[test]
     fn reports_http2_in_configure_arguments() {
         assert!(CONFIGURE_ARGUMENTS.contains("--with-http_v2_module"));
+        assert!(CONFIGURE_ARGUMENTS.contains("--with-mail"));
+        assert!(CONFIGURE_ARGUMENTS.contains("--with-mail_ssl_module"));
     }
 
     #[test]

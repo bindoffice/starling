@@ -132,20 +132,7 @@ impl RunningServer {
     }
 
     pub(crate) fn reload_via_cli(&mut self) {
-        assert!(
-            self.child.try_wait().unwrap().is_none(),
-            "starling exited before reload:\n{}",
-            self.diagnostics()
-        );
-        let output = Command::new(env!("CARGO_BIN_EXE_starling"))
-            .arg("-p")
-            .arg(self.directory.path())
-            .arg("-c")
-            .arg("conf/nginx.conf")
-            .arg("-s")
-            .arg("reload")
-            .output()
-            .expect("run starling -s reload");
+        let output = self.run_reload_via_cli();
         assert!(
             output.status.success(),
             "starling -s reload failed with {}:\nstdout:\n{}\nstderr:\n{}\n{}",
@@ -154,6 +141,23 @@ impl RunningServer {
             String::from_utf8_lossy(&output.stderr),
             self.diagnostics()
         );
+    }
+
+    pub(crate) fn run_reload_via_cli(&mut self) -> std::process::Output {
+        assert!(
+            self.child.try_wait().unwrap().is_none(),
+            "starling exited before reload:\n{}",
+            self.diagnostics()
+        );
+        Command::new(env!("CARGO_BIN_EXE_starling"))
+            .arg("-p")
+            .arg(self.directory.path())
+            .arg("-c")
+            .arg("conf/nginx.conf")
+            .arg("-s")
+            .arg("reload")
+            .output()
+            .expect("run starling -s reload")
     }
 
     pub(crate) fn assert_running(&mut self) {
