@@ -103,7 +103,7 @@ async fn reload_discards_a_completed_old_generation_pool_connection() {
         .unwrap();
     wait_for_generated_temp_file(&old_temp_root, false).await;
     assert_eq!(
-        state.upstream_keepalive.len("p0_backend").await,
+        state.upstream_keepalive.len("p0_backend"),
         0,
         "a completed request must not return its old generation connection to the pool"
     );

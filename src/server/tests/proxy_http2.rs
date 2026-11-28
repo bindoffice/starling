@@ -147,13 +147,12 @@ async fn reuses_http2_upstream_connections_from_the_keepalive_pool() {
         ProxyV2Connection::connect(Box::new(client_io), key.clone(), Duration::from_secs(1))
             .await
             .unwrap();
-    pool.put_http2("backend", &keepalive, connection).await;
-    assert_eq!(pool.len("backend").await, 1);
+    pool.put_http2("backend", &keepalive, connection);
+    assert_eq!(pool.len("backend"), 1);
 
     for (path, expected) in [("/one", "first"), ("/two", "second")] {
         let mut connection = pool
             .take_http2("backend", &key, &keepalive)
-            .await
             .expect("reused HTTP/2 connection");
         let outgoing = ProxyRequestMessage {
             method: "GET".into(),
@@ -176,10 +175,10 @@ async fn reuses_http2_upstream_connections_from_the_keepalive_pool() {
                 .unwrap(),
             expected.as_bytes()
         );
-        pool.put_http2("backend", &keepalive, connection).await;
+        pool.put_http2("backend", &keepalive, connection);
     }
 
-    assert_eq!(pool.len("backend").await, 1);
+    assert_eq!(pool.len("backend"), 1);
     drop(pool);
     let _ = close_tx.send(());
     backend.await.unwrap();

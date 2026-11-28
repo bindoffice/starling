@@ -68,6 +68,7 @@ async fn streams_value_body_before_end_trailer() {
         &request,
         context,
         None,
+        0,
         Arc::new(UpstreamKeepalivePool::default()),
     )
     .await

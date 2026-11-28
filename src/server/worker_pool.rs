@@ -223,7 +223,10 @@ impl WorkerPool {
         let mut handles = Vec::with_capacity(workers);
         let mut runtimes = Vec::with_capacity(workers);
         for (runtime, worker, worker_threads) in prepared {
-            let state = state.clone();
+            let mut state = state.clone();
+            // Match nginx's per-worker keepalive cache even though workers share
+            // one process and one backing pool.
+            state.upstream_keepalive_worker = worker.id;
             let shutdown = shutdown.clone();
             let exit_tx = exit_tx.clone();
             let worker_id = worker.id;

@@ -191,7 +191,7 @@ async fn write_slow_response(stream: &mut TcpStream, connection: &str) {
 
 async fn wait_for_pooled_connection(state: &SharedState) {
     tokio::time::timeout(Duration::from_secs(2), async {
-        while state.upstream_keepalive.len("p0_backend").await == 0 {
+        while state.upstream_keepalive.len("p0_backend") == 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })

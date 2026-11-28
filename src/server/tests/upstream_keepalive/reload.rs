@@ -48,7 +48,7 @@ async fn pool_keys_keep_the_generation_captured_when_the_request_started() {
     let local: SocketAddr = "127.0.0.1:18181".parse().unwrap();
     let mut variables = Variables::new(&request, "localhost", server, &local, &remote);
     let pool = state.upstream_keepalive.clone();
-    pool.clear().await;
+    pool.clear();
     state.config.store(Arc::new(RuntimeSnapshot {
         config: request_config.clone(),
         listener_groups: build_listener_groups(&request_config).into(),

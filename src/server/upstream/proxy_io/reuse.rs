@@ -116,13 +116,14 @@ pub(super) fn can_reuse_stream_head(
 
 pub(in crate::server) fn spawn_stream_connection_reuse(
     receiver: tokio::sync::oneshot::Receiver<UpstreamConnection>,
+    worker: usize,
     pool: Arc<UpstreamKeepalivePool>,
-    upstream: String,
+    upstream: Arc<str>,
     config: UpstreamKeepaliveConfig,
 ) {
     tokio::spawn(async move {
         if let Ok(connection) = receiver.await {
-            pool.put(&upstream, &config, connection).await;
+            pool.put_for(worker, &upstream, &config, connection);
         }
     });
 }

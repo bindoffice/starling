@@ -318,8 +318,10 @@ fn sync_upstream_response_variables(variables: &mut Variables, response: &Respon
     if headers.is_empty() && trailers.is_empty() {
         return;
     }
-    variables.upstream_headers.clone_from(&headers.to_vec());
-    variables.upstream_trailers.clone_from(&trailers.to_vec());
+    variables.upstream_headers.clear();
+    variables.upstream_headers.extend_from_slice(headers);
+    variables.upstream_trailers.clear();
+    variables.upstream_trailers.extend_from_slice(trailers);
 }
 
 fn consume_uri_change(uri_changes: &mut usize) -> bool {

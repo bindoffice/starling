@@ -198,10 +198,47 @@ impl From<UpstreamConnection> for PooledUpstreamConnection {
     }
 }
 
-#[derive(Default)]
 pub(super) struct UpstreamKeepalivePool {
     pub(super) generation: AtomicU64,
-    pub(super) entries: tokio::sync::Mutex<HashMap<String, VecDeque<PooledUpstreamConnection>>>,
+    shards: Box<[UpstreamKeepaliveShard]>,
+}
+
+const UPSTREAM_KEEPALIVE_SHARDS: usize = 16;
+type UpstreamKeepaliveEntries = HashMap<String, VecDeque<PooledUpstreamConnection>>;
+
+#[repr(align(64))]
+struct UpstreamKeepaliveShard(std::sync::Mutex<UpstreamKeepaliveEntries>);
+
+impl Default for UpstreamKeepalivePool {
+    fn default() -> Self {
+        Self {
+            generation: AtomicU64::new(0),
+            shards: (0..UPSTREAM_KEEPALIVE_SHARDS)
+                .map(|_| UpstreamKeepaliveShard(std::sync::Mutex::new(HashMap::new())))
+                .collect(),
+        }
+    }
+}
+
+fn upstream_keepalive_shard(upstream: &str, worker: usize) -> usize {
+    // FNV-1a keeps the hot path independent from HashMap's randomized hasher
+    // while distributing named upstream blocks and worker runtimes across
+    // independent locks.
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in upstream.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (hash as usize ^ worker) & (UPSTREAM_KEEPALIVE_SHARDS - 1)
+}
+
+fn lock_upstream_shard(
+    shard: &UpstreamKeepaliveShard,
+) -> std::sync::MutexGuard<'_, UpstreamKeepaliveEntries> {
+    shard
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl UpstreamKeepalivePool {
@@ -209,90 +246,182 @@ impl UpstreamKeepalivePool {
         self.generation.load(Ordering::Relaxed)
     }
 
-    pub(super) async fn take(
+    #[cfg(test)]
+    pub(super) fn take(
         &self,
         upstream: &str,
         key: &UpstreamPoolKey,
         config: &UpstreamKeepaliveConfig,
     ) -> Option<UpstreamConnection> {
-        match self.take_pooled(upstream, key, config).await? {
+        self.take_for(0, upstream, key, config)
+    }
+
+    pub(super) fn take_for(
+        &self,
+        worker: usize,
+        upstream: &str,
+        key: &UpstreamPoolKey,
+        config: &UpstreamKeepaliveConfig,
+    ) -> Option<UpstreamConnection> {
+        self.take_for_matching(worker, upstream, config, |entry| entry == key)
+    }
+
+    pub(super) fn take_for_matching<F>(
+        &self,
+        worker: usize,
+        upstream: &str,
+        config: &UpstreamKeepaliveConfig,
+        matches: F,
+    ) -> Option<UpstreamConnection>
+    where
+        F: Fn(&UpstreamPoolKey) -> bool,
+    {
+        match self.take_pooled_matching(worker, upstream, config, matches)? {
             PooledUpstreamConnection::Http1(connection) => Some(connection),
             PooledUpstreamConnection::Http2(_) => None,
         }
     }
 
-    pub(super) async fn take_http2(
+    #[cfg(test)]
+    pub(super) fn take_http2(
         &self,
         upstream: &str,
         key: &UpstreamPoolKey,
         config: &UpstreamKeepaliveConfig,
     ) -> Option<ProxyV2Connection> {
-        match self.take_pooled(upstream, key, config).await? {
+        self.take_http2_for(0, upstream, key, config)
+    }
+
+    pub(super) fn take_http2_for(
+        &self,
+        worker: usize,
+        upstream: &str,
+        key: &UpstreamPoolKey,
+        config: &UpstreamKeepaliveConfig,
+    ) -> Option<ProxyV2Connection> {
+        self.take_http2_for_matching(worker, upstream, config, |entry| entry == key)
+    }
+
+    pub(super) fn take_http2_for_matching<F>(
+        &self,
+        worker: usize,
+        upstream: &str,
+        config: &UpstreamKeepaliveConfig,
+        matches: F,
+    ) -> Option<ProxyV2Connection>
+    where
+        F: Fn(&UpstreamPoolKey) -> bool,
+    {
+        match self.take_pooled_matching(worker, upstream, config, matches)? {
             PooledUpstreamConnection::Http2(connection) => Some(connection),
             PooledUpstreamConnection::Http1(_) => None,
         }
     }
 
-    async fn take_pooled(
+    fn take_pooled_matching<F>(
         &self,
+        worker: usize,
         upstream: &str,
-        key: &UpstreamPoolKey,
         config: &UpstreamKeepaliveConfig,
-    ) -> Option<PooledUpstreamConnection> {
+        matches: F,
+    ) -> Option<PooledUpstreamConnection>
+    where
+        F: Fn(&UpstreamPoolKey) -> bool,
+    {
         if config.max_cached == 0 {
             return None;
         }
-        let mut pools = self.entries.lock().await;
-        let entries = pools.get_mut(upstream)?;
-        let now = Instant::now();
-        let generation = self.generation();
-        let mut index = 0;
-        while index < entries.len() {
-            let entry = &entries[index];
-            let expired = now.saturating_duration_since(entry.idle_since()) >= config.timeout;
-            let over_limit = entry.requests() >= config.requests;
-            let stale_generation = entry.key().generation != generation;
-            if expired || over_limit || stale_generation {
-                entries.remove(index);
+        loop {
+            let (candidate, retired) = {
+                let mut pools =
+                    lock_upstream_shard(&self.shards[upstream_keepalive_shard(upstream, worker)]);
+                let entries = pools.get_mut(upstream)?;
+                let now = Instant::now();
+                let generation = self.generation();
+                let mut index = 0;
+                let mut found = None;
+                let mut retired = None;
+                while index < entries.len() {
+                    let remove = {
+                        let entry = &entries[index];
+                        now.saturating_duration_since(entry.idle_since()) >= config.timeout
+                            || entry.requests() >= config.requests
+                            || entry.key().generation != generation
+                    };
+                    if remove {
+                        let entry = entries.remove(index);
+                        retired.get_or_insert_with(Vec::new).push(entry);
+                        continue;
+                    }
+                    if matches(entries[index].key()) {
+                        found = entries.remove(index);
+                        break;
+                    }
+                    index += 1;
+                }
+                (found, retired)
+            };
+            // H2 connection drops abort their driver task; never do that while
+            // holding the shard lock.
+            drop(retired);
+            let Some(mut connection) = candidate else {
+                return None;
+            };
+            if !connection.idle_is_open() {
                 continue;
             }
-            if entries[index].key() == key {
-                if !entries[index].idle_is_open() {
-                    entries.remove(index);
-                    continue;
-                }
-                return entries.remove(index);
-            }
-            index += 1;
+            return Some(connection);
         }
-        None
     }
 
-    pub(super) async fn put(
+    #[cfg(test)]
+    pub(super) fn put(
         &self,
         upstream: &str,
         config: &UpstreamKeepaliveConfig,
         connection: UpstreamConnection,
     ) {
-        self.put_pooled(upstream, config, connection.into()).await;
+        self.put_for(0, upstream, config, connection);
     }
 
-    pub(super) async fn put_http2(
+    pub(super) fn put_for(
+        &self,
+        worker: usize,
+        upstream: &str,
+        config: &UpstreamKeepaliveConfig,
+        connection: UpstreamConnection,
+    ) {
+        self.put_pooled(worker, upstream, config, connection.into());
+    }
+
+    #[cfg(test)]
+    pub(super) fn put_http2(
         &self,
         upstream: &str,
         config: &UpstreamKeepaliveConfig,
         connection: ProxyV2Connection,
     ) {
+        self.put_http2_for(0, upstream, config, connection);
+    }
+
+    pub(super) fn put_http2_for(
+        &self,
+        worker: usize,
+        upstream: &str,
+        config: &UpstreamKeepaliveConfig,
+        connection: ProxyV2Connection,
+    ) {
         self.put_pooled(
+            worker,
             upstream,
             config,
             PooledUpstreamConnection::Http2(connection),
-        )
-        .await;
+        );
     }
 
-    async fn put_pooled(
+    fn put_pooled(
         &self,
+        worker: usize,
         upstream: &str,
         config: &UpstreamKeepaliveConfig,
         mut connection: PooledUpstreamConnection,
@@ -306,32 +435,63 @@ impl UpstreamKeepalivePool {
         {
             return;
         }
-        let mut pools = self.entries.lock().await;
-        if connection.key().generation != self.generation() {
-            return;
-        }
-        let entries = pools.entry(upstream.to_string()).or_default();
-        let now = Instant::now();
-        entries.retain(|entry| now.saturating_duration_since(entry.idle_since()) < config.timeout);
-        while entries.len() >= config.max_cached {
-            entries.pop_back();
-        }
-        connection.mark_idle(now);
-        entries.push_front(connection);
+        let retired = {
+            let mut pools =
+                lock_upstream_shard(&self.shards[upstream_keepalive_shard(upstream, worker)]);
+            if connection.key().generation != self.generation() {
+                return;
+            }
+            let entries = match pools.get_mut(upstream) {
+                Some(entries) => entries,
+                None => pools.entry(upstream.to_owned()).or_default(),
+            };
+            let now = Instant::now();
+            let mut retired = None;
+            while entries.back().is_some_and(|entry| {
+                now.saturating_duration_since(entry.idle_since()) >= config.timeout
+            }) {
+                let entry = entries.pop_back().expect("expired connection");
+                retired.get_or_insert_with(Vec::new).push(entry);
+            }
+            while entries.len() >= config.max_cached {
+                let entry = entries.pop_back().expect("over-limit connection");
+                retired.get_or_insert_with(Vec::new).push(entry);
+            }
+            connection.mark_idle(now);
+            entries.push_front(connection);
+            retired
+        };
+        // Avoid running H2 driver cancellation and socket teardown under the
+        // shard lock.
+        drop(retired);
     }
 
-    pub(super) async fn clear(&self) {
+    pub(super) fn clear(&self) {
         self.generation.fetch_add(1, Ordering::Relaxed);
-        self.entries.lock().await.clear();
+        for shard in &self.shards {
+            let entries = std::mem::take(&mut *lock_upstream_shard(shard));
+            drop(entries);
+        }
     }
 
     #[cfg(test)]
-    pub(super) async fn len(&self, upstream: &str) -> usize {
-        self.entries
-            .lock()
-            .await
-            .get(upstream)
-            .map_or(0, VecDeque::len)
+    pub(super) fn len(&self, upstream: &str) -> usize {
+        self.shards
+            .iter()
+            .map(|shard| {
+                lock_upstream_shard(shard)
+                    .get(upstream)
+                    .map_or(0, VecDeque::len)
+            })
+            .sum()
+    }
+
+    #[cfg(test)]
+    pub(super) fn push_for_test(&self, upstream: &str, connection: PooledUpstreamConnection) {
+        lock_upstream_shard(&self.shards[upstream_keepalive_shard(upstream, 0)])
+            .entry(upstream.to_owned())
+            .or_default()
+            .push_front(connection);
     }
 }
 
@@ -408,11 +568,12 @@ pub(super) struct ResolvedUpstreamTarget {
     pub(super) port: u16,
     pub(super) peer: Option<UpstreamServer>,
     pub(super) check_health: bool,
+    pub(super) record_timing: bool,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct UpstreamKeepaliveContext {
-    pub(super) name: String,
+    pub(super) name: Arc<str>,
     pub(super) config: UpstreamKeepaliveConfig,
 }
 
@@ -420,7 +581,7 @@ impl ResolvedUpstreamTarget {
     pub(super) fn try_acquire(&self) -> Result<Option<UpstreamPeerGuard>, ()> {
         match &self.peer {
             Some(peer) => peer
-                .try_acquire_with_health(self.check_health)
+                .try_acquire_with_options(self.check_health, self.record_timing)
                 .map(Some)
                 .ok_or(()),
             None => Ok(None),

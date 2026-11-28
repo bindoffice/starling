@@ -202,6 +202,7 @@ pub struct SharedState {
     limits: Arc<Mutex<LimitState>>,
     stats: Arc<ConnectionStats>,
     upstream_keepalive: Arc<UpstreamKeepalivePool>,
+    upstream_keepalive_worker: usize,
     proxy_cache: Arc<ProxyCacheRegistry>,
     client_tls_cache: Arc<ClientTlsConfigCache>,
     http2_budget: Arc<Http2Budget>,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::{HeaderValue, UpstreamMethod};
 
 mod response;
 
@@ -43,28 +44,10 @@ pub(in crate::server) fn build_proxy_request(
                     .is_some_and(|value| value.trim().eq_ignore_ascii_case("chunked"))
             }));
     let mut host_header_set = false;
-    let mut skip_headers: HashSet<String> = [
-        "host",
-        "connection",
-        "content-length",
-        "proxy-connection",
-        "keep-alive",
-        "transfer-encoding",
-        "te",
-        "trailer",
-        "upgrade",
-        "expect",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect();
-    for header in &context.proxy_headers {
-        skip_headers.insert(header.name.to_ascii_lowercase());
-    }
-    let mut headers = Vec::new();
+    let mut headers = Vec::with_capacity(request.headers.len() + context.proxy_headers.len() + 1);
     if context.proxy_pass_request_headers {
         for header in request.headers.iter() {
-            if skip_headers.contains(&header.name.to_ascii_lowercase()) {
+            if should_skip_proxy_request_header(&header.name, &context.proxy_headers) {
                 continue;
             }
             headers.push((header.name.to_string(), header.value.clone()));
@@ -75,8 +58,7 @@ pub(in crate::server) fn build_proxy_request(
         if value.is_empty() {
             continue;
         }
-        let name_lower = header.name.to_ascii_lowercase();
-        if name_lower == "host" {
+        if header.name.eq_ignore_ascii_case("host") {
             host_header_set = true;
         }
         headers.push((header.name.to_string(), value));
@@ -112,6 +94,27 @@ pub(in crate::server) fn build_proxy_request(
         body_chunked,
         body_limit: context.client_max_body_size,
     }
+}
+
+fn should_skip_proxy_request_header(name: &str, configured: &[HeaderValue]) -> bool {
+    const SKIPPED: &[&str] = &[
+        "host",
+        "connection",
+        "content-length",
+        "proxy-connection",
+        "keep-alive",
+        "transfer-encoding",
+        "te",
+        "trailer",
+        "upgrade",
+        "expect",
+    ];
+    SKIPPED
+        .iter()
+        .any(|skipped| name.eq_ignore_ascii_case(skipped))
+        || configured
+            .iter()
+            .any(|header| name.eq_ignore_ascii_case(&header.name))
 }
 
 pub(in crate::server) async fn resolve_proxy_targets(
@@ -163,6 +166,7 @@ async fn resolve_implicit_proxy_targets(host: String, port: u16) -> Vec<Resolved
             port,
             peer: None,
             check_health: false,
+            record_timing: false,
         }];
     }
     let lookup_host = host
@@ -175,6 +179,7 @@ async fn resolve_implicit_proxy_targets(host: String, port: u16) -> Vec<Resolved
             port,
             peer: None,
             check_health: false,
+            record_timing: false,
         }];
     };
     let mut targets = Vec::new();
@@ -193,6 +198,7 @@ async fn resolve_implicit_proxy_targets(host: String, port: u16) -> Vec<Resolved
             port: address.port(),
             peer: None,
             check_health: false,
+            record_timing: false,
         });
     }
     if targets.is_empty() {
@@ -201,6 +207,7 @@ async fn resolve_implicit_proxy_targets(host: String, port: u16) -> Vec<Resolved
             port,
             peer: None,
             check_health: false,
+            record_timing: false,
         });
     }
     targets
@@ -211,12 +218,30 @@ pub(in crate::server) fn resolve_upstream_config(
     peer: Option<IpAddr>,
     hash_key: Option<&str>,
 ) -> Vec<ResolvedUpstreamTarget> {
+    if config.servers.len() == 1 {
+        let server = &config.servers[0];
+        if !server.is_available() {
+            return Vec::new();
+        }
+        return parse_upstream_address(&server.address)
+            .map(|(host, port)| {
+                vec![ResolvedUpstreamTarget {
+                    host,
+                    port,
+                    check_health: server.backup,
+                    record_timing: matches!(config.method, UpstreamMethod::LeastTime(_)),
+                    peer: Some(server.clone()),
+                }]
+            })
+            .unwrap_or_default();
+    }
     let primary_peers = config
         .servers
         .iter()
         .filter(|server| !server.backup && !server.down)
         .count();
     let primary_health = primary_peers != 1;
+    let record_timing = matches!(config.method, UpstreamMethod::LeastTime(_));
     config
         .select_candidates_with(peer, hash_key)
         .into_iter()
@@ -227,6 +252,7 @@ pub(in crate::server) fn resolve_upstream_config(
                 port,
                 peer: Some(server.clone()),
                 check_health,
+                record_timing,
             })
         })
         .collect()

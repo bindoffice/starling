@@ -30,7 +30,7 @@ pub(in crate::server) async fn grpc_request(
         let upstream = http.upstreams.get(name)?;
         let config = upstream.keepalive.clone()?;
         (config.max_cached != 0).then(|| UpstreamKeepaliveContext {
-            name: name.clone(),
+            name: upstream.name.clone(),
             config,
         })
     });
@@ -91,10 +91,12 @@ pub(in crate::server) async fn grpc_request(
                             config,
                             connection,
                         } => {
-                            variables
-                                .upstream_keepalive
-                                .put_http2(&upstream, &config, connection)
-                                .await;
+                            variables.upstream_keepalive.put_http2_for(
+                                variables.upstream_keepalive_worker,
+                                &upstream,
+                                &config,
+                                connection,
+                            );
                         }
                         ReusableUpstreamConnection::Http1 { .. } => {}
                     }

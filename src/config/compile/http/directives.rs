@@ -94,11 +94,8 @@ impl<'a> HttpCompileState<'a> {
             "upstream" => {
                 require_block(child)?;
                 let upstream = compile_upstream(child, UpstreamContext::Http)?;
-                if self
-                    .upstreams
-                    .insert(upstream.name.clone(), upstream)
-                    .is_some()
-                {
+                let name = upstream.name.to_string();
+                if self.upstreams.insert(name, upstream).is_some() {
                     return Err(ConfigError::at(
                         child.location.clone(),
                         "duplicate upstream",

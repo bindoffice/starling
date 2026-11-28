@@ -29,6 +29,7 @@ pub(in crate::server) fn resolve_gateway_targets(
             port: 0,
             peer: None,
             check_health: false,
+            record_timing: false,
         }];
     }
     parse_upstream_address(&target)
@@ -37,6 +38,7 @@ pub(in crate::server) fn resolve_gateway_targets(
             port,
             peer: None,
             check_health: false,
+            record_timing: false,
         })
         .into_iter()
         .collect()
@@ -87,7 +89,7 @@ pub(in crate::server) fn gateway_keepalive_context(
     let upstream = http.upstreams.get(raw)?;
     let config = upstream.keepalive.clone()?;
     (config.max_cached != 0).then(|| UpstreamKeepaliveContext {
-        name: raw.into(),
+        name: upstream.name.clone(),
         config,
     })
 }

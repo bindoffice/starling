@@ -10,6 +10,7 @@ use cache::*;
 use response::finalize_proxy_response;
 use result::ProxyAttemptTarget;
 pub(in crate::server) use result::{ProxyAttemptResult, ProxyUpgrade, ReusableUpstreamConnection};
+use std::fmt::Write as _;
 pub(in crate::server) use transport::*;
 
 pub(in crate::server) struct ProxyRequestResult {
@@ -42,7 +43,7 @@ pub(in crate::server) async fn proxy_request(
         let upstream = http.upstreams.get(name)?;
         let config = upstream.keepalive.clone()?;
         (config.max_cached != 0).then(|| UpstreamKeepaliveContext {
-            name: name.clone(),
+            name: upstream.name.clone(),
             config,
         })
     });
@@ -166,12 +167,13 @@ pub(in crate::server) async fn proxy_request(
     let streaming_allowed =
         !variables.proxy_cache_background && !cache_head_conversion && !strip_cache_headers;
     let targets = resolve_proxy_targets(proxy, http, variables, request_peer(request)).await;
-    let mut attempted = Vec::new();
     let mut last_failure = ProxyFailure::Failure;
     let mut next = NextUpstreamState::new(&context.proxy_next_upstream);
     let mut targets = targets.into_iter();
-    let mut upstream_statuses: Vec<String> = Vec::new();
-    let mut upstream_response_times: Vec<String> = Vec::new();
+    let mut attempted_addr = String::new();
+    variables.upstream_addr.clear();
+    variables.upstream_status.clear();
+    variables.upstream_response_time.clear();
     while let Some(target) = targets.next() {
         let mut guard = match target.try_acquire() {
             Ok(guard) => guard,
@@ -180,8 +182,9 @@ pub(in crate::server) async fn proxy_request(
         if !next.start_attempt() {
             break;
         }
-        attempted.push(upstream_target_display(&target));
+        append_upstream_addr(&mut attempted_addr, &target);
         let attempt_started = Instant::now();
+        set_attempt_authority(variables, &target, &proxy.scheme);
         match proxy_attempt(
             proxy,
             request,
@@ -202,8 +205,11 @@ pub(in crate::server) async fn proxy_request(
         {
             Ok(result) => {
                 let response_time = attempt_started.elapsed();
-                upstream_statuses.push(result.response.status.to_string());
-                upstream_response_times.push(format!("{:.3}", response_time.as_secs_f64()));
+                append_upstream_status(
+                    &mut variables.upstream_status,
+                    Some(result.response.status),
+                );
+                append_upstream_time(&mut variables.upstream_response_time, response_time);
                 if !targets.as_slice().is_empty()
                     && !streaming_request_body
                     && next.can_retry_status(request, result.response.status)
@@ -223,20 +229,24 @@ pub(in crate::server) async fn proxy_request(
                             config,
                             connection,
                         } => {
-                            variables
-                                .upstream_keepalive
-                                .put(&upstream, &config, connection)
-                                .await;
+                            variables.upstream_keepalive.put_for(
+                                variables.upstream_keepalive_worker,
+                                &upstream,
+                                &config,
+                                connection,
+                            );
                         }
                         ReusableUpstreamConnection::Http2 {
                             upstream,
                             config,
                             connection,
                         } => {
-                            variables
-                                .upstream_keepalive
-                                .put_http2(&upstream, &config, connection)
-                                .await;
+                            variables.upstream_keepalive.put_http2_for(
+                                variables.upstream_keepalive_worker,
+                                &upstream,
+                                &config,
+                                connection,
+                            );
                         }
                     }
                 }
@@ -250,18 +260,14 @@ pub(in crate::server) async fn proxy_request(
                         let _ = plan.zone.refresh(&plan.key, cached.created, &valid).await;
                     }
                     let cached = stale.take().expect("expired cache response");
-                    variables.upstream_addr = attempted.join(", ");
-                    variables.upstream_status = upstream_statuses.join(", ");
-                    variables.upstream_response_time = upstream_response_times.join(", ");
+                    variables.upstream_addr = attempted_addr;
                     return proxy_response_from_revalidated(cached, variables).into();
                 }
                 let stale_status = cache
                     .as_ref()
                     .is_some_and(|plan| plan.use_stale.status(result.response.status));
                 if stale_status && let Some(stale) = stale.take() {
-                    variables.upstream_addr = attempted.join(", ");
-                    variables.upstream_status = upstream_statuses.join(", ");
-                    variables.upstream_response_time = upstream_response_times.join(", ");
+                    variables.upstream_addr = attempted_addr;
                     return proxy_response_from_stale(stale, variables).into();
                 }
                 let upgrade = result.upgrade;
@@ -285,15 +291,15 @@ pub(in crate::server) async fn proxy_request(
                     )
                     .await;
                 }
-                variables.upstream_addr = attempted.join(", ");
-                variables.upstream_status = upstream_statuses.join(", ");
-                variables.upstream_response_time = upstream_response_times.join(", ");
+                variables.upstream_addr = attempted_addr;
                 return ProxyRequestResult { response, upgrade };
             }
             Err(failure) => {
-                upstream_statuses.push("-".into());
-                upstream_response_times
-                    .push(format!("{:.3}", attempt_started.elapsed().as_secs_f64()));
+                append_upstream_status(&mut variables.upstream_status, None);
+                append_upstream_time(
+                    &mut variables.upstream_response_time,
+                    attempt_started.elapsed(),
+                );
                 if let Some(guard) = guard.as_mut() {
                     guard.mark_failed();
                 }
@@ -307,14 +313,12 @@ pub(in crate::server) async fn proxy_request(
             }
         }
     }
-    variables.upstream_addr = attempted.join(", ");
-    variables.upstream_status = upstream_statuses.join(", ");
-    variables.upstream_response_time = upstream_response_times.join(", ");
     if let Some(plan) = &cache
         && let Some(cached) = stale.as_ref()
         && allows_stale_error(&plan.use_stale, cached, &last_failure)
     {
         let stale = stale.take().expect("stale cache response");
+        variables.upstream_addr = attempted_addr;
         return proxy_response_from_stale(stale, variables).into();
     }
     store_proxy_cache_failure(
@@ -324,10 +328,61 @@ pub(in crate::server) async fn proxy_request(
         &last_failure,
         context,
     );
-    match last_failure {
+    let response = match last_failure {
         ProxyFailure::Timeout => error_response(504),
         ProxyFailure::Failure | ProxyFailure::InvalidHeader => error_response(502),
         ProxyFailure::RequestBody(status) => error_response(status),
+    };
+    variables.upstream_addr = attempted_addr;
+    response.into()
+}
+
+fn append_upstream_addr(output: &mut String, target: &ResolvedUpstreamTarget) {
+    if !output.is_empty() {
+        output.push_str(", ");
     }
-    .into()
+    if target.host.starts_with("unix:") {
+        output.push_str(&target.host);
+    } else {
+        let _ = write!(output, "{}:{}", target.host, target.port);
+    }
+}
+
+fn set_attempt_authority(variables: &mut Variables, target: &ResolvedUpstreamTarget, scheme: &str) {
+    let default_port = if scheme == "https" { 443 } else { 80 };
+    variables.proxy_host.clear();
+    if target.port == 0 || target.port == default_port {
+        variables.proxy_host.push_str(&target.host);
+    } else {
+        let _ = write!(variables.proxy_host, "{}:{}", target.host, target.port);
+    }
+    variables.proxy_port.clear();
+    if target.port != 0 {
+        let _ = write!(variables.proxy_port, "{}", target.port);
+    }
+    variables.upstream_addr.clear();
+    if target.port == 0 {
+        variables.upstream_addr.push_str(&target.host);
+    } else {
+        let _ = write!(variables.upstream_addr, "{}:{}", target.host, target.port);
+    }
+}
+
+fn append_upstream_status(output: &mut String, status: Option<u16>) {
+    if !output.is_empty() {
+        output.push_str(", ");
+    }
+    match status {
+        Some(status) => {
+            let _ = write!(output, "{status}");
+        }
+        None => output.push('-'),
+    }
+}
+
+fn append_upstream_time(output: &mut String, duration: std::time::Duration) {
+    if !output.is_empty() {
+        output.push_str(", ");
+    }
+    let _ = write!(output, "{:.3}", duration.as_secs_f64());
 }

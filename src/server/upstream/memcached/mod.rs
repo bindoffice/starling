@@ -70,10 +70,12 @@ pub(in crate::server) async fn memcached_request(
                     guard.record_timing(UpstreamAttemptTiming::response_only(response_time));
                 }
                 if let (Some(keepalive), Some(connection)) = (keepalive.as_ref(), reusable) {
-                    variables
-                        .upstream_keepalive
-                        .put(&keepalive.name, &keepalive.config, connection)
-                        .await;
+                    variables.upstream_keepalive.put_for(
+                        variables.upstream_keepalive_worker,
+                        &keepalive.name,
+                        &keepalive.config,
+                        connection,
+                    );
                 }
                 set_upstream_variables(
                     variables,
@@ -123,12 +125,12 @@ async fn memcached_attempt(
     let (host, port) = target;
     let pool_key = memcached_upstream_pool_key(host, port, context, variables);
     let mut connection = match keepalive {
-        Some(keepalive) => {
-            variables
-                .upstream_keepalive
-                .take(&keepalive.name, &pool_key, &keepalive.config)
-                .await
-        }
+        Some(keepalive) => variables.upstream_keepalive.take_for(
+            variables.upstream_keepalive_worker,
+            &keepalive.name,
+            &pool_key,
+            &keepalive.config,
+        ),
         None => None,
     };
     if connection.is_none() {
@@ -143,6 +145,7 @@ async fn memcached_attempt(
         request,
         context,
         keepalive.cloned(),
+        variables.upstream_keepalive_worker,
         variables.upstream_keepalive.clone(),
     )
     .await?;

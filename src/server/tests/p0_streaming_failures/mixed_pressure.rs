@@ -342,7 +342,7 @@ async fn request_probe(frontend: SocketAddr, path: &str) -> Vec<u8> {
 
 async fn wait_for_pooled_connection(state: &SharedState) {
     tokio::time::timeout(Duration::from_secs(2), async {
-        while state.upstream_keepalive.len("p0_backend").await == 0 {
+        while state.upstream_keepalive.len("p0_backend") == 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
@@ -352,7 +352,7 @@ async fn wait_for_pooled_connection(state: &SharedState) {
 
 async fn wait_for_no_pooled_connection(state: &SharedState) {
     tokio::time::timeout(Duration::from_secs(2), async {
-        while state.upstream_keepalive.len("p0_backend").await != 0 {
+        while state.upstream_keepalive.len("p0_backend") != 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })

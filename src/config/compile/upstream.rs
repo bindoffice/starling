@@ -10,7 +10,7 @@ pub(super) fn compile_upstream(
     directive: &Directive,
     context: UpstreamContext,
 ) -> ConfigResult<UpstreamConfig> {
-    let name = one_arg(directive)?.to_string();
+    let name = Arc::<str>::from(one_arg(directive)?);
     let mut servers = Vec::new();
     let mut method = UpstreamMethod::RoundRobin;
     let mut hash_key = None;

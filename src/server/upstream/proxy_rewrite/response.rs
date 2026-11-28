@@ -31,32 +31,37 @@ pub(in crate::server) fn filter_proxy_trailer_headers(
 }
 
 fn filter_proxy_headers(
-    headers: Vec<Header>,
+    mut headers: Vec<Header>,
     pass_headers: &[String],
     hide_headers: &[String],
 ) -> Vec<Header> {
-    headers
-        .into_iter()
-        .filter(|header| {
-            let name = header.name.to_ascii_lowercase();
-            if matches!(
-                name.as_str(),
-                "connection" | "keep-alive" | "proxy-connection" | "transfer-encoding"
-            ) {
-                return false;
-            }
-            if pass_headers
+    headers.retain(|header| {
+        let name = header.name.as_str();
+        if [
+            "connection",
+            "keep-alive",
+            "proxy-connection",
+            "transfer-encoding",
+        ]
+        .iter()
+        .any(|blocked| name.eq_ignore_ascii_case(blocked))
+        {
+            return false;
+        }
+        if pass_headers
+            .iter()
+            .any(|header| header.eq_ignore_ascii_case(name))
+        {
+            return true;
+        }
+        !DEFAULT_PROXY_HIDE_HEADERS
+            .iter()
+            .any(|hidden| name.eq_ignore_ascii_case(hidden))
+            && !hide_headers
                 .iter()
-                .any(|header| header.eq_ignore_ascii_case(&name))
-            {
-                return true;
-            }
-            !DEFAULT_PROXY_HIDE_HEADERS.contains(&name.as_str())
-                && !hide_headers
-                    .iter()
-                    .any(|header| header.eq_ignore_ascii_case(&name))
-        })
-        .collect()
+                .any(|header| header.eq_ignore_ascii_case(name))
+    });
+    headers
 }
 
 pub(in crate::server) fn apply_proxy_redirect(

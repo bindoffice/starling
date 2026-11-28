@@ -2,12 +2,12 @@ use super::*;
 
 pub(in crate::server) enum ReusableUpstreamConnection {
     Http1 {
-        upstream: String,
+        upstream: Arc<str>,
         config: UpstreamKeepaliveConfig,
         connection: UpstreamConnection,
     },
     Http2 {
-        upstream: String,
+        upstream: Arc<str>,
         config: UpstreamKeepaliveConfig,
         connection: ProxyV2Connection,
     },

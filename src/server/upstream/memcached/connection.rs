@@ -7,7 +7,7 @@ pub(in crate::server) fn memcached_keepalive_context(
     let upstream = http.upstreams.get(&memcached.raw)?;
     let config = upstream.keepalive.clone()?;
     (config.max_cached != 0).then(|| UpstreamKeepaliveContext {
-        name: memcached.raw.clone(),
+        name: upstream.name.clone(),
         config,
     })
 }

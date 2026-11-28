@@ -24,12 +24,12 @@ pub(in crate::server) async fn grpc_attempt(
     let started = Instant::now();
     let pool_key = keepalive.map(|_| grpc_upstream_pool_key(host, port, tls, context, variables));
     let mut connection = match (keepalive, pool_key.as_ref()) {
-        (Some(keepalive), Some(key)) => {
-            variables
-                .upstream_keepalive
-                .take_http2(&keepalive.name, key, &keepalive.config)
-                .await
-        }
+        (Some(keepalive), Some(key)) => variables.upstream_keepalive.take_http2_for(
+            variables.upstream_keepalive_worker,
+            &keepalive.name,
+            key,
+            &keepalive.config,
+        ),
         _ => None,
     };
     if connection.is_none() {

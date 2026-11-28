@@ -133,10 +133,12 @@ pub(in crate::server) async fn fastcgi_request(
                     None
                 };
                 if let (Some(keepalive), Some(connection)) = (keepalive.as_ref(), reusable) {
-                    variables
-                        .upstream_keepalive
-                        .put(&keepalive.name, &keepalive.config, connection)
-                        .await;
+                    variables.upstream_keepalive.put_for(
+                        variables.upstream_keepalive_worker,
+                        &keepalive.name,
+                        &keepalive.config,
+                        connection,
+                    );
                 }
                 variables.upstream_addr = attempted.join(", ");
                 variables.upstream_status = upstream_statuses.join(", ");
@@ -226,12 +228,12 @@ pub(in crate::server) async fn fastcgi_attempt(
     let (host, port) = target;
     let key = fastcgi_upstream_pool_key(host, port, context, variables);
     let mut connection = match keepalive {
-        Some(keepalive) => {
-            variables
-                .upstream_keepalive
-                .take(&keepalive.name, &key, &keepalive.config)
-                .await
-        }
+        Some(keepalive) => variables.upstream_keepalive.take_for(
+            variables.upstream_keepalive_worker,
+            &keepalive.name,
+            &key,
+            &keepalive.config,
+        ),
         None => None,
     };
     if connection.is_none() {
@@ -360,6 +362,7 @@ async fn fastcgi_exchange_connection(
                     spawn_fastcgi_keepalive_drain(
                         connection,
                         context.fastcgi_read_timeout,
+                        variables.upstream_keepalive_worker,
                         variables.upstream_keepalive.clone(),
                         keepalive.name.clone(),
                         keepalive.config.clone(),
@@ -391,8 +394,9 @@ async fn fastcgi_exchange_connection(
 fn spawn_fastcgi_keepalive_drain(
     mut connection: UpstreamConnection,
     read_timeout: Duration,
+    worker: usize,
     pool: Arc<UpstreamKeepalivePool>,
-    upstream: String,
+    upstream: Arc<str>,
     config: UpstreamKeepaliveConfig,
 ) {
     tokio::spawn(async move {
@@ -400,7 +404,7 @@ fn spawn_fastcgi_keepalive_drain(
             match read_fastcgi_record_with_timeout(&mut connection.reader, read_timeout).await {
                 Ok(record) if record.record_type == FCGI_END_REQUEST => {
                     if connection.reader.buffer().is_empty() {
-                        pool.put(&upstream, &config, connection).await;
+                        pool.put_for(worker, &upstream, &config, connection);
                     }
                     return;
                 }

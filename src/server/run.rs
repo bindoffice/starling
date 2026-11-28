@@ -54,6 +54,7 @@ pub async fn run(
         limits: Arc::new(Mutex::new(LimitState::default())),
         stats: Arc::new(ConnectionStats::default()),
         upstream_keepalive,
+        upstream_keepalive_worker: 0,
         proxy_cache,
         client_tls_cache: Arc::new(ClientTlsConfigCache::default()),
         http2_budget: Arc::new(Http2Budget::new()),
@@ -311,7 +312,7 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
     *state.stream_loggers.write().await = stream_loggers;
     *state.mail_loggers.write().await = mail_loggers;
     *state.mail_resolvers.write().await = mail_resolvers;
-    state.upstream_keepalive.clear().await;
+    state.upstream_keepalive.clear();
     state.proxy_cache.reload(new_config.http.as_ref());
     state.client_tls_cache.clear();
     let warnings = new_config.warnings.clone();

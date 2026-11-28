@@ -74,6 +74,7 @@ async fn completes_tls_handshake_and_serves_https() {
         limits: Arc::new(Mutex::new(LimitState::default())),
         stats: Arc::new(ConnectionStats::default()),
         upstream_keepalive: Arc::new(UpstreamKeepalivePool::default()),
+        upstream_keepalive_worker: 0,
         proxy_cache: Arc::new(ProxyCacheRegistry::new(config.http.as_ref())),
         client_tls_cache: Arc::new(ClientTlsConfigCache::default()),
         http2_budget: Arc::new(Http2Budget::new()),

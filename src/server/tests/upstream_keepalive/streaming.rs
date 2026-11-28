@@ -74,7 +74,7 @@ async fn reuses_named_http1_upstream_after_a_streaming_response() {
     assert!(first.contains("first"), "{first}");
 
     tokio::time::timeout(Duration::from_secs(1), async {
-        while state.upstream_keepalive.len("backend").await == 0 {
+        while state.upstream_keepalive.len("backend") == 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
@@ -279,7 +279,7 @@ async fn reuses_named_http1_upstream_after_a_prefetched_buffered_response() {
     assert!(body.iter().all(|byte| *byte == b'x'));
 
     tokio::time::timeout(Duration::from_secs(1), async {
-        while state.upstream_keepalive.len("backend").await == 0 {
+        while state.upstream_keepalive.len("backend") == 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })

@@ -40,35 +40,28 @@ async fn upstream_keepalive_pool_enforces_capacity_and_request_limit() {
             "backend",
             &config,
             UpstreamConnection::new(Box::new(client), key.clone()),
-        )
-        .await;
+        );
     }
-    assert_eq!(pool.len("backend").await, 2);
+    assert_eq!(pool.len("backend"), 2);
 
     let (client, _server) = tokio::io::duplex(64);
     let mut exhausted = UpstreamConnection::new(Box::new(client), key.clone());
     exhausted.requests = config.requests;
-    pool.put("backend", &config, exhausted).await;
-    assert_eq!(pool.len("backend").await, 2);
+    pool.put("backend", &config, exhausted);
+    assert_eq!(pool.len("backend"), 2);
     assert!(
         pool.take("backend", &key, &config)
-            .await
             .is_some_and(|connection| connection.requests < config.requests)
     );
 
     let (client, _server) = tokio::io::duplex(64);
     let mut expired = UpstreamConnection::new(Box::new(client), key.clone());
     expired.idle_since = Instant::now().checked_sub(Duration::from_secs(31)).unwrap();
-    pool.entries
-        .lock()
-        .await
-        .entry("backend".into())
-        .or_default()
-        .push_front(expired.into());
-    while let Some(connection) = pool.take("backend", &key, &config).await {
+    pool.push_for_test("backend", expired.into());
+    while let Some(connection) = pool.take("backend", &key, &config) {
         assert!(connection.idle_since.elapsed() < config.timeout);
     }
-    assert_eq!(pool.len("backend").await, 0);
+    assert_eq!(pool.len("backend"), 0);
 
     config.requests = 0;
     let (client, _server) = tokio::io::duplex(64);
@@ -76,11 +69,10 @@ async fn upstream_keepalive_pool_enforces_capacity_and_request_limit() {
         "backend",
         &config,
         UpstreamConnection::new(Box::new(client), key),
-    )
-    .await;
-    assert_eq!(pool.len("backend").await, 0);
+    );
+    assert_eq!(pool.len("backend"), 0);
 
-    pool.clear().await;
+    pool.clear();
     config.requests = 1;
     let stale_key = keepalive_test_key(8080);
     let (client, _server) = tokio::io::duplex(64);
@@ -88,9 +80,43 @@ async fn upstream_keepalive_pool_enforces_capacity_and_request_limit() {
         "backend",
         &config,
         UpstreamConnection::new(Box::new(client), stale_key),
-    )
-    .await;
-    assert_eq!(pool.len("backend").await, 0);
+    );
+    assert_eq!(pool.len("backend"), 0);
+}
+
+#[tokio::test]
+async fn upstream_keepalive_pool_isolates_worker_shards() {
+    let pool = UpstreamKeepalivePool::default();
+    let key = keepalive_test_key(8080);
+    let config = UpstreamKeepaliveConfig {
+        max_cached: 2,
+        requests: 1000,
+        time: Duration::from_secs(60),
+        timeout: Duration::from_secs(30),
+        local: false,
+    };
+    let (client, _server) = tokio::io::duplex(64);
+    pool.put_for(
+        1,
+        "backend",
+        &config,
+        UpstreamConnection::new(Box::new(client), key.clone()),
+    );
+    assert!(pool.take_for(2, "backend", &key, &config).is_none());
+    assert!(pool.take_for(1, "backend", &key, &config).is_some());
+
+    for worker in 1..=2 {
+        let (client, _server) = tokio::io::duplex(64);
+        pool.put_for(
+            worker,
+            "backend",
+            &config,
+            UpstreamConnection::new(Box::new(client), key.clone()),
+        );
+    }
+    assert_eq!(pool.len("backend"), 2);
+    pool.clear();
+    assert_eq!(pool.len("backend"), 0);
 }
 
 #[tokio::test]
@@ -107,19 +133,13 @@ async fn upstream_keepalive_time_applies_when_returning_a_connection() {
     let (client, _server) = tokio::io::duplex(64);
     let mut connection = UpstreamConnection::new(Box::new(client), key.clone());
     connection.created = Instant::now().checked_sub(Duration::from_secs(3)).unwrap();
-    pool.entries
-        .lock()
-        .await
-        .entry("backend".into())
-        .or_default()
-        .push_front(connection.into());
+    pool.push_for_test("backend", connection.into());
 
     let connection = pool
         .take("backend", &key, &config)
-        .await
         .expect("a previously pooled connection should be reusable once");
-    pool.put("backend", &config, connection).await;
-    assert_eq!(pool.len("backend").await, 0);
+    pool.put("backend", &config, connection);
+    assert_eq!(pool.len("backend"), 0);
 }
 
 #[tokio::test]

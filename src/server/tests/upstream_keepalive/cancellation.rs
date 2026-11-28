@@ -64,7 +64,7 @@ async fn client_abort_drops_an_incomplete_upstream_keepalive_connection() {
     first_closed_rx.await.unwrap();
 
     assert_eq!(
-        state.upstream_keepalive.len("backend").await,
+        state.upstream_keepalive.len("backend"),
         0,
         "an incomplete response connection must not enter the keepalive pool"
     );
@@ -153,7 +153,7 @@ async fn ignore_client_abort_drains_and_reuses_the_upstream_connection() {
     tokio::time::sleep(Duration::from_millis(150)).await;
     release.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(2), async {
-        while state.upstream_keepalive.len("backend").await == 0 {
+        while state.upstream_keepalive.len("backend") == 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })

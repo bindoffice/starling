@@ -56,7 +56,8 @@ pub(super) fn compile_stream(directive: &Directive, prefix: &Path) -> ConfigResu
             "upstream" => {
                 require_block(child)?;
                 let upstream = compile_upstream(child, UpstreamContext::Stream)?;
-                if upstreams.insert(upstream.name.clone(), upstream).is_some() {
+                let name = upstream.name.to_string();
+                if upstreams.insert(name, upstream).is_some() {
                     return Err(ConfigError::at(
                         child.location.clone(),
                         "duplicate upstream",

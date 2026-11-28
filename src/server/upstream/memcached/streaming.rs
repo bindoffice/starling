@@ -18,6 +18,7 @@ pub(in crate::server) async fn memcached_exchange_connection_streaming(
     request: &Request,
     context: &EffectiveConfig,
     keepalive: Option<UpstreamKeepaliveContext>,
+    worker: usize,
     pool: Arc<UpstreamKeepalivePool>,
 ) -> Result<MemcachedExchange, ProxyFailure> {
     connection.requests = connection.requests.saturating_add(1);
@@ -46,7 +47,7 @@ pub(in crate::server) async fn memcached_exchange_connection_streaming(
                 connection,
                 length,
                 context.memcached_read_timeout,
-                keepalive.map(|keepalive| (pool, keepalive)),
+                keepalive.map(|keepalive| (worker, pool, keepalive)),
             );
             Ok(MemcachedExchange::Streamed { body, gzip })
         }
@@ -97,7 +98,7 @@ fn spawn_memcached_body_stream(
     mut connection: UpstreamConnection,
     length: u64,
     read_timeout: Duration,
-    keepalive: Option<(Arc<UpstreamKeepalivePool>, UpstreamKeepaliveContext)>,
+    keepalive: Option<(usize, Arc<UpstreamKeepalivePool>, UpstreamKeepaliveContext)>,
 ) -> ResponseBody {
     let (sender, receiver) = mpsc::channel(STREAM_CHANNEL_CAPACITY);
     tokio::spawn(async move {
@@ -112,10 +113,9 @@ fn spawn_memcached_body_stream(
         match result {
             Ok(()) => {
                 if connection.reader.buffer().is_empty()
-                    && let Some((pool, keepalive)) = keepalive
+                    && let Some((worker, pool, keepalive)) = keepalive
                 {
-                    pool.put(&keepalive.name, &keepalive.config, connection)
-                        .await;
+                    pool.put_for(worker, &keepalive.name, &keepalive.config, connection);
                 }
             }
             Err(err) => {

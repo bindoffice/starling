@@ -123,10 +123,12 @@ pub(in crate::server) async fn scgi_request(
                     None
                 };
                 if let (Some(keepalive), Some(connection)) = (keepalive.as_ref(), reusable) {
-                    variables
-                        .upstream_keepalive
-                        .put(&keepalive.name, &keepalive.config, connection)
-                        .await;
+                    variables.upstream_keepalive.put_for(
+                        variables.upstream_keepalive_worker,
+                        &keepalive.name,
+                        &keepalive.config,
+                        connection,
+                    );
                 }
                 variables.upstream_addr = attempted.join(", ");
                 variables.upstream_status = upstream_statuses.join(", ");
@@ -216,12 +218,12 @@ async fn scgi_attempt_with_keepalive(
     let (host, port) = target;
     let key = scgi_upstream_pool_key(host, port, context, variables);
     let mut connection = match keepalive {
-        Some(keepalive) => {
-            variables
-                .upstream_keepalive
-                .take(&keepalive.name, &key, &keepalive.config)
-                .await
-        }
+        Some(keepalive) => variables.upstream_keepalive.take_for(
+            variables.upstream_keepalive_worker,
+            &keepalive.name,
+            &key,
+            &keepalive.config,
+        ),
         None => None,
     };
     if connection.is_none() {

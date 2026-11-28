@@ -35,6 +35,7 @@ pub(in crate::server) fn resolve_stream_targets(
             port,
             peer: None,
             check_health: false,
+            record_timing: false,
         })
         .into_iter()
         .collect()

@@ -10,38 +10,48 @@ use super::types::{
 #[derive(Debug)]
 pub struct UpstreamPeerGuard {
     pub(in crate::config::compile) active: Arc<AtomicUsize>,
-    pub(in crate::config::compile) health: Arc<Mutex<UpstreamHealth>>,
-    pub(in crate::config::compile) timing: Arc<Mutex<UpstreamTiming>>,
+    pub(in crate::config::compile) health: Option<Arc<Mutex<UpstreamHealth>>>,
+    pub(in crate::config::compile) timing: Option<Arc<Mutex<UpstreamTiming>>>,
     pub(in crate::config::compile) failed: bool,
 }
 
 impl Drop for UpstreamPeerGuard {
     fn drop(&mut self) {
-        let mut health = self
-            .health
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.failed {
-            health.failures = health.failures.saturating_add(1);
-            health.checked = Some(Instant::now());
-        } else {
-            health.failures = 0;
+        if let Some(health) = &self.health {
+            let mut health = health
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.failed {
+                health.failures = health.failures.saturating_add(1);
+                health.checked = Some(Instant::now());
+            } else {
+                health.failures = 0;
+            }
         }
-        let mut timing = self
-            .timing
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        update_inflight(&mut timing, -1);
+        if let Some(timing) = &self.timing {
+            let mut timing = timing
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            update_inflight(&mut timing, -1);
+        }
         self.active.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
 impl UpstreamServer {
     pub fn try_acquire(&self) -> Option<UpstreamPeerGuard> {
-        self.try_acquire_with_health(true)
+        self.try_acquire_with_options(true, true)
     }
 
     pub fn try_acquire_with_health(&self, check_health: bool) -> Option<UpstreamPeerGuard> {
+        self.try_acquire_with_options(check_health, true)
+    }
+
+    pub fn try_acquire_with_options(
+        &self,
+        check_health: bool,
+        record_timing: bool,
+    ) -> Option<UpstreamPeerGuard> {
         if !self.has_capacity() || (check_health && !self.health_available()) {
             return None;
         }
@@ -62,15 +72,15 @@ impl UpstreamServer {
             {
                 return Some(UpstreamPeerGuard {
                     active: self.active.clone(),
-                    health: self.health.clone(),
-                    timing: {
+                    health: check_health.then(|| self.health.clone()),
+                    timing: record_timing.then(|| {
                         let mut timing = self
                             .timing
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         update_inflight(&mut timing, 1);
                         self.timing.clone()
-                    },
+                    }),
                     failed: false,
                 });
             }
@@ -142,8 +152,10 @@ impl UpstreamPeerGuard {
     }
 
     pub fn record_timing(&mut self, timing: UpstreamAttemptTiming) {
-        let mut stats = self
-            .timing
+        let Some(timing_stats) = &self.timing else {
+            return;
+        };
+        let mut stats = timing_stats
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         update_average(&mut stats.connect_time, timing.connect);

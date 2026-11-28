@@ -28,6 +28,8 @@ Options:
   --h2-large-streams N      HTTP/2 streams per connection for large-file downloads (default: 4)
   --h2-large-requests N     HTTP/2 large-file total requests (default: 1024)
   --upload-requests N       HTTP/2 1 MiB upload requests (default: 1024)
+  --proxy-keepalive N       Named upstream keepalive cache size (default: 64)
+  --rlimit-nofile N         Raise the soft open-file limit to N (default: 65536; 0 keeps it)
   --workers VALUE           worker_processes value (default: auto)
   --small-bytes N           Small response size (default: 14)
   --large-mib N             Large response size in MiB (default: 8)
@@ -36,7 +38,8 @@ Options:
   --skip-native             Run Starling only
   --skip-starling           Run native Nginx only
   --skip-large              Skip the 8 MiB download scenario
-  --skip-upload             Skip the HTTP/2 upload scenario
+  --skip-upload             Skip the HTTP/2 upload scenario (already off by default)
+  --skip-proxy              Skip the upstream proxy keepalive scenarios
   --keep                    Keep the generated artifact directory on exit
   -h, --help                Show this help
 EOF
@@ -70,6 +73,8 @@ H2_REQUESTS=500000
 H2_LARGE_STREAMS=4
 H2_LARGE_REQUESTS=1024
 UPLOAD_REQUESTS=1024
+PROXY_KEEPALIVE=64
+RLIMIT_NOFILE=65536
 WORKERS=auto
 SMALL_BYTES=14
 LARGE_MIB=8
@@ -78,7 +83,8 @@ BUILD=1
 RUN_STARLING=1
 RUN_NATIVE=1
 RUN_LARGE=1
-RUN_UPLOAD=1
+RUN_UPLOAD=0
+RUN_PROXY=1
 KEEP=0
 
 while (($#)); do
@@ -101,6 +107,8 @@ while (($#)); do
         --h2-large-streams) H2_LARGE_STREAMS="${2:?missing value}"; shift 2 ;;
         --h2-large-requests) H2_LARGE_REQUESTS="${2:?missing value}"; shift 2 ;;
         --upload-requests) UPLOAD_REQUESTS="${2:?missing value}"; shift 2 ;;
+        --proxy-keepalive) PROXY_KEEPALIVE="${2:?missing value}"; shift 2 ;;
+        --rlimit-nofile) RLIMIT_NOFILE="${2:?missing value}"; shift 2 ;;
         --workers) WORKERS="${2:?missing value}"; shift 2 ;;
         --small-bytes) SMALL_BYTES="${2:?missing value}"; shift 2 ;;
         --large-mib) LARGE_MIB="${2:?missing value}"; shift 2 ;;
@@ -110,6 +118,7 @@ while (($#)); do
         --skip-starling) RUN_STARLING=0; shift ;;
         --skip-large) RUN_LARGE=0; shift ;;
         --skip-upload) RUN_UPLOAD=0; shift ;;
+        --skip-proxy) RUN_PROXY=0; shift ;;
         --keep) KEEP=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1" ;;
@@ -127,6 +136,8 @@ done
 [[ "$H2_LARGE_STREAMS" =~ ^[1-9][0-9]*$ ]] || die "invalid h2 large streams: $H2_LARGE_STREAMS"
 [[ "$H2_LARGE_REQUESTS" =~ ^[1-9][0-9]*$ ]] || die "invalid h2 large requests: $H2_LARGE_REQUESTS"
 [[ "$UPLOAD_REQUESTS" =~ ^[1-9][0-9]*$ ]] || die "invalid upload requests: $UPLOAD_REQUESTS"
+[[ "$PROXY_KEEPALIVE" =~ ^[1-9][0-9]*$ ]] || die "invalid proxy keepalive size: $PROXY_KEEPALIVE"
+[[ "$RLIMIT_NOFILE" =~ ^[0-9]+$ ]] || die "invalid open-file limit: $RLIMIT_NOFILE"
 ((H2_REQUESTS >= H2_CLIENTS)) || die "h2 requests must be at least h2 clients"
 ((H2_LARGE_REQUESTS >= H2_CLIENTS)) || die "h2 large requests must be at least h2 clients"
 if ((RUN_UPLOAD)); then
@@ -135,6 +146,45 @@ fi
 [[ "$SMALL_BYTES" =~ ^[1-9][0-9]*$ ]] || die "invalid small size: $SMALL_BYTES"
 [[ "$LARGE_MIB" =~ ^[1-9][0-9]*$ ]] || die "invalid large size: $LARGE_MIB"
 ((RUN_STARLING || RUN_NATIVE)) || die "both implementations were skipped"
+
+raise_nofile_limit() {
+    local current hard target
+    current="$(ulimit -Sn)"
+    hard="$(ulimit -Hn)"
+    target="$RLIMIT_NOFILE"
+    if [[ "$target" == "0" ]]; then
+        return 0
+    fi
+    if [[ "$hard" != "unlimited" ]] && ((target > hard)); then
+        target="$hard"
+    fi
+    if [[ "$current" == "unlimited" ]] || ((current >= target)); then
+        return 0
+    fi
+    ulimit -Sn "$target" 2>/dev/null ||
+        die "cannot raise the open-file limit from $current to $target (hard limit: $hard)"
+}
+
+check_nofile_capacity() {
+    local limit required h2_proxy_streams=0
+    limit="$(ulimit -Sn)"
+    [[ "$limit" == "unlimited" ]] && return 0
+    required=$((CONNECTIONS + 512))
+    if ((RUN_PROXY)); then
+        ((CONNECTIONS * 2 + 512 > required)) && required=$((CONNECTIONS * 2 + 512))
+        h2_proxy_streams=$((H2_CLIENTS * H2_STREAMS))
+        ((h2_proxy_streams > H2_REQUESTS)) && h2_proxy_streams="$H2_REQUESTS"
+        ((H2_CLIENTS + h2_proxy_streams + 512 > required)) &&
+            required=$((H2_CLIENTS + h2_proxy_streams + 512))
+    fi
+    if ((limit < required)); then
+        die "open-file limit $limit is too low for this matrix (need about $required); raise --rlimit-nofile or reduce clients/streams"
+    fi
+}
+
+raise_nofile_limit
+check_nofile_capacity
+printf 'open-file limit: %s\n' "$(ulimit -Sn)" >&2
 
 WRK_BIN="${WRK_BIN:-$(command -v wrk || true)}"
 H2LOAD_BIN="${H2LOAD_BIN:-$(command -v h2load || true)}"
@@ -262,6 +312,10 @@ http {
     tcp_nopush on;
     keepalive_requests 100000000;
     keepalive_timeout 300s;
+    upstream bench_backend {
+        server 127.0.0.1:$PORT;
+        keepalive $PROXY_KEEPALIVE;
+    }
     client_body_temp_path $prefix/temp/client_body;
     proxy_temp_path $prefix/temp/proxy;
     fastcgi_temp_path $prefix/temp/fastcgi;
@@ -277,6 +331,11 @@ http {
             client_body_buffer_size 64k;
             proxy_request_buffering on;
             proxy_pass http://127.0.0.1:$PORT/__drain;
+        }
+        location = /proxy-small {
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_pass http://bench_backend/small;
         }
         location = /__drain {
             return 204;
@@ -379,10 +438,16 @@ run_implementation() {
     local binary="$2"
     start_server "$implementation" "$binary"
     run_wrk_scenario "$implementation" h1-small /small "$CONNECTIONS"
+    if ((RUN_PROXY)); then
+        run_wrk_scenario "$implementation" h1-proxy-small /proxy-small "$CONNECTIONS"
+    fi
     if ((RUN_LARGE)); then
         run_wrk_scenario "$implementation" h1-large /large.bin "$LARGE_CONNECTIONS"
     fi
     run_h2_scenario "$implementation" small /small "$H2_REQUESTS" "$H2_STREAMS"
+    if ((RUN_PROXY)); then
+        run_h2_scenario "$implementation" proxy-small /proxy-small "$H2_REQUESTS" "$H2_STREAMS"
+    fi
     if ((RUN_LARGE)); then
         run_h2_scenario "$implementation" large /large.bin "$H2_LARGE_REQUESTS" \
             "$H2_LARGE_STREAMS"

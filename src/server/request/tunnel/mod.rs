@@ -59,6 +59,7 @@ pub(in crate::server) fn build_tunnel_dispatch(
                     port,
                     peer: None,
                     check_health: false,
+                    record_timing: false,
                 }]
             })
             .unwrap_or_default()

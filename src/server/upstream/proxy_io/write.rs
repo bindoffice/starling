@@ -64,13 +64,23 @@ where
 }
 
 pub(super) fn proxy_request_head(outgoing: &ProxyRequestMessage, version: &str) -> Vec<u8> {
-    let mut head = format!("{} {} HTTP/{version}\r\n", outgoing.method, outgoing.path);
-    let cookies: Vec<&str> = outgoing
-        .headers
-        .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("cookie"))
-        .map(|(_, value)| value.as_str())
-        .collect();
+    let mut head = Vec::with_capacity(
+        outgoing.method.len()
+            + outgoing.path.len()
+            + version.len()
+            + outgoing
+                .headers
+                .iter()
+                .map(|(name, value)| name.len() + value.len() + 4)
+                .sum::<usize>()
+            + 16,
+    );
+    head.extend_from_slice(outgoing.method.as_bytes());
+    head.push(b' ');
+    head.extend_from_slice(outgoing.path.as_bytes());
+    head.extend_from_slice(b" HTTP/");
+    head.extend_from_slice(version.as_bytes());
+    head.extend_from_slice(b"\r\n");
     let mut wrote_cookies = false;
     for (name, value) in &outgoing.headers {
         if name.eq_ignore_ascii_case("cookie") {
@@ -78,24 +88,29 @@ pub(super) fn proxy_request_head(outgoing: &ProxyRequestMessage, version: &str) 
                 continue;
             }
             wrote_cookies = true;
-            head.push_str(name);
-            head.push_str(": ");
-            for (index, cookie) in cookies.iter().enumerate() {
-                if index != 0 {
-                    head.push_str("; ");
+            head.extend_from_slice(name.as_bytes());
+            head.extend_from_slice(b": ");
+            let mut first_cookie = true;
+            for (other_name, other_value) in &outgoing.headers {
+                if !other_name.eq_ignore_ascii_case("cookie") {
+                    continue;
                 }
-                head.push_str(cookie);
+                if !first_cookie {
+                    head.extend_from_slice(b"; ");
+                }
+                first_cookie = false;
+                head.extend_from_slice(other_value.as_bytes());
             }
-            head.push_str("\r\n");
+            head.extend_from_slice(b"\r\n");
             continue;
         }
-        head.push_str(name);
-        head.push_str(": ");
-        head.push_str(value);
-        head.push_str("\r\n");
+        head.extend_from_slice(name.as_bytes());
+        head.extend_from_slice(b": ");
+        head.extend_from_slice(value.as_bytes());
+        head.extend_from_slice(b"\r\n");
     }
-    head.push_str("\r\n");
-    head.into_bytes()
+    head.extend_from_slice(b"\r\n");
+    head
 }
 
 pub(super) async fn write_remaining_proxy_body<S>(

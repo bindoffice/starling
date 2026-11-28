@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct UpstreamConfig {
-    pub name: String,
+    pub name: Arc<str>,
     pub servers: Vec<UpstreamServer>,
     pub method: UpstreamMethod,
     pub hash_key: Option<String>,

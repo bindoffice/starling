@@ -100,6 +100,7 @@ pub(in crate::server) async fn dispatch_http_request(
             limits: state.limits.clone(),
             stats: state.stats.clone(),
             upstream_keepalive: state.upstream_keepalive.clone(),
+            upstream_keepalive_worker: state.upstream_keepalive_worker,
             upstream_keepalive_generation,
             proxy_cache: state.proxy_cache.clone(),
             client_tls_cache: state.client_tls_cache.clone(),
