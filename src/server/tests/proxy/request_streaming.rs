@@ -97,6 +97,45 @@ async fn writes_streaming_request_body_with_chunked_upstream_framing() {
 }
 
 #[tokio::test]
+async fn writes_streaming_request_trailers_with_chunked_upstream_framing() {
+    let (mut reader, mut writer) = tokio::io::duplex(64 * 1024);
+    let (sender, stream) = crate::http::RequestBodyStream::channel();
+    let outgoing = ProxyRequestMessage {
+        method: "POST".into(),
+        path: "/".into(),
+        headers: vec![
+            ("Host".into(), "backend.test".into()),
+            ("Transfer-Encoding".into(), "chunked".into()),
+        ],
+        body: Vec::new(),
+        body_stream: Some(stream),
+        body_chunked: true,
+        body_limit: 0,
+    };
+    let task =
+        tokio::spawn(async move { write_proxy_request(&mut writer, &outgoing, "1.1").await });
+
+    sender.send(Bytes::from_static(b"payload")).await;
+    sender
+        .set_trailers(vec![crate::http::Header {
+            name: "X-Request-Trailer".into(),
+            value: "done".into(),
+        }])
+        .await;
+    sender.finish();
+    drop(sender);
+
+    let mut received = Vec::new();
+    reader.read_to_end(&mut received).await.unwrap();
+    task.await.unwrap().unwrap();
+    assert!(
+        received.ends_with(b"7\r\npayload\r\n0\r\nX-Request-Trailer: done\r\n\r\n"),
+        "{}",
+        String::from_utf8_lossy(&received)
+    );
+}
+
+#[tokio::test]
 async fn classifies_streaming_request_body_limit_errors_as_413() {
     let (_reader, mut writer) = tokio::io::duplex(64 * 1024);
     let (sender, stream) = crate::http::RequestBodyStream::channel();

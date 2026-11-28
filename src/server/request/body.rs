@@ -24,14 +24,11 @@ pub(in crate::server) fn request_body_stream_for_upstream<'a>(
     request: &'a Request,
     context: &EffectiveConfig,
 ) -> Option<&'a crate::http::RequestBodyStream> {
-    if request
-        .body_stream
-        .as_ref()
-        .is_some_and(crate::http::RequestBodyStream::is_file_backed)
-    {
-        return request.body_stream.as_ref();
-    }
-    request_body_stream_enabled(request, context).then_some(request.body_stream.as_ref()?)
+    let stream = request.body_stream.as_ref()?;
+    (crate::http::RequestBodyStream::is_file_backed(stream)
+        || crate::http::RequestBodyStream::has_trailers(stream)
+        || request_body_stream_enabled(request, context))
+    .then_some(stream)
 }
 
 pub(in crate::server) fn server_may_stream_request_body(server: &ServerConfig) -> bool {
@@ -156,7 +153,19 @@ pub(in crate::server) async fn buffer_request_body(
         )
         .await?;
         request.body = spooled.body;
-        request.body_stream = spooled.file.map(crate::http::RequestBodyStream::from_file);
+        request.body_stream = match spooled.file {
+            Some(file) => Some(crate::http::RequestBodyStream::from_file_with_trailers(
+                file,
+                spooled.trailers,
+            )),
+            None if !spooled.trailers.is_empty() => {
+                Some(crate::http::RequestBodyStream::from_bytes_with_trailers(
+                    bytes::Bytes::copy_from_slice(&request.body),
+                    spooled.trailers,
+                ))
+            }
+            None => None,
+        };
         return Ok(());
     }
 

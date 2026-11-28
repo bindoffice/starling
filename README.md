@@ -248,11 +248,11 @@ scripts/package-release.sh \
 
 Starling 以 Nginx 1.31.9 的配置和运行行为作为主要参考。HTTP/3 已提供
 `quinn` + `h3` 的初始实现，包括 `listen ... quic`、TLSv1.3/ALPN `h3`、
-请求/响应映射、流式请求正文、响应 trailers、自动 Alt-Svc 注入，以及
-reload/ACME 续期时的 QUIC server config 热更新；显式 `http3 off` 会关闭
-对应 QUIC listener。当前仍不支持 0-RTT 和多 endpoint UDP 分发。所有 QUIC
-数据报只经过首个 worker shard 中的一个 quinn endpoint driver，不会随 Tokio
-线程数增加独立收包路径。
+请求/响应映射、流式请求正文、请求/响应 trailers、HTTP 103、HTTP/3
+客户端证书与 `ssl_ocsp`、自动 Alt-Svc 注入，以及 reload/ACME 续期时的
+QUIC server config 热更新；显式 `http3 off` 会关闭对应 QUIC listener。
+当前仍不支持 0-RTT 和多 endpoint UDP 分发。单进程内的所有 QUIC 数据报经过
+一个 quinn endpoint driver，不会随 Tokio 线程数增加独立收包路径。
 其他明确边界包括动态模块、mail 模块、原生多 worker master 模型及部分
 Nginx 高级模块细节。
 

@@ -203,14 +203,15 @@ TLS 与 stream 代理能力。
 - HTTP/3/QUIC：`listen ... quic` 建立 UDP QUIC 监听，使用 TLSv1.3 和
   ALPN `h3`；支持 HTTP/server 级 `http3 on|off` 配置继承、`$http3` 变量、
   多请求并发、请求体增量读取、现有 router/proxy/static 响应管线、流式响应
-  body 和响应 trailers，但尚不转发请求 trailers 或 informational response。
+  body、请求/响应 trailers 与 HTTP 103 informational response。请求 trailers
+  可转发到 HTTP/2 上游；HTTP/1.1 上游使用 chunked 请求体承载 trailers。
   QUIC listener 复用同一地址的 HTTP TLS 证书与 SNI 配置；reload 和 ACME
   证书续期会通过 `Endpoint::set_server_config` 更新现有 endpoint，使新连接
   使用新证书和 TLS 配置，已有连接不受影响。显式 `http3 off` 不会绑定 QUIC
   listener，reload 时移除的 QUIC listener 会关闭对应 endpoint。普通
   HTTP/1.1/HTTP/2 响应会自动添加 `Alt-Svc: h3=":<port>"; ma=86400`，已有
-  `Alt-Svc` 响应头时不会覆盖。当前只在首个 worker shard 建立一个 UDP
-  endpoint，所有 QUIC 数据报由同一个 quinn endpoint driver 收发，0-RTT 关闭。
+  `Alt-Svc` 响应头时不会覆盖。当前单进程只建立一个 UDP endpoint，所有 QUIC
+  数据报由同一个 quinn endpoint driver 收发，0-RTT 关闭。
 - PROXY protocol v1/v2：HTTP 与 stream 流式监听的 `listen ... proxy_protocol`，
   支持 v1 的 `TCP4`、`TCP6`、`UNKNOWN`，v2 的 IPv4/IPv6 地址头、TLV 及
   `LOCAL`/不支持命令的无地址语义，以及
@@ -574,8 +575,8 @@ TLS 与 stream 代理能力。
   响应签名并动态热替换 rustls `CertifiedKey.ocsp`。刷新时间为
   `nextUpdate - 5m`，限制在 5 分钟到 1 小时之间，失败保留旧响应并 5 分钟后
   重试。`ssl_ocsp on|leaf` 配合 `ssl_ocsp_responder`、`ssl_ocsp_cache`
-  对 HTTP/1.1、HTTP/2 与 stream 下游客户端证书执行握手后的在线吊销检查；
-  HTTP/3 暂未接入该检查，也未暴露 HTTP/3 客户端证书变量。
+  对 HTTP/1.1、HTTP/2、HTTP/3 与 stream 下游客户端证书执行握手后的在线
+  吊销检查；HTTP/3 同时暴露与 HTTP/1.1、HTTP/2 一致的客户端证书变量。
 - 自动 HTTPS（默认开启）：`auto_https on|off` 支持
   `cert_dir=`、`email=`、`staging=on|off`、`acme_directory=`、
   `acme_ca_file=`、`challenge=http-01|dns-01`、`dns_hook=`、
@@ -779,12 +780,12 @@ stream {
 
 - HTTP/3/QUIC 初始实现边界：响应 trailers、自动 Alt-Svc 注入、QUIC
   endpoint 的 server config reload/ACME 热更新和移除 QUIC listener 已支持；
-  但尚无 0-RTT、请求 trailers、informational response、HTTP/3 客户端证书
-  变量/`ssl_ocsp` 集成。新增 QUIC listener 或重绑定 UDP 地址仍需重启。
-  UDP socket 当前只由首个 worker shard 持有一个 endpoint；增加 Tokio
-  worker 线程不会增加独立的 QUIC 收包路径，也未实现 `SO_REUSEPORT`
-  多 endpoint/多 socket 分片。未显式配置 `http3` 时，`listen ... quic`
-  继续隐式启用 HTTP/3；显式 `http3 off` 则不会创建 QUIC listener。
+  请求/响应 trailers、informational response、HTTP/3 客户端证书变量与
+  `ssl_ocsp` 集成也已支持；但尚无 0-RTT。新增 QUIC listener 或重绑定 UDP
+  地址仍需重启。UDP socket 当前只持有一个 endpoint；增加 Tokio worker
+  线程不会增加独立的 QUIC 收包路径。未显式配置 `http3` 时，
+  `listen ... quic` 继续隐式启用 HTTP/3；显式 `http3 off` 则不会创建 QUIC
+  listener。
 - 旧版 SSL/TLS 协议；rustls 仅支持 TLSv1.2 与 TLSv1.3。为兼容存量配置，
   `ssl_protocols` 中的 SSLv2、SSLv3、TLSv1、TLSv1.1 会与 TLSv1.2/TLSv1.3
   一起被接受，但 `-t` 和运行时错误日志会输出 `[warn]`，实际只启用
@@ -811,8 +812,8 @@ stream {
   `uwsgi_ssl_verify_depth` 和客户端证书。服务器及上游加密 PEM 私钥可分别通过
   `ssl_password_file`、`proxy_ssl_password_file`、`uwsgi_ssl_password_file`
   解锁。`ssl_stapling_verify on` 需要配置 `ssl_trusted_certificate`，否则
-  配置期报错。HTTP/3 客户端证书信息与 `ssl_ocsp` 尚未接入，见上文的
-  HTTP/3 边界。
+  配置期报错。HTTP/3 客户端证书信息与 `ssl_ocsp` 在线检查已接入，运行时
+  边界见上文。
 - 下游 HTTP/2 支持 TLS ALPN 和明文 prior knowledge（`listen ... http2` 或
   `http2 on`）。与 Nginx 1.31.9 一致，不支持 HTTP/1.1 `Upgrade: h2c`；HTTP/2
   server push 自 Nginx 1.25.1 起已移除，相关旧指令只做兼容告警并忽略。启用 HTTP/2

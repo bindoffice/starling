@@ -39,6 +39,9 @@ pub(super) async fn send_h3_response(
         && !matches!(response.status, 204 | 304);
     let has_output = has_body || has_trailers;
     let send_result = async {
+        for headers in response.early_hints() {
+            send_h3_informational(send, headers).await?;
+        }
         send.send_response(response_head)
             .await
             .map_err(|error| io::Error::other(error.to_string()))?;
@@ -68,6 +71,26 @@ pub(super) async fn send_h3_response(
             Err(error)
         }
     }
+}
+
+async fn send_h3_informational(send: &mut H3SendStream, headers: &[Header]) -> io::Result<()> {
+    let mut response = HttpResponse::builder().status(StatusCode::EARLY_HINTS);
+    for header in headers {
+        if is_h2_connection_header(&header.name) {
+            continue;
+        }
+        let Some(name) = h2_header_name(&header.name) else {
+            continue;
+        };
+        let Ok(value) = h2_header_value(&header.value) else {
+            continue;
+        };
+        response = response.header(name, value);
+    }
+    let response = response.body(()).map_err(io::Error::other)?;
+    send.send_response(response)
+        .await
+        .map_err(|error| io::Error::other(error.to_string()))
 }
 
 async fn send_h3_body(send: &mut H3SendStream, body: ResponseBody) -> io::Result<Vec<Header>> {

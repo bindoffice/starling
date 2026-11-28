@@ -123,6 +123,10 @@ async fn handle_http3_connection(
     let mut addresses =
         ConnectionAddresses::direct(ListenAddress::Inet(remote), ListenAddress::Inet(local));
     let tls = h3_tls_connection_info(&connection);
+    if let Err(error) = validate_http3_client_ocsp(&connection, &group, &state, &tls).await {
+        connection.close(quinn::VarInt::from_u32(0), b"client certificate rejected");
+        return Err(error);
+    }
     let max_field_section_size = {
         let snapshot = state.config_snapshot();
         let active_group = current_listener_group(&snapshot.listener_groups, &group);
@@ -450,14 +454,57 @@ fn h3_tls_connection_info(connection: &quinn::Connection) -> TlsConnectionInfo {
         .and_then(|data| data.protocol.as_deref())
         .map(|protocol| String::from_utf8_lossy(protocol).into_owned())
         .unwrap_or_else(|| "h3".to_string());
+    let client_certificate = h3_peer_certificates(connection)
+        .first()
+        .and_then(crate::server::tls::client_certificate_info);
     TlsConnectionInfo {
         protocol: "TLSv1.3".to_string(),
         cipher: String::new(),
         server_name,
         alpn_protocol,
-        client_certificate: None,
-        client_certificate_verified: false,
+        client_certificate_verified: client_certificate.is_some(),
+        client_certificate,
         client_certificate_error: None,
         session_reused: false,
     }
+}
+
+fn h3_peer_certificates(
+    connection: &quinn::Connection,
+) -> Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>> {
+    connection
+        .peer_identity()
+        .and_then(|identity| {
+            identity
+                .downcast::<Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>>()
+                .ok()
+        })
+        .map(|certificates| *certificates)
+        .unwrap_or_default()
+}
+
+async fn validate_http3_client_ocsp(
+    connection: &quinn::Connection,
+    group: &ListenerGroup,
+    state: &SharedState,
+    tls: &TlsConnectionInfo,
+) -> io::Result<()> {
+    let configs = { state.tls_configs.read().await.get(&group.address).cloned() };
+    let Some(configs) = configs else {
+        return Ok(());
+    };
+    let entry =
+        configs.select_name((!tls.server_name.is_empty()).then_some(tls.server_name.as_str()));
+    let Some(verifier) = entry.client_ocsp.as_ref() else {
+        return Ok(());
+    };
+    verifier
+        .validate(&h3_peer_certificates(connection))
+        .await
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("client certificate OCSP validation failed: {error}"),
+            )
+        })
 }

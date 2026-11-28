@@ -1,4 +1,5 @@
 use super::*;
+use crate::http::RequestBodyStream;
 
 #[cfg(test)]
 pub(in crate::server) async fn write_proxy_request<S>(
@@ -52,7 +53,7 @@ where
                 .is_some_and(|body| body.channel_ended())
             && !first_chunk_pending
         {
-            request.extend_from_slice(b"0\r\n\r\n");
+            append_request_trailers(&mut request, outgoing.body_stream.as_ref()).await;
             chunked_complete = true;
         }
     }
@@ -135,7 +136,7 @@ where
                 let mut framed = Vec::with_capacity(chunk.len() + 16);
                 append_request_body_chunk(&mut framed, &chunk, true);
                 if body.channel_ended() && !body.channel_has_pending().await {
-                    framed.extend_from_slice(b"0\r\n\r\n");
+                    append_request_trailers(&mut framed, Some(body)).await;
                     chunked_complete = true;
                 }
                 write_all_timed(stream, &framed, timeout).await?;
@@ -144,10 +145,35 @@ where
             }
         }
         if outgoing.body_chunked && !chunked_complete {
-            write_all_timed(stream, b"0\r\n\r\n", timeout).await?;
+            let mut trailers = Vec::new();
+            append_request_trailers(&mut trailers, Some(body)).await;
+            write_all_timed(stream, &trailers, timeout).await?;
         }
     }
     flush_timed(stream, timeout).await
+}
+
+async fn append_request_trailers(request: &mut Vec<u8>, body: Option<&RequestBodyStream>) {
+    request.extend_from_slice(b"0\r\n");
+    let Some(body) = body else {
+        request.extend_from_slice(b"\r\n");
+        return;
+    };
+    for trailer in body.take_trailers().await {
+        if crate::http::is_forbidden_trailer_name(&trailer.name) {
+            continue;
+        }
+        request.extend_from_slice(trailer.name.as_bytes());
+        request.extend_from_slice(b": ");
+        request.extend(crate::http::header_value_bytes(&trailer.value).iter().map(
+            |byte| match byte {
+                b'\r' | b'\n' => b' ',
+                byte => *byte,
+            },
+        ));
+        request.extend_from_slice(b"\r\n");
+    }
+    request.extend_from_slice(b"\r\n");
 }
 
 fn append_request_body_chunk(request: &mut Vec<u8>, chunk: &[u8], chunked: bool) {

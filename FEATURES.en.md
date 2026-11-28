@@ -259,16 +259,17 @@ they can be split further by responsibility.
   ALPN `h3`; supports HTTP/server-level `http3 on|off` inheritance, the
   `$http3` variable, concurrent requests, incremental request-body reads, the
   existing router/proxy/static response pipeline, streaming response bodies,
-  and response trailers, but request trailers and informational responses are
-  not forwarded. QUIC listeners reuse the HTTP TLS certificate and SNI
+  request/response trailers, and HTTP 103 informational responses. Request
+  trailers are forwarded to HTTP/2 upstreams; HTTP/1.1 upstreams carry them in
+  a chunked request body. QUIC listeners reuse the HTTP TLS certificate and SNI
   configuration for the same address. Reload and ACME certificate renewal call
   `Endpoint::set_server_config` so new connections use the replacement
   certificate and TLS configuration while existing connections remain intact.
   Explicit `http3 off` does not bind a QUIC listener, and reload closes the
   endpoint for a removed QUIC listener. HTTP/1.1 and HTTP/2 responses
   automatically receive `Alt-Svc: h3=":<port>"; ma=86400` unless an `Alt-Svc`
-  header is already present. A single UDP endpoint is created in the first
-  worker shard, so all QUIC datagrams are received and sent through one quinn
+  header is already present. The single-process runtime creates one UDP
+  endpoint, and all QUIC datagrams are received and sent through one quinn
   endpoint driver; 0-RTT is disabled.
 - PROXY protocol v1/v2: `listen ... proxy_protocol` for HTTP and stream
   streaming listeners, with v1 `TCP4`, `TCP6`, and `UNKNOWN`; v2 IPv4/IPv6
@@ -696,9 +697,9 @@ they can be split further by responsibility.
   `nextUpdate - 5m`, clamped between 5 minutes and 1 hour; failures keep the
   old response and retry after 5 minutes. `ssl_ocsp on|leaf` with
   `ssl_ocsp_responder` and `ssl_ocsp_cache` performs post-handshake online
-  revocation checks for HTTP/1.1, HTTP/2, and stream client certificates.
-  HTTP/3 does not yet integrate this check or expose HTTP/3 client-certificate
-  variables.
+  revocation checks for HTTP/1.1, HTTP/2, HTTP/3, and stream client
+  certificates. HTTP/3 also exposes the same client-certificate variables as
+  HTTP/1.1 and HTTP/2.
 - Automatic HTTPS (enabled by default): `auto_https on|off` supports
   `cert_dir=`, `email=`, `staging=on|off`, `acme_directory=`,
   `acme_ca_file=`, `challenge=http-01|dns-01`, `dns_hook=`,
@@ -915,15 +916,13 @@ explicit errors instead of silently running with incorrect behavior:
 
 - HTTP/3/QUIC initial implementation boundaries: response trailers, automatic
   Alt-Svc injection, QUIC endpoint server-config hot reload during reload/ACME
-  renewal, and removal of QUIC listeners are supported. 0-RTT, request
-  trailers, informational responses, and HTTP/3 client-certificate
-  variables/`ssl_ocsp` integration are not. Adding a QUIC listener or rebinding
-  its UDP address still requires a restart. The UDP socket is currently owned
-  only by the first worker shard, which creates one endpoint; adding Tokio
-  worker threads does not add independent QUIC receive paths, and
-  `SO_REUSEPORT`-based multi-endpoint/multi-socket sharding is not implemented.
-  `listen ... quic` enables HTTP/3 implicitly unless `http3` is explicitly
-  configured; explicit `http3 off` does not create a QUIC listener.
+  renewal, removal of QUIC listeners, request/response trailers, informational
+  responses, HTTP/3 client-certificate variables, and `ssl_ocsp` integration
+  are supported; 0-RTT is not. Adding a QUIC listener or rebinding its UDP
+  address still requires a restart. The UDP socket currently creates one
+  endpoint; adding Tokio worker threads does not add independent QUIC receive
+  paths. `listen ... quic` enables HTTP/3 implicitly unless `http3` is
+  explicitly configured; explicit `http3 off` does not create a QUIC listener.
 - Legacy SSL/TLS protocols; rustls supports only TLSv1.2 and TLSv1.3. For
   compatibility with existing configurations, SSLv2, SSLv3, TLSv1, and TLSv1.1
   in `ssl_protocols` are accepted alongside TLSv1.2/TLSv1.3, but `-t` and the
@@ -957,8 +956,8 @@ explicit errors instead of silently running with incorrect behavior:
   `ssl_password_file`, `proxy_ssl_password_file`, and
   `uwsgi_ssl_password_file`. `ssl_stapling_verify on` requires
   `ssl_trusted_certificate`, otherwise configuration reports an error.
-  HTTP/3 client-certificate information and `ssl_ocsp` integration are not
-  implemented, as noted in the HTTP/3 boundary above.
+  HTTP/3 client-certificate information and `ssl_ocsp` checks are integrated;
+  see the runtime boundaries above.
 - Downstream HTTP/2 supports TLS ALPN and cleartext prior knowledge
   (`listen ... http2` or `http2 on`). Consistent with Nginx 1.31.9, HTTP/1.1
   `Upgrade: h2c` is not supported; HTTP/2 server push was removed in Nginx

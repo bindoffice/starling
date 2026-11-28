@@ -90,10 +90,18 @@ async fn pump_h3_body(
 
     let trailers =
         timeout_stream(body.recv_trailers(), timeout, "request trailers timed out").await?;
-    if trailers.is_some() {
-        return Err(crate::http::malformed_request_body_error(
-            "request trailers are not supported",
-        ));
+    if let Some(trailers) = trailers {
+        sender
+            .set_trailers(
+                trailers
+                    .iter()
+                    .map(|(name, value)| Header {
+                        name: name.as_str().into(),
+                        value: crate::http::header_value_from_bytes(value.as_bytes()),
+                    })
+                    .collect(),
+            )
+            .await;
     }
     if content_length.is_some_and(|expected| total != expected) {
         return Err(content_length_mismatch_error());

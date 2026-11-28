@@ -146,3 +146,81 @@ fn builds_proxy_requests_with_body_method_and_header_controls() {
     assert_eq!(header(&custom, "Content-Length"), Some("12"));
     let _ = std::fs::remove_dir_all(prefix);
 }
+
+#[test]
+fn forwards_http3_request_trailers_with_chunked_framing() {
+    let (prefix, config) = test_config(
+        r#"
+                worker_processes 1;
+                events { worker_connections 64; }
+                http {
+                    server {
+                        listen 127.0.0.1:18098;
+                        location / {
+                            proxy_pass http://127.0.0.1:19000;
+                        }
+                    }
+                }
+            "#,
+        &[],
+    );
+    let http = config.http.as_ref().unwrap();
+    let server = &http.servers[0];
+    let request = Request {
+        method: "POST".into(),
+        target: "/".into(),
+        version: "HTTP/3.0".into(),
+        headers: Arc::new(vec![Header {
+            name: "Host".into(),
+            value: "example.test".into(),
+        }]),
+        body_stream: Some(crate::http::RequestBodyStream::from_bytes_with_trailers(
+            Bytes::from_static(b"payload"),
+            vec![Header {
+                name: "X-Request-Trailer".into(),
+                value: "done".into(),
+            }],
+        )),
+        body: Vec::new(),
+        remote_addr: "127.0.0.1:1234".into(),
+        local_addr: "127.0.0.1:18098".into(),
+        keep_alive: false,
+    };
+    let remote: SocketAddr = "127.0.0.1:1234".parse().unwrap();
+    let local: SocketAddr = "127.0.0.1:18098".parse().unwrap();
+    let mut variables = Variables::new(&request, "example.test", server, &local, &remote);
+    variables.proxy_host = "127.0.0.1:19000".into();
+    let env = RequestEnv {
+        uri: normalize_uri("/").unwrap(),
+        args: None,
+        unparsed_uri: Some("/".into()),
+        valid_location: true,
+        internal: false,
+        bypass_try_files: false,
+        add_uri_to_alias: false,
+        limits_checked: false,
+        auth_request_checked: false,
+        mirror_checked: false,
+    };
+    let location = &server.locations[0];
+    let outgoing = build_proxy_request(
+        location.context.proxy_pass.as_ref().unwrap(),
+        &request,
+        &env,
+        Some(location),
+        &location.context,
+        &variables,
+    );
+    assert!(outgoing.body_stream.is_some());
+    assert!(outgoing.body_chunked);
+    assert!(outgoing.headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("transfer-encoding") && value.eq_ignore_ascii_case("chunked")
+    }));
+    assert!(
+        !outgoing
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+    );
+    let _ = std::fs::remove_dir_all(prefix);
+}

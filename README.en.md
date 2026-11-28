@@ -264,11 +264,12 @@ scripts/package-release.sh \
 Starling primarily targets the configuration and runtime behavior of Nginx
 1.31.9. HTTP/3 has an initial `quinn` + `h3` implementation covering
 `listen ... quic`, TLSv1.3 with ALPN `h3`, request/response mapping, streaming
-request bodies, response trailers, automatic Alt-Svc injection, and QUIC
+request bodies, request/response trailers, HTTP 103, HTTP/3 client
+certificates and `ssl_ocsp`, automatic Alt-Svc injection, and QUIC
 server-config hot reload during reload/ACME renewal; explicit `http3 off`
 closes the corresponding QUIC listener. It does not yet support 0-RTT or
-multi-endpoint UDP distribution. All QUIC datagrams currently go through one
-quinn endpoint driver in the first worker shard; adding Tokio threads does not
+multi-endpoint UDP distribution. All QUIC datagrams in the single-process
+runtime go through one quinn endpoint driver; adding Tokio threads does not
 create independent receive paths. Other explicit boundaries include dynamic
 modules, the mail module, the native multi-worker master model, and some
 advanced Nginx module details.
@@ -349,10 +350,10 @@ These results show different path characteristics. For small responses, Nginx
 single-core request throughput is about 1.36x Starling, but Starling has lower
 p99 latency. For 8 MiB downloads, Starling throughput is about 1.76x Nginx and
 p99 is also substantially lower. The results do not generalize to public
-networks, multiple workers, or lossy links. The current Starling QUIC endpoint
-is only attached to the first worker shard, so this table intentionally fixes
-the shard count at one; multi-endpoint UDP distribution, 0-RTT, and long-lived
-connection reuse still need dedicated testing.
+networks, multiple processes, or lossy links. The current Starling QUIC
+endpoint uses one receive driver in the single-process runtime, so
+multi-endpoint UDP distribution, 0-RTT, and long-lived connection reuse still
+need dedicated testing.
 
 The reproducible client is in [examples/h3load.rs](examples/h3load.rs). Example
 command:

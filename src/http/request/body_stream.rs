@@ -6,6 +6,8 @@ use bytes::Bytes;
 use tokio::io::AsyncReadExt;
 use tokio::sync::{Mutex, mpsc, watch};
 
+use super::super::Header;
+
 const REQUEST_BODY_CHANNEL_CAPACITY: usize = 2;
 const REQUEST_BODY_FILE_CHUNK_SIZE: usize = 64 * 1024;
 const REQUEST_BODY_CAPTURE_LIMIT: usize = 64 * 1024;
@@ -13,13 +15,17 @@ const REQUEST_BODY_CAPTURE_LIMIT: usize = 64 * 1024;
 pub struct RequestBodyStream {
     source: Arc<RequestBodySource>,
     file_reader: Arc<Mutex<FileReader>>,
+    memory_reader: Arc<Mutex<usize>>,
     captured: Arc<Mutex<Option<Vec<u8>>>>,
     consumed: Arc<AtomicBool>,
+    trailers: Arc<Mutex<Option<Vec<Header>>>>,
+    trailers_present: Arc<AtomicBool>,
 }
 
 enum RequestBodySource {
     Channel(ChannelBody),
     File(Arc<super::body_storage::RequestBodyFile>),
+    Memory(Bytes),
 }
 
 struct ChannelBody {
@@ -40,6 +46,8 @@ enum FileReader {
 pub(crate) struct RequestBodySender {
     sender: mpsc::Sender<io::Result<Bytes>>,
     ended: Arc<AtomicBool>,
+    trailers: Arc<Mutex<Option<Vec<Header>>>>,
+    trailers_present: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -63,8 +71,11 @@ impl Clone for RequestBodyStream {
             // File-backed streams are replayable: every clone starts at byte
             // zero. Live channel clones continue to share the receiver.
             file_reader: Arc::new(Mutex::new(FileReader::NotStarted)),
+            memory_reader: Arc::new(Mutex::new(0)),
             captured: self.captured.clone(),
             consumed: self.consumed.clone(),
+            trailers: self.trailers.clone(),
+            trailers_present: self.trailers_present.clone(),
         }
     }
 }
@@ -84,10 +95,14 @@ impl RequestBodyStream {
     fn channel_inner(h2_window: Option<watch::Sender<Option<u32>>>) -> (RequestBodySender, Self) {
         let (sender, receiver) = mpsc::channel(REQUEST_BODY_CHANNEL_CAPACITY);
         let ended = Arc::new(AtomicBool::new(false));
+        let trailers = Arc::new(Mutex::new(None));
+        let trailers_present = Arc::new(AtomicBool::new(false));
         (
             RequestBodySender {
                 sender,
                 ended: ended.clone(),
+                trailers: trailers.clone(),
+                trailers_present: trailers_present.clone(),
             },
             Self {
                 source: Arc::new(RequestBodySource::Channel(ChannelBody {
@@ -96,18 +111,45 @@ impl RequestBodyStream {
                     ended,
                 })),
                 file_reader: Arc::new(Mutex::new(FileReader::NotStarted)),
+                memory_reader: Arc::new(Mutex::new(0)),
                 captured: Arc::new(Mutex::new(Some(Vec::new()))),
                 consumed: Arc::new(AtomicBool::new(false)),
+                trailers,
+                trailers_present,
             },
         )
     }
 
     pub(crate) fn from_file(file: Arc<super::body_storage::RequestBodyFile>) -> Self {
+        Self::from_file_with_trailers(file, Vec::new())
+    }
+
+    pub(crate) fn from_file_with_trailers(
+        file: Arc<super::body_storage::RequestBodyFile>,
+        trailers: Vec<Header>,
+    ) -> Self {
+        let trailers_present = Arc::new(AtomicBool::new(!trailers.is_empty()));
         Self {
             source: Arc::new(RequestBodySource::File(file)),
             file_reader: Arc::new(Mutex::new(FileReader::NotStarted)),
+            memory_reader: Arc::new(Mutex::new(0)),
             captured: Arc::new(Mutex::new(None)),
             consumed: Arc::new(AtomicBool::new(false)),
+            trailers: Arc::new(Mutex::new((!trailers.is_empty()).then_some(trailers))),
+            trailers_present,
+        }
+    }
+
+    pub(crate) fn from_bytes_with_trailers(body: Bytes, trailers: Vec<Header>) -> Self {
+        let trailers_present = Arc::new(AtomicBool::new(!trailers.is_empty()));
+        Self {
+            source: Arc::new(RequestBodySource::Memory(body)),
+            file_reader: Arc::new(Mutex::new(FileReader::NotStarted)),
+            memory_reader: Arc::new(Mutex::new(0)),
+            captured: Arc::new(Mutex::new(None)),
+            consumed: Arc::new(AtomicBool::new(false)),
+            trailers: Arc::new(Mutex::new((!trailers.is_empty()).then_some(trailers))),
+            trailers_present,
         }
     }
 
@@ -118,7 +160,7 @@ impl RequestBodyStream {
     pub fn file(&self) -> Option<Arc<super::body_storage::RequestBodyFile>> {
         match self.source.as_ref() {
             RequestBodySource::File(file) => Some(file.clone()),
-            RequestBodySource::Channel(_) => None,
+            RequestBodySource::Channel(_) | RequestBodySource::Memory(_) => None,
         }
     }
 
@@ -177,6 +219,19 @@ impl RequestBodyStream {
                 *remaining = remaining.saturating_sub(read as u64);
                 buffer.truncate(read);
                 let data = Bytes::from(buffer);
+                self.capture(&data).await;
+                Ok(Some(data))
+            }
+            RequestBodySource::Memory(body) => {
+                let mut offset = self.memory_reader.lock().await;
+                if *offset >= body.len() {
+                    return Ok(None);
+                }
+                let end = (*offset)
+                    .saturating_add(REQUEST_BODY_FILE_CHUNK_SIZE)
+                    .min(body.len());
+                let data = body.slice(*offset..end);
+                *offset = end;
                 self.capture(&data).await;
                 Ok(Some(data))
             }
@@ -274,6 +329,12 @@ impl RequestBodyStream {
             RequestBodySource::File(_) => {
                 *self.file_reader.lock().await = FileReader::Done;
             }
+            RequestBodySource::Memory(_) => {
+                let mut offset = self.memory_reader.lock().await;
+                if let RequestBodySource::Memory(body) = self.source.as_ref() {
+                    *offset = body.len();
+                }
+            }
         }
     }
 
@@ -289,7 +350,7 @@ impl RequestBodyStream {
     pub(crate) fn channel_ended(&self) -> bool {
         match self.source.as_ref() {
             RequestBodySource::Channel(channel) => channel.ended.load(Ordering::Acquire),
-            RequestBodySource::File(_) => false,
+            RequestBodySource::File(_) | RequestBodySource::Memory(_) => false,
         }
     }
 
@@ -306,7 +367,16 @@ impl RequestBodyStream {
                 .as_ref()
                 .is_some_and(|receiver| !receiver.is_empty()),
             RequestBodySource::File(file) => !file.is_empty(),
+            RequestBodySource::Memory(body) => *self.memory_reader.lock().await < body.len(),
         }
+    }
+
+    pub(crate) async fn take_trailers(&self) -> Vec<Header> {
+        self.trailers.lock().await.take().unwrap_or_default()
+    }
+
+    pub(crate) fn has_trailers(&self) -> bool {
+        self.trailers_present.load(Ordering::Acquire)
     }
 }
 
@@ -381,6 +451,13 @@ impl RequestBodySender {
 
     pub(crate) fn finish(&self) {
         self.ended.store(true, Ordering::Release);
+    }
+
+    pub(crate) async fn set_trailers(&self, trailers: Vec<Header>) {
+        if !trailers.is_empty() {
+            *self.trailers.lock().await = Some(trailers);
+            self.trailers_present.store(true, Ordering::Release);
+        }
     }
 }
 

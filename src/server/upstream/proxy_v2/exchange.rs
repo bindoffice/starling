@@ -2,6 +2,7 @@ use super::headers::{H2ResponseHead, read_h2_response_head};
 use super::response::{H2ResponseReadOptions, read_h2_response};
 use super::*;
 use crate::http::RequestBodyStream;
+use crate::http::is_forbidden_trailer_name;
 
 #[derive(Clone, Copy)]
 pub(in crate::server) enum H2StreamingPolicy<'a> {
@@ -109,12 +110,39 @@ async fn send_h2_body(
         {
             send_h2_chunk(stream, &chunk, false, timeout).await?;
         }
-        stream
-            .send_data(Bytes::new(), true)
-            .map_err(|_| ProxyFailure::Failure)?;
+        send_h2_request_trailers(stream, body_stream).await?;
         return Ok(());
     }
     send_h2_chunk(stream, body, true, timeout).await
+}
+
+async fn send_h2_request_trailers(
+    stream: &mut h2::SendStream<Bytes>,
+    body_stream: &RequestBodyStream,
+) -> Result<(), ProxyFailure> {
+    let trailers = body_stream.take_trailers().await;
+    let mut fields = http::HeaderMap::new();
+    for trailer in trailers {
+        if is_forbidden_trailer_name(&trailer.name) {
+            continue;
+        }
+        let Some(name) = crate::server::http2::h2_header_name(&trailer.name) else {
+            continue;
+        };
+        let Ok(value) = crate::server::http2::h2_header_value(&trailer.value) else {
+            continue;
+        };
+        fields.append(name, value);
+    }
+    if fields.is_empty() {
+        stream
+            .send_data(Bytes::new(), true)
+            .map_err(|_| ProxyFailure::Failure)
+    } else {
+        stream
+            .send_trailers(fields)
+            .map_err(|_| ProxyFailure::Failure)
+    }
 }
 
 async fn send_h2_chunk(

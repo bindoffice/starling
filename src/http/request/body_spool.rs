@@ -6,13 +6,14 @@ use std::sync::Arc;
 use super::body_storage::RequestBodyFile;
 use super::body_stream::RequestBodyStream;
 use crate::config::{ClientBodyInFileOnly, ClientBodyTempPath};
-use crate::http::{TempFileGuard, create_temp_file};
+use crate::http::{Header, TempFileGuard, create_temp_file};
 
 const SPOOL_WRITE_BATCH: usize = 64 * 1024;
 
 pub struct SpooledRequestBody {
     pub body: Vec<u8>,
     pub file: Option<Arc<RequestBodyFile>>,
+    pub trailers: Vec<Header>,
 }
 
 pub async fn spool_request_body(
@@ -47,6 +48,10 @@ pub async fn spool_request_body(
         }
     }
 
+    let trailers = match stream {
+        Some(stream) => stream.take_trailers().await,
+        None => Vec::new(),
+    };
     let file = match spool {
         Some(spool) => {
             let path = spool.finish()?;
@@ -58,7 +63,11 @@ pub async fn spool_request_body(
         None => None,
     };
 
-    Ok(SpooledRequestBody { body, file })
+    Ok(SpooledRequestBody {
+        body,
+        file,
+        trailers,
+    })
 }
 
 struct SpoolFile {

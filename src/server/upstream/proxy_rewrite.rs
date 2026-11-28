@@ -33,16 +33,21 @@ pub(in crate::server) fn build_proxy_request(
     let file_backed_body = body_stream
         .as_ref()
         .is_some_and(crate::http::RequestBodyStream::is_file_backed);
+    let has_trailers = body_stream
+        .as_ref()
+        .is_some_and(crate::http::RequestBodyStream::has_trailers);
     let body_chunked = body_stream.is_some()
-        && !file_backed_body
-        && request.header("content-length").is_none()
-        && (request.version == "HTTP/2.0"
-            || request.header("transfer-encoding").is_some_and(|value| {
-                value
-                    .split(',')
-                    .next_back()
-                    .is_some_and(|value| value.trim().eq_ignore_ascii_case("chunked"))
-            }));
+        && (has_trailers
+            || (!file_backed_body
+                && request.header("content-length").is_none()
+                && (request.version == "HTTP/2.0"
+                    || request.version == "HTTP/3.0"
+                    || request.header("transfer-encoding").is_some_and(|value| {
+                        value
+                            .split(',')
+                            .next_back()
+                            .is_some_and(|value| value.trim().eq_ignore_ascii_case("chunked"))
+                    }))));
     let mut host_header_set = false;
     let mut headers = Vec::with_capacity(request.headers.len() + context.proxy_headers.len() + 1);
     if context.proxy_pass_request_headers {
