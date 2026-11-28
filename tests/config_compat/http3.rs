@@ -28,8 +28,10 @@ fn compiles_http3_directive_and_quic_listener() {
     let config = compile(document, prefix.clone(), config_path).unwrap();
     let servers = &config.http.as_ref().unwrap().servers;
     assert!(servers[0].http3);
+    assert!(servers[0].http3_explicit);
     assert!(servers[0].listens[0].quic);
     assert!(!servers[1].http3);
+    assert!(servers[1].http3_explicit);
     assert!(servers[1].listens[0].quic);
     let _ = fs::remove_dir_all(prefix);
 }

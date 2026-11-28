@@ -259,9 +259,17 @@ they can be split further by responsibility.
   ALPN `h3`; supports HTTP/server-level `http3 on|off` inheritance, the
   `$http3` variable, concurrent requests, incremental request-body reads, the
   existing router/proxy/static response pipeline, streaming response bodies,
-  and response trailers. QUIC listeners reuse the HTTP TLS certificate and SNI
-  configuration for the same address; the current UDP endpoint is created
-  only in the first worker shard, and 0-RTT is disabled.
+  and response trailers, but request trailers and informational responses are
+  not forwarded. QUIC listeners reuse the HTTP TLS certificate and SNI
+  configuration for the same address. Reload and ACME certificate renewal call
+  `Endpoint::set_server_config` so new connections use the replacement
+  certificate and TLS configuration while existing connections remain intact.
+  Explicit `http3 off` does not bind a QUIC listener, and reload closes the
+  endpoint for a removed QUIC listener. HTTP/1.1 and HTTP/2 responses
+  automatically receive `Alt-Svc: h3=":<port>"; ma=86400` unless an `Alt-Svc`
+  header is already present. A single UDP endpoint is created in the first
+  worker shard, so all QUIC datagrams are received and sent through one quinn
+  endpoint driver; 0-RTT is disabled.
 - PROXY protocol v1/v2: `listen ... proxy_protocol` for HTTP and stream
   streaming listeners, with v1 `TCP4`, `TCP6`, and `UNKNOWN`; v2 IPv4/IPv6
   address headers, TLVs, and addressless semantics for `LOCAL`/unsupported
@@ -462,8 +470,9 @@ they can be split further by responsibility.
   `keepalive`. `grpcs://` also supports SNI/name, session reuse, protocols,
   cipher suites, certificate-chain and CRL validation, client certificates,
   and encrypted-key passphrases; `grpc_ssl_conf_command` explicitly errors
-  under the rustls backend, and `grpc_ssl_certificate_cache` currently remains
-  only a configuration compatibility entry.
+  under the rustls backend; `grpc_ssl_certificate_cache` currently remains only
+  a configuration compatibility entry and does not control the existing
+  internal `ClientTlsConfigCache`.
 - FastCGI: TCP or UNIX domain socket `fastcgi_pass` and named upstreams,
   `include fastcgi_params`, `fastcgi_param ... if_not_empty`, `fastcgi_index`,
   `fastcgi_split_path_info`/`$fastcgi_path_info`, request header/body
@@ -679,11 +688,17 @@ they can be split further by responsibility.
   and validity variables, plus HTTP/1.1/HTTP/2 ALPN. HTTP/server and stream
   main/server support `ssl_stapling on|off`, `ssl_stapling_verify on|off`,
   `ssl_stapling_file`, `ssl_stapling_responder`, `resolver`, and
-  `resolver_timeout`: OCSP is fetched from the certificate AIA (or an explicit
-  responder), the chain/response signature is verified against
-  `ssl_trusted_certificate`, and rustls `CertifiedKey.ocsp` is hot-swapped.
-  Refresh is scheduled at `nextUpdate - 5m`, clamped between 5 minutes and
-  1 hour; failures keep the old response and retry after 5 minutes.
+  `resolver_timeout`: HTTP and HTTPS OCSP responders are supported. HTTPS
+  responder certificate chains are verified through rustls using
+  `ssl_trusted_certificate` or the system CA bundle; OCSP response signatures
+  are then verified against the trusted certificate and rustls
+  `CertifiedKey.ocsp` is hot-swapped. Refresh is scheduled at
+  `nextUpdate - 5m`, clamped between 5 minutes and 1 hour; failures keep the
+  old response and retry after 5 minutes. `ssl_ocsp on|leaf` with
+  `ssl_ocsp_responder` and `ssl_ocsp_cache` performs post-handshake online
+  revocation checks for HTTP/1.1, HTTP/2, and stream client certificates.
+  HTTP/3 does not yet integrate this check or expose HTTP/3 client-certificate
+  variables.
 - Automatic HTTPS (enabled by default): `auto_https on|off` supports
   `cert_dir=`, `email=`, `staging=on|off`, `acme_directory=`,
   `acme_ca_file=`, `challenge=http-01|dns-01`, `dns_hook=`,
@@ -898,14 +913,17 @@ stream {
 The following capabilities are not complete. Configuration using them reports
 explicit errors instead of silently running with incorrect behavior:
 
-- HTTP/3/QUIC initial implementation boundaries: no 0-RTT, automatic Alt-Svc
-  injection, HTTP/3 request trailers, informational responses, client
-  certificate variable/OCSP runtime integration, or QUIC endpoint hot reload.
-  The UDP socket is currently owned only by the first worker shard, and
-  `SO_REUSEPORT`-based multi-worker distribution is not implemented.
-  `listen ... quic` currently enables HTTP/3 implicitly; `http3 off` only
-  records configuration inheritance state and does not close the QUIC
-  listener.
+- HTTP/3/QUIC initial implementation boundaries: response trailers, automatic
+  Alt-Svc injection, QUIC endpoint server-config hot reload during reload/ACME
+  renewal, and removal of QUIC listeners are supported. 0-RTT, request
+  trailers, informational responses, and HTTP/3 client-certificate
+  variables/`ssl_ocsp` integration are not. Adding a QUIC listener or rebinding
+  its UDP address still requires a restart. The UDP socket is currently owned
+  only by the first worker shard, which creates one endpoint; adding Tokio
+  worker threads does not add independent QUIC receive paths, and
+  `SO_REUSEPORT`-based multi-endpoint/multi-socket sharding is not implemented.
+  `listen ... quic` enables HTTP/3 implicitly unless `http3` is explicitly
+  configured; explicit `http3 off` does not create a QUIC listener.
 - Legacy SSL/TLS protocols; rustls supports only TLSv1.2 and TLSv1.3. For
   compatibility with existing configurations, SSLv2, SSLv3, TLSv1, and TLSv1.1
   in `ssl_protocols` are accepted alongside TLSv1.2/TLSv1.3, but `-t` and the
@@ -928,18 +946,19 @@ explicit errors instead of silently running with incorrect behavior:
 - `uwsgi_ssl_conf_command` also depends on OpenSSL `SSL_CONF` and reports an
   explicit error at configuration time; use `uwsgi_ssl_protocols` and
   `uwsgi_ssl_ciphers` instead. `uwsgi_ssl_certificate_cache` remains a
-  configuration compatibility entry, and certificates are still loaded
-  statically from configuration.
+  configuration compatibility entry; upstream `ClientConfig` reuse is handled
+  internally by `ClientTlsConfigCache`, which ignores the directive's `max=`,
+  `inactive=`, `valid=`, and `off` parameters.
 - `ssl_verify_client` supports `on`, `optional`, and `optional_no_ca`, with
   client certificate revocation checking through `ssl_crl`; HTTP/stream
   upstreams also support `proxy_ssl_crl`, `proxy_ssl_verify_depth`,
   `uwsgi_ssl_crl`/`uwsgi_ssl_verify_depth`, and client certificates. Encrypted
   PEM private keys for the server and upstreams can be unlocked through
   `ssl_password_file`, `proxy_ssl_password_file`, and
-  `uwsgi_ssl_password_file`. OCSP Stapling supports HTTP cleartext responder
-  URLs; HTTPS responders and `ssl_ocsp` client-certificate online validation
-  are not implemented. `ssl_stapling_verify on` requires
+  `uwsgi_ssl_password_file`. `ssl_stapling_verify on` requires
   `ssl_trusted_certificate`, otherwise configuration reports an error.
+  HTTP/3 client-certificate information and `ssl_ocsp` integration are not
+  implemented, as noted in the HTTP/3 boundary above.
 - Downstream HTTP/2 supports TLS ALPN and cleartext prior knowledge
   (`listen ... http2` or `http2 on`). Consistent with Nginx 1.31.9, HTTP/1.1
   `Upgrade: h2c` is not supported; HTTP/2 server push was removed in Nginx
@@ -1015,9 +1034,13 @@ include `proxy_send_lowat`, `fastcgi_send_lowat`, `gzip_window`, `gzip_hash`,
 `proxy_ssl_certificate_cache`, `grpc_ssl_certificate_cache`, and
 `uwsgi_ssl_certificate_cache`. They allow standard Nginx configurations to pass
 migration checks and their argument forms are validated according to Nginx
-constraints, but they do not change Starling's socket, zlib buffering, or
-certificate-loading policies. `proxy_send_lowat` and `fastcgi_send_lowat` also
-emit explicit "no effect" diagnostics to avoid silent misinterpretation.
+constraints, but they do not change Starling's socket or zlib buffering
+policies. Server certificates are loaded only when TLS configuration is built
+at startup or reload, so `ssl_certificate_cache` currently has no runtime
+effect. The three upstream certificate-cache directives do not control the
+internal `ClientTlsConfigCache`, which reuses at most 64 `ClientConfig` entries
+and is cleared on reload. `proxy_send_lowat` and `fastcgi_send_lowat` also emit
+explicit "no effect" diagnostics to avoid silent misinterpretation.
 
 Before production deployment, run `-t` with the target configuration and use
 integration tests to verify proxy, TLS, and timeout behavior.

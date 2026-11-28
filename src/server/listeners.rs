@@ -1,18 +1,27 @@
 use super::*;
 
+#[cfg(test)]
 pub(in crate::server) fn listener_signature(config: &RuntimeConfig) -> ListenerSignature {
-    let http = build_listener_groups(config)
-        .into_iter()
+    let groups = build_listener_groups(config);
+    listener_signature_for_groups(config, &groups)
+}
+
+fn listener_signature_for_groups(
+    config: &RuntimeConfig,
+    groups: &[ListenerGroup],
+) -> ListenerSignature {
+    let http = groups
+        .iter()
         .map(|group| {
             (
-                group.address,
+                group.address.clone(),
                 group.ssl,
                 group.http2,
                 group.http3,
                 group.tcp,
                 group.quic,
                 group.proxy_protocol,
-                group.socket_options,
+                group.socket_options.clone(),
             )
         })
         .collect();
@@ -42,6 +51,51 @@ pub(in crate::server) fn listener_signature(config: &RuntimeConfig) -> ListenerS
     (http, stream, mail)
 }
 
+pub(in crate::server) fn listeners_reload_compatible(
+    old_config: &RuntimeConfig,
+    new_config: &RuntimeConfig,
+    old_groups: &[ListenerGroup],
+    new_groups: &[ListenerGroup],
+) -> bool {
+    if !http_listeners_reload_compatible(old_groups, new_groups) {
+        return false;
+    }
+    let (_, old_stream, old_mail) = listener_signature_for_groups(old_config, old_groups);
+    let (_, new_stream, new_mail) = listener_signature_for_groups(new_config, new_groups);
+    old_stream == new_stream && old_mail == new_mail
+}
+
+fn http_listeners_reload_compatible(
+    old_groups: &[ListenerGroup],
+    new_groups: &[ListenerGroup],
+) -> bool {
+    for old in old_groups {
+        let Some(new) = new_groups
+            .iter()
+            .find(|candidate| candidate.address == old.address)
+        else {
+            if old.tcp || !old.quic {
+                return false;
+            }
+            continue;
+        };
+        if old.tcp != new.tcp || (!old.quic && new.quic) {
+            return false;
+        }
+        if old.tcp
+            && (old.ssl != new.ssl
+                || old.http2 != new.http2
+                || old.proxy_protocol != new.proxy_protocol
+                || old.socket_options != new.socket_options)
+        {
+            return false;
+        }
+    }
+    new_groups
+        .iter()
+        .all(|new| old_groups.iter().any(|old| old.address == new.address))
+}
+
 pub(in crate::server) fn build_listener_groups(config: &RuntimeConfig) -> Vec<ListenerGroup> {
     let Some(http) = &config.http else {
         return Vec::new();
@@ -50,6 +104,7 @@ pub(in crate::server) fn build_listener_groups(config: &RuntimeConfig) -> Vec<Li
     for server in &http.servers {
         for listen in &server.listens {
             let entry = groups.entry(listen.address.clone()).or_default();
+            let http3_enabled = http3_enabled_for_listener(server, listen);
             if !entry.server_ids.contains(&server.id) {
                 entry.server_ids.push(server.id);
             }
@@ -60,7 +115,7 @@ pub(in crate::server) fn build_listener_groups(config: &RuntimeConfig) -> Vec<Li
             entry.http2 |= listen.http2 || server.http2;
             entry.http3 |= server.http3;
             entry.tcp |= !listen.quic;
-            entry.quic |= listen.quic;
+            entry.quic |= listen.quic && http3_enabled;
             entry.proxy_protocol |= listen.proxy_protocol;
             if listen.socket_options_set {
                 entry.socket_options = listen.socket_options.clone();
@@ -81,9 +136,17 @@ pub(in crate::server) fn build_listener_groups(config: &RuntimeConfig) -> Vec<Li
             proxy_protocol: group.proxy_protocol,
             socket_options: group.socket_options,
         })
+        .filter(|group| group.tcp || group.quic)
         .collect();
     result.sort_by_key(|group| group.address.clone());
     result
+}
+
+pub(in crate::server) fn http3_enabled_for_listener(
+    server: &ServerConfig,
+    listen: &crate::config::ListenConfig,
+) -> bool {
+    !listen.quic || !server.http3_explicit || server.http3
 }
 
 pub(in crate::server) fn current_listener_group<'a>(

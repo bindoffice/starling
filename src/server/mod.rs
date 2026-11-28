@@ -87,10 +87,10 @@ use tls::{
 use tls::{
     ClientTlsConfigCache, ClientTlsOptions, HttpTlsConfigs, ServerCertificateEntry,
     ServerCertificateResolver, StreamTlsConfigs, TlsConnectionInfo, accept_http_tls,
-    accept_stream_tls, build_http3_server_config, build_mail_client_cert_verifier,
-    build_mail_client_certificate_verifier, build_stream_tls_configs, build_tls_configs,
-    client_certificate_verify_failure, install_crypto_provider, load_certificate_entries,
-    rustls_protocol_versions, tls_connection_info, tls_crypto_provider,
+    accept_stream_tls, build_mail_client_cert_verifier, build_mail_client_certificate_verifier,
+    build_stream_tls_configs, build_tls_configs, client_certificate_verify_failure,
+    install_crypto_provider, load_certificate_entries, rustls_protocol_versions,
+    tls_connection_info, tls_crypto_provider,
 };
 mod upstream;
 use upstream::*;
@@ -193,6 +193,8 @@ pub struct SharedState {
     config: Arc<ArcSwap<RuntimeSnapshot>>,
     reload: Arc<watch::Sender<u64>>,
     tls_configs: Arc<RwLock<HashMap<ListenAddress, Arc<HttpTlsConfigs>>>>,
+    http3_endpoints: Arc<Mutex<HashMap<ListenAddress, quinn::Endpoint>>>,
+    tls_reload_lock: Arc<tokio::sync::Mutex<()>>,
     stream_tls_configs: Arc<RwLock<HashMap<ListenAddress, Arc<StreamTlsConfigs>>>>,
     mail_tls_configs: Arc<RwLock<HashMap<ListenAddress, Arc<MailTlsRuntimeConfig>>>>,
     logger: Arc<Logger>,

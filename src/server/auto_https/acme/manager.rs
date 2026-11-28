@@ -121,10 +121,20 @@ fn order_needs_certificate(order: &AcmeOrder, config: &AutoHttpsConfig) -> bool 
 }
 
 async fn refresh_tls_configs(state: &SharedState) -> bool {
+    let _reload_guard = state.tls_reload_lock.lock().await;
     let snapshot = state.config_snapshot();
     let groups = build_listener_groups(&snapshot.config);
     match build_tls_configs(&snapshot.config, &groups) {
         Ok(configs) => {
+            if let Err(error) =
+                install_http3_server_configs(state, &snapshot.config, &groups, &configs)
+            {
+                state.logger.log(
+                    LogLevel::Error,
+                    format!("failed to refresh HTTP/3 automatic HTTPS configuration: {error}"),
+                );
+                return false;
+            }
             *state.tls_configs.write().await = configs;
             true
         }

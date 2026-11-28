@@ -45,6 +45,8 @@ pub async fn run(
         })),
         reload: Arc::new(reload_tx),
         tls_configs: Arc::new(RwLock::new(tls_configs)),
+        http3_endpoints: Arc::new(Mutex::new(HashMap::new())),
+        tls_reload_lock: Arc::new(tokio::sync::Mutex::new(())),
         stream_tls_configs: Arc::new(RwLock::new(stream_tls_configs)),
         mail_tls_configs: Arc::new(RwLock::new(mail_tls_configs)),
         logger,
@@ -200,6 +202,7 @@ pub async fn run(
 pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, prefix: &Path) {
     use crate::config::{ConfigLoader, compile};
 
+    let _reload_guard = state.tls_reload_lock.lock().await;
     let loaded = ConfigLoader::new(prefix.to_path_buf()).load(config_path);
     let loaded = match loaded {
         Ok(document) => compile(document, prefix.to_path_buf(), config_path.to_path_buf()),
@@ -229,14 +232,15 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
     };
     let new_config = Arc::new(new_config);
     let old = state.current_config();
-    if listener_signature(&old) != listener_signature(&new_config) {
+    let old_groups = build_listener_groups(&old);
+    let groups = build_listener_groups(&new_config);
+    if !listeners_reload_compatible(&old, &new_config, &old_groups, &groups) {
         state.logger.log(
             LogLevel::Error,
             "reload failed: changing listen sockets requires a restart",
         );
         return;
     }
-    let groups = build_listener_groups(&new_config);
     let tls_configs = match build_tls_configs(&new_config, &groups) {
         Ok(configs) => configs,
         Err(err) => {
@@ -306,6 +310,12 @@ pub(in crate::server) async fn reload(state: &SharedState, config_path: &Path, p
         return;
     }
     reopen_access_logs();
+    if let Err(err) = install_http3_server_configs(state, &new_config, &groups, &tls_configs) {
+        state
+            .logger
+            .log(LogLevel::Error, format!("reload failed: {err}"));
+        return;
+    }
     *state.tls_configs.write().await = tls_configs;
     *state.stream_tls_configs.write().await = stream_tls_configs;
     *state.mail_tls_configs.write().await = mail_tls_configs;

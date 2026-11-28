@@ -203,8 +203,14 @@ TLS 与 stream 代理能力。
 - HTTP/3/QUIC：`listen ... quic` 建立 UDP QUIC 监听，使用 TLSv1.3 和
   ALPN `h3`；支持 HTTP/server 级 `http3 on|off` 配置继承、`$http3` 变量、
   多请求并发、请求体增量读取、现有 router/proxy/static 响应管线、流式响应
-  body 和响应 trailers。QUIC listener 复用同一地址的 HTTP TLS 证书与 SNI
-  配置；当前 UDP endpoint 只在首个 worker shard 建立，0-RTT 关闭。
+  body 和响应 trailers，但尚不转发请求 trailers 或 informational response。
+  QUIC listener 复用同一地址的 HTTP TLS 证书与 SNI 配置；reload 和 ACME
+  证书续期会通过 `Endpoint::set_server_config` 更新现有 endpoint，使新连接
+  使用新证书和 TLS 配置，已有连接不受影响。显式 `http3 off` 不会绑定 QUIC
+  listener，reload 时移除的 QUIC listener 会关闭对应 endpoint。普通
+  HTTP/1.1/HTTP/2 响应会自动添加 `Alt-Svc: h3=":<port>"; ma=86400`，已有
+  `Alt-Svc` 响应头时不会覆盖。当前只在首个 worker shard 建立一个 UDP
+  endpoint，所有 QUIC 数据报由同一个 quinn endpoint driver 收发，0-RTT 关闭。
 - PROXY protocol v1/v2：HTTP 与 stream 流式监听的 `listen ... proxy_protocol`，
   支持 v1 的 `TCP4`、`TCP6`、`UNKNOWN`，v2 的 IPv4/IPv6 地址头、TLV 及
   `LOCAL`/不支持命令的无地址语义，以及
@@ -378,7 +384,8 @@ TLS 与 stream 代理能力。
   rcvbuf/sndbuf，以及命名 upstream `keepalive` 的 HTTP/2 连接复用。
   `grpcs://` 同时支持 SNI/名称、会话复用、协议、密码套件、证书链与 CRL
   校验、客户端证书及加密私钥口令；`grpc_ssl_conf_command` 在 rustls
-  后端下会明确报错，`grpc_ssl_certificate_cache` 目前保留配置兼容入口。
+  后端下会明确报错；`grpc_ssl_certificate_cache` 参数目前仅保留配置兼容
+  入口，不会控制内部已存在的 `ClientTlsConfigCache`。
 - FastCGI：TCP 或 UNIX domain socket `fastcgi_pass` 与命名 upstream、
   `include fastcgi_params`、
   `fastcgi_param ... if_not_empty`、`fastcgi_index`、
@@ -561,10 +568,14 @@ TLS 与 stream 代理能力。
   以及 HTTP/1.1/HTTP/2 ALPN。HTTP/server 与 stream main/server 支持
   `ssl_stapling on|off`、`ssl_stapling_verify on|off`、
   `ssl_stapling_file`、`ssl_stapling_responder`、`resolver` 和
-  `resolver_timeout`：从证书 AIA（或显式 responder）获取 OCSP，按
-  `ssl_trusted_certificate` 校验证书链/响应签名，动态热替换 rustls
-  `CertifiedKey.ocsp`；刷新时间为 `nextUpdate - 5m`，限制在 5 分钟到
-  1 小时之间，失败保留旧响应并 5 分钟后重试。
+  `resolver_timeout`：从证书 AIA（或显式 responder）获取 HTTP 或 HTTPS
+  OCSP 响应，HTTPS responder 使用 rustls 按 `ssl_trusted_certificate`
+  或系统 CA bundle 校验证书链；随后按 trusted certificate 校验 OCSP
+  响应签名并动态热替换 rustls `CertifiedKey.ocsp`。刷新时间为
+  `nextUpdate - 5m`，限制在 5 分钟到 1 小时之间，失败保留旧响应并 5 分钟后
+  重试。`ssl_ocsp on|leaf` 配合 `ssl_ocsp_responder`、`ssl_ocsp_cache`
+  对 HTTP/1.1、HTTP/2 与 stream 下游客户端证书执行握手后的在线吊销检查；
+  HTTP/3 暂未接入该检查，也未暴露 HTTP/3 客户端证书变量。
 - 自动 HTTPS（默认开启）：`auto_https on|off` 支持
   `cert_dir=`、`email=`、`staging=on|off`、`acme_directory=`、
   `acme_ca_file=`、`challenge=http-01|dns-01`、`dns_hook=`、
@@ -766,11 +777,14 @@ stream {
 
 以下能力尚未完成，配置中会明确报错而不是静默运行错误行为：
 
-- HTTP/3/QUIC 初始实现边界：尚无 0-RTT、Alt-Svc 自动注入、HTTP/3 请求
-  trailers、informational response、客户端证书变量/OCSP 运行时集成，以及
-  QUIC endpoint 的 reload 热更新；UDP socket 当前只由首个 worker shard
-  持有，未实现 `SO_REUSEPORT` 多 worker 分发。`listen ... quic` 当前隐式
-  启用 HTTP/3；`http3 off` 只记录配置继承状态，尚不关闭 QUIC listener。
+- HTTP/3/QUIC 初始实现边界：响应 trailers、自动 Alt-Svc 注入、QUIC
+  endpoint 的 server config reload/ACME 热更新和移除 QUIC listener 已支持；
+  但尚无 0-RTT、请求 trailers、informational response、HTTP/3 客户端证书
+  变量/`ssl_ocsp` 集成。新增 QUIC listener 或重绑定 UDP 地址仍需重启。
+  UDP socket 当前只由首个 worker shard 持有一个 endpoint；增加 Tokio
+  worker 线程不会增加独立的 QUIC 收包路径，也未实现 `SO_REUSEPORT`
+  多 endpoint/多 socket 分片。未显式配置 `http3` 时，`listen ... quic`
+  继续隐式启用 HTTP/3；显式 `http3 off` 则不会创建 QUIC listener。
 - 旧版 SSL/TLS 协议；rustls 仅支持 TLSv1.2 与 TLSv1.3。为兼容存量配置，
   `ssl_protocols` 中的 SSLv2、SSLv3、TLSv1、TLSv1.1 会与 TLSv1.2/TLSv1.3
   一起被接受，但 `-t` 和运行时错误日志会输出 `[warn]`，实际只启用
@@ -788,15 +802,17 @@ stream {
   请改用 `grpc_ssl_protocols`、`grpc_ssl_ciphers`。
 - `uwsgi_ssl_conf_command` 同样依赖 OpenSSL `SSL_CONF`，配置期会明确报错；
   请改用 `uwsgi_ssl_protocols`、`uwsgi_ssl_ciphers`。`uwsgi_ssl_certificate_cache`
-  目前仅保留配置兼容入口，证书仍按配置静态加载。
+  目前仅保留配置兼容入口；上游 `ClientConfig` 的进程内复用由内部
+  `ClientTlsConfigCache` 负责，但不会读取该指令的 `max=`、`inactive=`、
+  `valid=` 或 `off` 参数。
 - `ssl_verify_client` 支持 `on`、`optional` 和 `optional_no_ca`，并支持通过
   `ssl_crl` 检查客户端证书吊销状态；HTTP/stream 上游也支持
   `proxy_ssl_crl`、`proxy_ssl_verify_depth`、`uwsgi_ssl_crl`/
   `uwsgi_ssl_verify_depth` 和客户端证书。服务器及上游加密 PEM 私钥可分别通过
   `ssl_password_file`、`proxy_ssl_password_file`、`uwsgi_ssl_password_file`
-  解锁。OCSP Stapling 支持 HTTP 明文 responder URL；HTTPS responder 和
-  `ssl_ocsp` 客户端证书在线验证尚未实现。`ssl_stapling_verify on` 需要配置
-  `ssl_trusted_certificate`，否则配置期报错。
+  解锁。`ssl_stapling_verify on` 需要配置 `ssl_trusted_certificate`，否则
+  配置期报错。HTTP/3 客户端证书信息与 `ssl_ocsp` 尚未接入，见上文的
+  HTTP/3 边界。
 - 下游 HTTP/2 支持 TLS ALPN 和明文 prior knowledge（`listen ... http2` 或
   `http2 on`）。与 Nginx 1.31.9 一致，不支持 HTTP/1.1 `Upgrade: h2c`；HTTP/2
   server push 自 Nginx 1.25.1 起已移除，相关旧指令只做兼容告警并忽略。启用 HTTP/2
@@ -848,11 +864,14 @@ stream {
 
 可被配置解析但暂不改变行为的 socket 调优、缓存管理器参数和 SSL 参数会保留
 兼容入口。当前包括 `proxy_send_lowat`、`fastcgi_send_lowat`、`gzip_window`、
-`gzip_hash`、`gzip_no_buffer`、`postpone_gzipping`、`ssl_certificate_cache`
-、`proxy_ssl_certificate_cache`、`grpc_ssl_certificate_cache` 和
+`gzip_hash`、`gzip_no_buffer`、`postpone_gzipping`、`ssl_certificate_cache`、
+`proxy_ssl_certificate_cache`、`grpc_ssl_certificate_cache` 和
 `uwsgi_ssl_certificate_cache`；这些参数用于让标准 Nginx 配置通过迁移检查，
-参数形式会按 Nginx 约束校验，但不会改变 Starling 的 socket、zlib 缓冲或证书
-加载策略。`proxy_send_lowat` 和 `fastcgi_send_lowat` 还会在配置诊断中明确提示
+参数形式会按 Nginx 约束校验，但不会改变 Starling 的 socket 或 zlib 缓冲策略。
+服务端证书只在启动或 reload 构建 TLS 配置时加载，因此 `ssl_certificate_cache`
+当前没有运行时效果；三个上游证书缓存指令也不会控制内部
+`ClientTlsConfigCache`，该缓存固定最多复用 64 组 `ClientConfig`，并在 reload
+时清空。`proxy_send_lowat` 和 `fastcgi_send_lowat` 还会在配置诊断中明确提示
 “不生效”，避免静默误判。
 生产部署前应使用目标配置执行 `-t`，并通过集成测试验证代理、TLS 和超时行为。
 

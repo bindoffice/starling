@@ -248,8 +248,11 @@ scripts/package-release.sh \
 
 Starling 以 Nginx 1.31.9 的配置和运行行为作为主要参考。HTTP/3 已提供
 `quinn` + `h3` 的初始实现，包括 `listen ... quic`、TLSv1.3/ALPN `h3`、
-请求/响应映射、流式请求正文和响应 trailers；当前仍不支持 0-RTT、Alt-Svc
-自动注入、HTTP/3 连接 reload 时热替换证书，以及多 worker UDP 分发。
+请求/响应映射、流式请求正文、响应 trailers、自动 Alt-Svc 注入，以及
+reload/ACME 续期时的 QUIC server config 热更新；显式 `http3 off` 会关闭
+对应 QUIC listener。当前仍不支持 0-RTT 和多 endpoint UDP 分发。所有 QUIC
+数据报只经过首个 worker shard 中的一个 quinn endpoint driver，不会随 Tokio
+线程数增加独立收包路径。
 其他明确边界包括动态模块、mail 模块、原生多 worker master 模型及部分
 Nginx 高级模块细节。
 
@@ -319,8 +322,8 @@ TLSv1.3 和 ALPN `h3`。小响应为 5 字节静态文件，使用 8 个 QUIC �
 Starling 的 1.36 倍，但 Starling 的 p99 更低；8 MiB 下载下 Starling 的吞吐
 约为 Nginx 的 1.76 倍，p99 也明显更低。结果不能外推为公网、多 worker 或
 带丢包网络下的普遍结论。当前 Starling 的 QUIC endpoint 只接入第一个 worker
-shard，因此本表刻意固定为单 worker；多 worker UDP 分发、0-RTT、Alt-Svc
-自动注入和长时间连接复用仍需后续专项测试。
+shard，因此本表刻意固定为单 shard；多 endpoint UDP 分发、0-RTT
+和长时间连接复用仍需后续专项测试。
 
 可复现的客户端位于 [examples/h3load.rs](examples/h3load.rs)。示例命令：
 

@@ -29,6 +29,7 @@ pub(super) fn compile_server(
     let mut http2 = context.http2;
     let mut http2_seen = false;
     let mut http3 = context.http3;
+    let mut http3_explicit = context.http3_explicit;
     let mut http3_seen = false;
     let mut names = Vec::new();
     let mut rewrite_directives = Vec::new();
@@ -74,6 +75,7 @@ pub(super) fn compile_server(
                     ));
                 }
                 http3_seen = true;
+                http3_explicit = true;
                 http3 = parse_flag(child, "http3")?;
             }
             "location" => {
@@ -169,6 +171,7 @@ pub(super) fn compile_server(
         listens,
         http2,
         http3,
+        http3_explicit,
         names: Arc::from(names),
         default_server_name,
         has_real_ip,

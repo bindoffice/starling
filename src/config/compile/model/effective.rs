@@ -130,6 +130,7 @@ pub struct EffectiveConfig {
     pub http2: bool,
     pub http2_limits: Http2Limits,
     pub http3: bool,
+    pub http3_explicit: bool,
     pub internal: bool,
     pub post_action: Option<String>,
     pub return_directive: Option<ReturnConfig>,

@@ -81,6 +81,7 @@ impl EffectiveConfig {
             http2: false,
             http2_limits: Http2Limits::default(),
             http3: false,
+            http3_explicit: false,
             internal: false,
             post_action: None,
             return_directive: None,

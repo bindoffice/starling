@@ -265,6 +265,7 @@ pub struct ServerConfig {
     pub listens: Vec<ListenConfig>,
     pub http2: bool,
     pub http3: bool,
+    pub http3_explicit: bool,
     pub names: Arc<[ServerName]>,
     pub default_server_name: Arc<str>,
     pub has_real_ip: bool,

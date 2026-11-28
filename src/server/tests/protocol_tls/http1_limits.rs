@@ -28,6 +28,8 @@ async fn handles_expect_continue_and_pipelined_keepalive_requests() {
         })),
         reload: Arc::new(reload),
         tls_configs: Arc::new(RwLock::new(HashMap::new())),
+        http3_endpoints: Arc::new(Mutex::new(HashMap::new())),
+        tls_reload_lock: Arc::new(tokio::sync::Mutex::new(())),
         stream_tls_configs: Arc::new(RwLock::new(HashMap::new())),
         mail_tls_configs: Arc::new(RwLock::new(HashMap::new())),
         logger,

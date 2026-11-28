@@ -501,6 +501,22 @@ async fn worker_main(
                 continue;
             }
         };
+        match state.http3_endpoints.lock() {
+            Ok(mut endpoints) => {
+                endpoints.insert(group.address.clone(), endpoint.clone());
+            }
+            Err(_) => {
+                state.logger.log(
+                    LogLevel::Error,
+                    format!(
+                        "cannot register HTTP/3 endpoint for {}: registry lock was poisoned",
+                        group.address
+                    ),
+                );
+                endpoint.close(quinn::VarInt::from_u32(0), b"startup failed");
+                continue;
+            }
+        }
         tasks.spawn(http3_accept_loop(
             endpoint,
             group,

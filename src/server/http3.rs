@@ -5,10 +5,14 @@ use std::io;
 use std::net::{IpAddr, SocketAddr};
 
 mod body;
+mod config;
 mod request;
 mod send;
 
 use body::H3BodyTask;
+pub(in crate::server) use config::{
+    build_http3_server_config, install_http3_server_configs, server_uses_http3,
+};
 use request::{request_from_h3_parts, request_may_have_body};
 use send::send_h3_response;
 

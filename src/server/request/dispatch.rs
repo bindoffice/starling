@@ -418,6 +418,7 @@ pub(in crate::server) async fn dispatch_http_request(
     }
     apply_expires(&mut response, &processed.context, &variables);
     apply_response_headers(&mut response, &processed.context, request, &mut variables);
+    apply_alt_svc(&mut response, group, server, request);
     apply_userid(&mut response, &processed.context, &mut variables);
     apply_msie_compat(&processed.context, request, &mut response);
     apply_redirect_location(

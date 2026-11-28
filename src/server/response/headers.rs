@@ -42,6 +42,28 @@ pub(in crate::server) fn apply_response_headers(
     }
 }
 
+pub(in crate::server) fn apply_alt_svc(
+    response: &mut Response,
+    group: &ListenerGroup,
+    server: &ServerConfig,
+    request: &Request,
+) {
+    if !group.quic
+        || !server_uses_http3(server, &group.address)
+        || request.version == "HTTP/3.0"
+        || response.header("Alt-Svc").is_some()
+    {
+        return;
+    }
+    let Some(port) = group.address.socket_addr().map(|address| address.port()) else {
+        return;
+    };
+    if port == 0 {
+        return;
+    }
+    response.add_header("Alt-Svc", format!("h3=\":{port}\"; ma=86400"));
+}
+
 pub(in crate::server) fn apply_redirect_location(
     response: &mut Response,
     context: &EffectiveConfig,
