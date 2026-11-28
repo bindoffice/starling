@@ -11,7 +11,7 @@ Starling 是一个使用 Rust 编写的 Nginx 兼容 Web 服务器与四层反�
 TLS、静态文件、上游代理、缓存、压缩、FastCGI、uWSGI、SCGI、gRPC 和
 TCP/UDP stream 代理。
 
-> 当前版本为 `0.1.3`，仍处于持续开发阶段。Starling 不声称覆盖 Nginx
+> 当前版本为 `0.2.0`，仍处于持续开发阶段。Starling 不声称覆盖 Nginx
 > 全部模块，生产使用前应使用实际配置执行 `-t` 并进行集成验证。
 
 ## 核心能力
@@ -62,7 +62,7 @@ sudo apt-get install musl-tools  # Debian/Ubuntu
 CC_x86_64_unknown_linux_musl=musl-gcc \
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
 cargo build --release --locked --features vendored-openssl --target x86_64-unknown-linux-musl
-scripts/package-release.sh --version 0.1.3 --target x86_64-unknown-linux-musl
+scripts/package-release.sh --version 0.2.0 --target x86_64-unknown-linux-musl
 ```
 
 运行测试：
@@ -193,27 +193,27 @@ tests/             配置兼容、服务器行为和运行时迁移测试
 发布标签必须与 `Cargo.toml` 中的版本一致：
 
 ```bash
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 本地打包示例：
 
 ```bash
 cargo build --release --locked --features vendored-openssl
-scripts/package-release.sh --version 0.1.3
+scripts/package-release.sh --version 0.2.0
 ```
 
 也可以显式指定目标平台和归档格式：
 
 ```bash
 scripts/package-release.sh \
-  --version 0.1.3 \
+  --version 0.2.0 \
   --target aarch64-apple-darwin \
   --archive-format tar.gz
 
 scripts/package-release.sh \
-  --version 0.1.3 \
+  --version 0.2.0 \
   --target x86_64-pc-windows-msvc \
   --archive-format zip
 ```
