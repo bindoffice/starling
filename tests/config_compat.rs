@@ -6,9 +6,9 @@ use std::time::Duration;
 use starling::config::{
     AutoHttpsChallenge, AutoindexFormat, ClientCertificateVerify, ConfigLoader, DavMethod,
     DisableSymlinksMode, ExpiresOffset, ExpiresValue, GzipHttpVersion, GzipStatic, IfModifiedSince,
-    LingeringClose, ListenAddress, ListenKeepalive, ListenSocketOptions, LogDestination,
-    LogEscapeMode, LogLevel, OcspMode, ProxyStoreConfig, ServerTokens, StoreConfig, SyslogServer,
-    TlsCipherSuite, compile,
+    ImageFilterMode, LingeringClose, ListenAddress, ListenKeepalive, ListenSocketOptions,
+    LogDestination, LogEscapeMode, LogLevel, OcspMode, ProxyStoreConfig, ServerTokens, StoreConfig,
+    SyslogServer, TlsCipherSuite, compile,
 };
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -55,6 +55,8 @@ mod grpc;
 mod gzip;
 #[path = "config_compat/http3.rs"]
 mod http3;
+#[path = "config_compat/image_filter.rs"]
+mod image_filter;
 #[path = "config_compat/keepalive.rs"]
 mod keepalive;
 #[path = "config_compat/lingering.rs"]

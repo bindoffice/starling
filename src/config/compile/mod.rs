@@ -184,10 +184,8 @@ pub fn compile(
                 validate_no_block(directive)?;
             }
             "load_module" => {
-                return Err(ConfigError::at(
-                    directive.location.clone(),
-                    "load_module is not supported by the Rust runtime",
-                ));
+                validate_no_block(directive)?;
+                one_arg(directive)?;
             }
             other => {
                 return Err(ConfigError::at(

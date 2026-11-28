@@ -37,6 +37,7 @@ mod gunzip;
 mod gzip_rules;
 mod header_inheritance;
 mod http_error_log;
+mod image_filter;
 mod keepalive_disable;
 mod listener_options;
 mod mail;

@@ -92,6 +92,7 @@ fn variable_expansion_supports_braces_and_headers() {
             gzip_proxied: GzipProxiedConfig::default(),
             gzip_static: GzipStatic::Off,
             gunzip: false,
+            image_filter: crate::config::ImageFilterConfig::default(),
             sub_filters: Vec::new(),
             sub_filter_types: vec!["text/html".into()],
             sub_filter_once: true,

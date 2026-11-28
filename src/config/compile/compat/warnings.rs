@@ -16,6 +16,20 @@ fn collect_directive_warnings(directives: &[Directive], warnings: &mut Vec<Confi
         collect_tls_warning(directive, warnings);
         collect_http2_warning(directive, warnings);
         collect_socket_warning(directive, warnings);
+        collect_load_module_warning(directive, warnings);
         collect_directive_warnings(&directive.children, warnings);
     }
+}
+
+fn collect_load_module_warning(directive: &Directive, warnings: &mut Vec<ConfigWarning>) {
+    if directive.name != "load_module" {
+        return;
+    }
+    let module = directive.first_arg().unwrap_or_default();
+    warnings.push(ConfigWarning::at(
+        directive.location.clone(),
+        format!(
+            "load_module \"{module}\" is ignored; dynamic module loading is not supported by the Rust runtime"
+        ),
+    ));
 }

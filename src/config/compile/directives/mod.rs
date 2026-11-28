@@ -21,6 +21,7 @@ mod grpc;
 mod gzip;
 mod headers;
 mod http2;
+mod image_filter;
 mod keepalive;
 mod lingering;
 mod max_headers;
@@ -70,6 +71,7 @@ use grpc::try_apply_grpc_directive;
 use gzip::try_apply_gzip_directive;
 use headers::try_apply_header_directive;
 use http2::{Http2Seen, try_apply_http2_directive};
+use image_filter::{ImageFilterSeen, try_apply_image_filter_directive};
 use keepalive::try_apply_keepalive_directive;
 use lingering::try_apply_lingering_directive;
 use max_headers::try_apply_max_headers_directive;
@@ -208,6 +210,7 @@ pub(super) struct SeenScopeDirectives {
     pub(super) secure_link: SecureLinkSeen,
     browser: BrowserSeen,
     http2: Http2Seen,
+    image_filter: ImageFilterSeen,
     charset: CharsetSeen,
     pub(super) stapling: StaplingSeen,
     tunnel: TunnelSeen,
@@ -283,6 +286,9 @@ pub(super) fn apply_http_directive(
         return Ok(());
     }
     if try_apply_range_directive(directive, context, seen)? {
+        return Ok(());
+    }
+    if try_apply_image_filter_directive(directive, context, None, &mut seen.image_filter)? {
         return Ok(());
     }
     if try_apply_dav_directive(directive, context, &mut seen.dav)? {
@@ -395,6 +401,9 @@ pub(super) fn apply_scope_directive(
         return Ok(());
     }
     if try_apply_range_directive(directive, context, seen)? {
+        return Ok(());
+    }
+    if try_apply_image_filter_directive(directive, context, Some(scope), &mut seen.image_filter)? {
         return Ok(());
     }
     if try_apply_filter_directive(directive, context, seen)? {

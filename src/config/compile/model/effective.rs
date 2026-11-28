@@ -111,6 +111,7 @@ pub struct EffectiveConfig {
     pub gzip_proxied: GzipProxiedConfig,
     pub gzip_static: GzipStatic,
     pub gunzip: bool,
+    pub image_filter: ImageFilterConfig,
     pub sub_filters: Vec<SubFilter>,
     pub sub_filter_types: Vec<String>,
     pub sub_filter_once: bool,

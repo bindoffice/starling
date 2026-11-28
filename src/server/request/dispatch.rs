@@ -355,6 +355,26 @@ pub(in crate::server) async fn dispatch_http_request(
     variables.status = response.status;
     prepare_userid_variables(&processed.context, &mut variables);
     maybe_gunzip(&mut response, &processed.context, request).await;
+    if let ImageFilterOutcome::Error(status) =
+        apply_image_filter(&mut response, &processed.context, &variables).await
+    {
+        let outcome = configured_error_page(
+            http,
+            server,
+            request,
+            error_response(status),
+            &processed.context,
+            &mut variables,
+            0,
+        )
+        .await;
+        let mut replaced = outcome.response;
+        replaced.inherit_early_hints_from(&response);
+        response = replaced;
+        processed.context = outcome.context;
+        let processed_logger = variables.error_logger_for(&processed.context);
+        variables.set_variable_warning_context(&processed.context, processed_logger);
+    }
     apply_addition(
         http,
         server,
