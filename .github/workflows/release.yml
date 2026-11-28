@@ -138,6 +138,12 @@ jobs:
             echo "CC_${target_env}=musl-gcc"
             echo "AR_${target_env}=ar"
             echo "CARGO_TARGET_${target_upper}_LINKER=musl-gcc"
+            if [[ "$target_env" == "aarch64_unknown_linux_musl" ]]; then
+              # GCC's outline atomics reference __getauxval, which musl does not
+              # provide. Without this, jemalloc's configure cannot link its
+              # atomic feature checks and disables all atomic backends.
+              echo "CFLAGS_${target_env}=-mno-outline-atomics"
+            fi
           } >>"$GITHUB_ENV"
       - name: Install Windows build dependencies
         if: runner.os == 'Windows'
