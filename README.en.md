@@ -252,20 +252,19 @@ silently ignoring it and producing hard-to-diagnose runtime behavior. See
 
 The following results come from loopback comparisons on the same host; they are
 not cross-machine or public-network benchmarks. The test system used an AMD
-Ryzen 7 9700X (16 logical CPUs), Linux `7.0.0-43-generic`, and 16 GiB of memory.
-Except for protocol differences, both sides used `worker_processes 1`, disabled
-access logging, and served the same set of static files. Nginx was built from
-local source as `1.31.9` with `OpenSSL 3.5.5`, with both
-`--with-http_v2_module` and
+Ryzen 7 9700X (16 logical CPUs), Linux `7.0.0-44-generic`, and 16 GiB of memory.
+Except for protocol differences, both sides disabled access logging and served
+the same set of static files. Nginx was built from local source as `1.31.9`
+with `OpenSSL 3.5.5`, with both `--with-http_v2_module` and
 `--with-http_v3_module` enabled.
 
 ### HTTP/1.1 and HTTP/2 (h2c)
 
 This group uses cleartext TCP to isolate HTTP stack overhead; HTTP/2 uses
 prior-knowledge `h2c`. Small HTTP/1.1 responses use 128 connections and large
-responses use 32 connections, with 3 rounds of 5 seconds each. Small HTTP/2
-responses use 8 connections with 16 streams per connection and 1 million
-requests per round; 8 MiB downloads use 8 connections with 4 streams per
+responses use 16 connections, with 3 rounds of 5 seconds each. Small HTTP/2
+responses use 64 connections with 16 streams per connection and 500,000
+requests per round; 8 MiB downloads use 64 connections with 4 streams per
 connection and 1024 requests per round. HTTP/2 p50/p99 values come from
 per-request `h2load` logs. HTTP/1.1 warms up for 1 second per group; HTTP/2
 warmup rounds use 10% of the requests per round. Results are the median of 3
@@ -273,45 +272,30 @@ rounds.
 
 | Scenario | Implementation | Request throughput (req/s) | Transfer throughput (GiB/s) | p50 (ms) | p99 (ms) | Failures |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| HTTP/1.1 small response | Starling | 195,061 | - | 0.657 | 0.675 | 0 |
-| HTTP/1.1 small response | Nginx 1.31.9 | 272,925 | - | 0.469 | 0.484 | 0 |
-| HTTP/1.1 8 MiB download | Starling | 4,127.64 | 32.26 | 7.800 | 15.950 | 0 |
-| HTTP/1.1 8 MiB download | Nginx 1.31.9 | 4,165.32 | 32.57 | 7.700 | 13.330 | 0 |
-| HTTP/2 small response | Starling | 136,059 | - | 0.902 | 1.145 | 0 |
-| HTTP/2 small response | Nginx 1.31.9 | 223,423 | - | 0.568 | 1.110 | 0 |
-| HTTP/2 8 MiB download | Starling | 1,448.15 | 10.54 | 22.300 | 45.378 | 0 |
-| HTTP/2 8 MiB download | Nginx 1.31.9 | 1,050.55 | 8.220 | 28.444 | 36.162 | 0 |
+| HTTP/1.1 small response | Starling | 1,217,725.45 | - | 0.080 | 0.327 | 0 |
+| HTTP/1.1 small response | Nginx 1.31.9 | 1,378,789.48 | - | 0.046 | 0.107 | 0 |
+| HTTP/1.1 proxy small (keepalive) | Starling | 495,711.25 | - | 0.221 | 0.764 | 0 |
+| HTTP/1.1 proxy small (keepalive) | Nginx 1.31.9 | 840,255.64 | - | 0.096 | 2.310 | 0 |
+| HTTP/1.1 8 MiB download | Starling | 6,771.99 | 52.91 | 1.650 | 5.880 | 0 |
+| HTTP/1.1 8 MiB download | Nginx 1.31.9 | 6,743.30 | 52.68 | 1.680 | 5.850 | 0 |
+| HTTP/2 small response | Starling | 870,690.30 | - | 0.912 | 2.696 | 0 |
+| HTTP/2 small response | Nginx 1.31.9 | 854,548.93 | - | 0.884 | 1.485 | 0 |
+| HTTP/2 proxy small (keepalive) | Starling | 186,592.02 | - | 3.456 | 23.608 | 0 |
+| HTTP/2 proxy small (keepalive) | Nginx 1.31.9 | 109,673.82 | - | 2.669 | 62.719 | 0 |
+| HTTP/2 8 MiB download | Starling | 5,788.97 | 45.25 | 32.708 | 84.690 | 0 |
+| HTTP/2 8 MiB download | Nginx 1.31.9 | 3,216.39 | 25.16 | 46.519 | 113.122 | 0 |
 
-For small HTTP/1.1 responses, Starling reaches 71.5% of Nginx throughput and
-trails by about 1.40x. For small HTTP/2 responses it reaches 60.9% and trails
-by about 1.64x. HTTP/1.1 8 MiB download throughput is essentially at parity
-(99.1%), while Starling p99 is about 19.7% higher. After optimization, HTTP/2
-8 MiB downloads reach 137.9% of Nginx and are about 7.13x the pre-optimization
-rate of 203.11 req/s; p99 remains about 25.5% higher than Nginx, leaving room
-for further tail-latency work. On Linux cleartext TCP with `sendfile on`, this
-path sends DATA directly through the kernel `sendfile` from h2 and combines
-frame headers with the body using `MSG_MORE` + `TCP_CORK`. TLS, UNIX sockets,
-non-Linux platforms, or `sendfile off` automatically fall back to the memory
-read path. H1/H2 and H3 use different transport stacks, so ratios from one
-protocol should not be extrapolated to another.
+On Linux cleartext TCP with `sendfile on`, this path sends DATA directly
+through the kernel `sendfile` from h2 and combines frame headers with the body
+using `MSG_MORE` + `TCP_CORK`. TLS, UNIX sockets, non-Linux platforms, or
+`sendfile off` automatically fall back to the memory read path. H1/H2 and H3
+use different transport stacks, so ratios from one protocol should not be
+extrapolated to another.
 
 Reproduction command:
 
 ```bash
-scripts/bench-compare.sh \
-  --nginx-bin /path/to/nginx \
-  --workers 1 \
-  --rounds 3 \
-  --duration 5s \
-  --warmup 1s \
-  --connections 128 \
-  --large-connections 32 \
-  --h2-clients 8 \
-  --h2-streams 16 \
-  --h2-requests 1000000 \
-  --h2-large-streams 4 \
-  --h2-large-requests 1024 \
-  --skip-upload
+scripts/bench-compare.sh
 ```
 
 ### HTTP/3/QUIC

@@ -234,57 +234,44 @@ Nginx 高级模块细节。
 ## HTTP 性能基线
 
 以下结果均来自同宿主机 loopback 对照，不是跨机器或公网基准。测试环境为
-AMD Ryzen 7 9700X（16 个逻辑 CPU）、Linux `7.0.0-43-generic`、16 GiB 内存。
-除协议差异外，两边都使用 `worker_processes 1`、关闭 access log，并服务同一组
-静态文件。Nginx 使用本机源码构建的 `1.31.9 + OpenSSL 3.5.5`，同时启用
-`--with-http_v2_module` 和 `--with-http_v3_module`。
+AMD Ryzen 7 9700X（16 个逻辑 CPU）、Linux `7.0.0-44-generic`、16 GiB 内存。
+除协议差异外，两边都关闭 access log，并服务同一组静态文件。Nginx 使用本机
+源码构建的 `1.31.9 + OpenSSL 3.5.5`，同时启用 `--with-http_v2_module` 和
+`--with-http_v3_module`。
 
 ### HTTP/1.1 与 HTTP/2（h2c）
 
 本组使用明文 TCP，以隔离 HTTP 协议栈开销；HTTP/2 采用 prior-knowledge `h2c`。
-HTTP/1.1 小响应使用 128 个连接，大响应使用 32 个连接，每组 3 轮、每轮 5 秒。
-HTTP/2 小响应使用 8 个连接、每连接 16 个 stream、每轮 100 万请求；8 MiB 下载
-使用 8 个连接、每连接 4 个 stream、每轮 1024 请求。HTTP/2 的 p50/p99 来自
+HTTP/1.1 小响应使用 128 个连接，大响应使用 16 个连接，每组 3 轮、每轮 5 秒。
+HTTP/2 小响应使用 64 个连接、每连接 16 个 stream、每轮 50 万请求；8 MiB 下载
+使用 64 个连接、每连接 4 个 stream、每轮 1024 请求。HTTP/2 的 p50/p99 来自
 `h2load` 单请求日志。HTTP/1.1 每组预热 1 秒，HTTP/2 预热轮使用每轮请求数的
 10%，结果取 3 轮中位数。
 
 | 场景 | 实现 | 请求吞吐 (req/s) | 传输吞吐 (GiB/s) | p50 (ms) | p99 (ms) | 失败 |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| HTTP/1.1 小响应 | Starling | 195,061 | - | 0.657 | 0.675 | 0 |
-| HTTP/1.1 小响应 | Nginx 1.31.9 | 272,925 | - | 0.469 | 0.484 | 0 |
-| HTTP/1.1 8 MiB 下载 | Starling | 4,127.64 | 32.26 | 7.800 | 15.950 | 0 |
-| HTTP/1.1 8 MiB 下载 | Nginx 1.31.9 | 4,165.32 | 32.57 | 7.700 | 13.330 | 0 |
-| HTTP/2 小响应 | Starling | 136,059 | - | 0.902 | 1.145 | 0 |
-| HTTP/2 小响应 | Nginx 1.31.9 | 223,423 | - | 0.568 | 1.110 | 0 |
-| HTTP/2 8 MiB 下载 | Starling | 1,448.15 | 10.54 | 22.300 | 45.378 | 0 |
-| HTTP/2 8 MiB 下载 | Nginx 1.31.9 | 1,050.55 | 8.220 | 28.444 | 36.162 | 0 |
+| HTTP/1.1 小响应 | Starling | 1,217,725.45 | - | 0.080 | 0.327 | 0 |
+| HTTP/1.1 小响应 | Nginx 1.31.9 | 1,378,789.48 | - | 0.046 | 0.107 | 0 |
+| HTTP/1.1 proxy small（keepalive） | Starling | 495,711.25 | - | 0.221 | 0.764 | 0 |
+| HTTP/1.1 proxy small（keepalive） | Nginx 1.31.9 | 840,255.64 | - | 0.096 | 2.310 | 0 |
+| HTTP/1.1 8 MiB 下载 | Starling | 6,771.99 | 52.91 | 1.650 | 5.880 | 0 |
+| HTTP/1.1 8 MiB 下载 | Nginx 1.31.9 | 6,743.30 | 52.68 | 1.680 | 5.850 | 0 |
+| HTTP/2 小响应 | Starling | 870,690.30 | - | 0.912 | 2.696 | 0 |
+| HTTP/2 小响应 | Nginx 1.31.9 | 854,548.93 | - | 0.884 | 1.485 | 0 |
+| HTTP/2 proxy small（keepalive） | Starling | 186,592.02 | - | 3.456 | 23.608 | 0 |
+| HTTP/2 proxy small（keepalive） | Nginx 1.31.9 | 109,673.82 | - | 2.669 | 62.719 | 0 |
+| HTTP/2 8 MiB 下载 | Starling | 5,788.97 | 45.25 | 32.708 | 84.690 | 0 |
+| HTTP/2 8 MiB 下载 | Nginx 1.31.9 | 3,216.39 | 25.16 | 46.519 | 113.122 | 0 |
 
-HTTP/1.1 小响应下 Starling 达到 Nginx 的 71.5%，约落后 1.40 倍；HTTP/2 小响应
-达到 60.9%，约落后 1.64 倍。8 MiB HTTP/1.1 下载的吞吐已基本持平（99.1%），但
-Starling p99 高约 19.7%。HTTP/2 8 MiB 下载优化后达到 Nginx 的 137.9%，约为
-优化前 203.11 req/s 的 7.13 倍；p99 仍比 Nginx 高约 25.5%，长尾还有继续优化
-空间。该路径在 Linux 明文 TCP 且 `sendfile on` 时由 h2 直接通过内核 `sendfile`
-发送 DATA，并用 `MSG_MORE` + `TCP_CORK` 合并帧头与正文；TLS、UNIX socket、
-非 Linux 平台或 `sendfile off` 会自动回退到内存读取路径。H1/H2 与 H3 使用不同
-传输栈，不能把某一协议的倍率直接外推到其他协议。
+该路径在 Linux 明文 TCP 且 `sendfile on` 时由 h2 直接通过内核 `sendfile` 发送
+DATA，并用 `MSG_MORE` + `TCP_CORK` 合并帧头与正文；TLS、UNIX socket、非 Linux
+平台或 `sendfile off` 会自动回退到内存读取路径。H1/H2 与 H3 使用不同传输栈，
+不能把某一协议的倍率直接外推到其他协议。
 
 可复现命令：
 
 ```bash
-scripts/bench-compare.sh \
-  --nginx-bin /path/to/nginx \
-  --workers 1 \
-  --rounds 3 \
-  --duration 5s \
-  --warmup 1s \
-  --connections 128 \
-  --large-connections 32 \
-  --h2-clients 8 \
-  --h2-streams 16 \
-  --h2-requests 1000000 \
-  --h2-large-streams 4 \
-  --h2-large-requests 1024 \
-  --skip-upload
+scripts/bench-compare.sh
 ```
 
 ### HTTP/3/QUIC
