@@ -160,20 +160,47 @@ http {
 See [docs/auto-https.en.md](docs/auto-https.en.md) for the complete DNS hook
 contract, configuration options, and troubleshooting guidance.
 
-## Project Layout
+## Module Overview
+
+The main path from configuration loading to request processing is:
 
 ```text
-src/config/        Nginx configuration lexer, parser, include handling, and runtime model compiler
-src/http/          HTTP request, response, and upstream protocols
-src/server/        HTTP/TLS/stream runtime, routing, proxying, caching, and automatic HTTPS
-src/logging.rs     Logging system and log file cache
-src/runtime.rs     Nginx-style CLI, daemon, PID, and signal handling
-tests/             Configuration compatibility, server behavior, and runtime migration tests
+main.rs
+  +- runtime        CLI, config loading, daemon/PID/signals
+     +- config      Nginx configuration -> AST -> RuntimeConfig
+     +- logging     error log / access log
+     +- server      listeners, protocols, request lifecycle, upstreams
+        +- http        HTTP message/body types and upstream parsing
+        +- request     routing, access control, rewrites, bodies, connections
+        +- response    static files, error pages, filters, ranges, headers
+        +- upstream    proxy, cache, FastCGI/uWSGI/SCGI, gRPC, retries
+        +- stream      TCP/UDP/UNIX stream proxying
+        +- tls/http2/http3/auto_https/variables/limits
 ```
 
-Production code is split into focused modules by configuration phase, protocol,
-and request lifecycle. Entry files primarily orchestrate modules; complex
-directive families and runtime capabilities should continue to live in their
+| Module | Responsibility |
+| --- | --- |
+| `src/runtime.rs` | Nginx-style command line, `-t` validation, daemon, PID, signals, and reload flow. |
+| `src/config/` | `parser/` handles lexing, syntax, and include/glob loading; `compile/` validates directives, resolves scope inheritance, and produces `RuntimeConfig`. |
+| `src/http/` | Runtime-independent HTTP types, including request headers/bodies, response bodies, buffering/temp files, and upstream HTTP response parsing. |
+| `src/server/` | Async server orchestration: listen sockets, connection acceptance, protocol dispatch, request lifecycle, shared state, graceful shutdown, and reload snapshots. |
+| `src/server/request/` | HTTP/1 connection loops, keep-alive, routing and location matching, access control, rewrite phases, request bodies, mirroring, and internal redirects. |
+| `src/server/response/` | Static files, autoindex, error pages, conditional requests, ranges, gzip/gunzip, response headers/filters, WebDAV, and userid. |
+| `src/server/upstream/` | HTTP/HTTPS reverse proxying, connection pools, retries and load balancing, disk caching, streaming, FastCGI/uWSGI/SCGI, gRPC, and Memcached. |
+| `src/server/stream/` | Layer 4 TCP/UDP/UNIX socket proxying, SNI preread, PROXY protocol, TLS termination, retries, and half-close handling. |
+| `src/server/http2.rs`, `src/server/http3.rs` | HTTP/2 frame/stream handling and HTTP/3/QUIC request, body, and trailer mapping. |
+| `src/server/tls/`, `src/server/auto_https/` | TLS certificate and client verification, SNI/ALPN, ACME, local CA, and certificate renewal. |
+| `src/server/variables/`, `src/server/limits.rs`, `src/server/resolver/` | Nginx variable evaluation, map/geo lookup, connection limits, DNS resolution, and caching. |
+| `src/logging/` | Multi-target error logging plus access-log formatting, file caching, rotation/reopen, gzip, and syslog. |
+| `src/auth.rs` | Basic Auth parsing and `{PLAIN}`, `{SHA}`, `{SSHA}`, apr1, and crypt password verification. |
+| `src/wasm/` | Wasmtime engine, module cache, resource limits, and core module ABI v1. |
+
+Configuration and runtime are decoupled through `RuntimeConfig`: `runtime`
+rebuilds a runtime snapshot on startup or reload, while `server` switches
+snapshots atomically with `ArcSwap`. In-flight requests continue using the old
+snapshot until they complete. Production code is split by configuration
+context, protocol, and request phase; entry files only orchestrate modules, and
+new directive families, filters, or protocol capabilities belong in their
 corresponding submodules.
 
 ## Documentation

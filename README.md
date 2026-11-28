@@ -151,19 +151,45 @@ http {
 完整的 DNS hook 契约、配置项和排障说明见
 [docs/auto-https.md](docs/auto-https.md)。
 
-## 项目结构
+## 模块概览
+
+Starling 从配置加载到请求处理的主链路如下：
 
 ```text
-src/config/        Nginx 配置词法、语法、include 和运行时模型编译
-src/http/          HTTP 请求、响应和 upstream 协议
-src/server/        HTTP/TLS/stream 运行时、路由、代理、缓存和自动 HTTPS
-src/logging.rs     日志系统和日志文件缓存
-src/runtime.rs     Nginx 风格 CLI、daemon、PID 和信号处理
-tests/             配置兼容、服务器行为和运行时迁移测试
+main.rs
+  +- runtime        CLI、配置装载、daemon/PID/信号
+     +- config      Nginx 配置 -> AST -> RuntimeConfig
+     +- logging     error log / access log
+     +- server      监听、协议、请求生命周期与上游转发
+        +- http        HTTP 报文、正文和 upstream 解析基础类型
+        +- request     路由、访问控制、rewrite、请求体与连接管理
+        +- response    静态文件、错误页、过滤器、Range 和响应头
+        +- upstream    代理、缓存、FastCGI/uWSGI/SCGI、gRPC、重试
+        +- stream      TCP/UDP/UNIX stream 代理
+        +- tls/http2/http3/auto_https/variables/limits
 ```
 
-生产代码按配置阶段、协议和请求生命周期拆分为独立子模块。入口文件主要
-负责模块编排，复杂指令族和运行时能力应继续进入对应子模块。
+| 模块 | 职责 |
+| --- | --- |
+| `src/runtime.rs` | Nginx 风格命令行、`-t` 配置检查、daemon、PID、信号和 reload 流程。 |
+| `src/config/` | `parser/` 负责词法、语法和 include/glob；`compile/` 负责指令校验、作用域继承，并生成 `RuntimeConfig`。 |
+| `src/http/` | 与运行时无关的 HTTP 基础类型，包括请求头/正文、响应体、缓冲/临时文件，以及 upstream HTTP 响应解析。 |
+| `src/server/` | 异步服务器编排：监听 socket、连接接入、协议分派、请求生命周期、共享状态、优雅关闭和 reload 快照。 |
+| `src/server/request/` | HTTP/1 连接循环、keep-alive、路由与 location 匹配、访问控制、rewrite 阶段、请求正文、镜像和内部重定向。 |
+| `src/server/response/` | 静态文件、autoindex、错误页、条件请求、Range、gzip/gunzip、响应头/过滤器、WebDAV 和 userid。 |
+| `src/server/upstream/` | HTTP/HTTPS 反向代理、连接池、重试与负载均衡、磁盘缓存、流式转发、FastCGI/uWSGI/SCGI、gRPC 和 Memcached。 |
+| `src/server/stream/` | 四层 TCP/UDP/UNIX socket 代理、SNI 预读、PROXY protocol、TLS 终止、retry 和半关闭。 |
+| `src/server/http2.rs`、`src/server/http3.rs` | HTTP/2 帧/流处理及 HTTP/3/QUIC 请求、正文和 trailer 映射。 |
+| `src/server/tls/`、`src/server/auto_https/` | TLS 证书与客户端校验、SNI/ALPN、ACME、本地 CA 和证书续期。 |
+| `src/server/variables/`、`src/server/limits.rs`、`src/server/resolver/` | Nginx 变量求值、map/geo 查询、连接限流、DNS 解析与缓存。 |
+| `src/logging/` | error log 多目标写入，access log 格式、文件缓存、轮转重开、gzip 和 syslog。 |
+| `src/auth.rs` | Basic Auth 解析及 `{PLAIN}`、`{SHA}`、`{SSHA}`、apr1、crypt 密码校验。 |
+| `src/wasm/` | Wasmtime 引擎、模块缓存、资源限制和 core module ABI v1。 |
+
+配置阶段与运行时阶段通过 `RuntimeConfig` 解耦：`runtime` 在启动或 reload 时
+重新构建运行时快照，`server` 使用 `ArcSwap` 原子切换配置，进行中的请求继续
+使用旧快照直到完成。生产代码按配置上下文、协议和请求阶段拆分；入口文件
+只负责模块编排，新增指令族、过滤器或协议能力应进入对应子模块。
 
 ## 文档
 
