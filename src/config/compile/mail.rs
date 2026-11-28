@@ -439,11 +439,6 @@ fn compile_mail_server(
             smtp_client_buffer_size,
             smtp_greeting_delay,
         );
-    if protocol == MailProtocol::Pop3 && auth_methods.contains(&MailAuthMethod::Plain) {
-        if !auth_methods.contains(&MailAuthMethod::Login) {
-            // Nginx makes LOGIN available whenever POP3 PLAIN is enabled.
-        }
-    }
     validate_ssl_client_verification(
         &directive.location,
         tls.verify_client,

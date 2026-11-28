@@ -14,17 +14,29 @@ pub(in crate::server) struct WorkerPool {
     unix_socket_paths: UnixSocketCleanup,
 }
 
+pub(in crate::server) struct WorkerPoolConfig {
+    pub(in crate::server) groups: Vec<ListenerGroup>,
+    pub(in crate::server) stream_routes: Vec<StreamRoute>,
+    pub(in crate::server) mail_routes: Vec<MailRoute>,
+    pub(in crate::server) state: SharedState,
+    pub(in crate::server) shutdown: watch::Receiver<ShutdownMode>,
+    pub(in crate::server) shutdown_tx: watch::Sender<ShutdownMode>,
+    pub(in crate::server) worker_layout: Vec<usize>,
+    pub(in crate::server) blocking_thread_limit: usize,
+}
+
 impl WorkerPool {
-    pub(in crate::server) async fn start(
-        groups: Vec<ListenerGroup>,
-        stream_routes: Vec<StreamRoute>,
-        mail_routes: Vec<MailRoute>,
-        state: SharedState,
-        shutdown: watch::Receiver<ShutdownMode>,
-        shutdown_tx: watch::Sender<ShutdownMode>,
-        worker_layout: Vec<usize>,
-        blocking_thread_limit: usize,
-    ) -> io::Result<Self> {
+    pub(in crate::server) async fn start(config: WorkerPoolConfig) -> io::Result<Self> {
+        let WorkerPoolConfig {
+            groups,
+            stream_routes,
+            mail_routes,
+            state,
+            shutdown,
+            shutdown_tx,
+            worker_layout,
+            blocking_thread_limit,
+        } = config;
         let worker_layout = if worker_layout.is_empty() {
             vec![1]
         } else {

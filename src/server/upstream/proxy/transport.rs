@@ -120,15 +120,15 @@ pub(in crate::server) fn proxy_upstream_pool_key_ref<'a>(
         tls_name: tls.then(|| proxy_tls_name(context, variables, host)),
         tls_verify: tls && context.proxy_ssl_verify,
         tls_trusted_certificate: tls
-            .then(|| context.proxy_ssl_trusted_certificate.as_deref())
+            .then_some(context.proxy_ssl_trusted_certificate.as_deref())
             .flatten(),
         tls_verify_depth: tls.then_some(context.proxy_ssl_verify_depth),
-        tls_crl: tls.then(|| context.proxy_ssl_crl.as_deref()).flatten(),
+        tls_crl: tls.then_some(context.proxy_ssl_crl.as_deref()).flatten(),
         tls_client_certificate: tls
-            .then(|| context.proxy_ssl_certificate.as_deref())
+            .then_some(context.proxy_ssl_certificate.as_deref())
             .flatten(),
         tls_client_certificate_key: tls
-            .then(|| context.proxy_ssl_certificate_key.as_deref())
+            .then_some(context.proxy_ssl_certificate_key.as_deref())
             .flatten(),
         tls_protocols: tls.then_some(context.proxy_ssl_protocols),
         tls_ciphers: tls.then_some(&context.proxy_ssl_ciphers),

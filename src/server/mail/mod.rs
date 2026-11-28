@@ -237,10 +237,9 @@ fn configure_mail_session_cache(
     config.session_storage = storage;
     if server.tls.session_tickets {
         config.ticketer = Ticketer::new().map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("cannot initialize mail TLS session ticket keys: {error}"),
-            )
+            io::Error::other(format!(
+                "cannot initialize mail TLS session ticket keys: {error}"
+            ))
         })?;
     }
     config.send_tls13_tickets = if server.tls.session_tickets || stateful_cache {
@@ -1121,10 +1120,9 @@ fn smtp_status_is(status: u8, expected: u8) -> bool {
 }
 
 async fn read_upstream_line(upstream: &mut MailReader, server: &MailServer) -> Option<Vec<u8>> {
-    match read_line(upstream, server.proxy.buffer_size, server.timeout).await {
-        Ok(line) => line,
-        Err(_) => None,
-    }
+    read_line(upstream, server.proxy.buffer_size, server.timeout)
+        .await
+        .unwrap_or_default()
 }
 
 async fn upstream_error(

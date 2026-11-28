@@ -72,16 +72,16 @@ pub async fn run(
     let (shutdown_tx, shutdown_rx) = watch::channel(ShutdownMode::Running);
     let (background_shutdown_tx, background_shutdown_rx) = watch::channel(false);
     let mut tasks = JoinSet::new();
-    let worker_pool = WorkerPool::start(
+    let worker_pool = WorkerPool::start(WorkerPoolConfig {
         groups,
         stream_routes,
         mail_routes,
-        state.clone(),
-        shutdown_rx.clone(),
-        shutdown_tx.clone(),
+        state: state.clone(),
+        shutdown: shutdown_rx.clone(),
+        shutdown_tx: shutdown_tx.clone(),
         worker_layout,
         blocking_thread_limit,
-    )
+    })
     .await?;
 
     if no_http_listeners {

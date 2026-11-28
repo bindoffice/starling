@@ -364,9 +364,7 @@ impl UpstreamKeepalivePool {
             // H2 connection drops abort their driver task; never do that while
             // holding the shard lock.
             drop(retired);
-            let Some(mut connection) = candidate else {
-                return None;
-            };
+            let mut connection = candidate?;
             if !connection.idle_is_open() {
                 continue;
             }

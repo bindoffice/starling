@@ -102,7 +102,7 @@ pub(in crate::server) fn build_mail_client_certificate_verifier(
         .into_iter()
         .flatten()
     {
-        if !paths.iter().any(|existing| *existing == path) {
+        if !paths.contains(&path) {
             paths.push(path);
         }
     }

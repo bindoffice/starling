@@ -24,9 +24,15 @@ pub(super) struct AuthContext {
 }
 
 pub(super) enum AuthOutcome {
-    Authenticated(AuthContext),
+    Authenticated(Box<AuthContext>),
     StartTls,
     Closed,
+}
+
+struct SmtpSessionState {
+    helo: Vec<u8>,
+    from: Vec<u8>,
+    to: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -207,13 +213,15 @@ async fn authenticate_smtp(
                 context,
                 method,
                 auth_argument,
-                helo.clone(),
-                from.clone(),
-                to.clone(),
+                SmtpSessionState {
+                    helo: helo.clone(),
+                    from: from.clone(),
+                    to: to.clone(),
+                },
             )
             .await?
             {
-                Some(auth) => return Ok(AuthOutcome::Authenticated(auth)),
+                Some(auth) => return Ok(AuthOutcome::Authenticated(Box::new(auth))),
                 None => continue,
             }
         }
@@ -276,7 +284,9 @@ async fn authenticate_smtp(
                 backend: None,
             };
             match auth_http(server, context, &mut auth).await? {
-                AuthReply::Accepted(_) => return Ok(AuthOutcome::Authenticated(auth)),
+                AuthReply::Accepted(_) => {
+                    return Ok(AuthOutcome::Authenticated(Box::new(auth)));
+                }
                 AuthReply::Rejected(response) => {
                     write_client(reader, &smtp_auth_error(&response), server.timeout).await?;
                     continue;
@@ -293,10 +303,9 @@ async fn smtp_authenticate_method(
     context: &SessionContext,
     method: MailAuthMethod,
     argument: &[u8],
-    helo: Vec<u8>,
-    from: Vec<u8>,
-    to: Vec<u8>,
+    session: SmtpSessionState,
 ) -> io::Result<Option<AuthContext>> {
+    let SmtpSessionState { helo, from, to } = session;
     let credentials = match method {
         MailAuthMethod::Plain => {
             let mut initial = argument.to_vec();
@@ -524,7 +533,7 @@ async fn authenticate_pop3(
                         auth.password = password;
                         auth.password_available = true;
                     }
-                    return Ok(AuthOutcome::Authenticated(auth));
+                    return Ok(AuthOutcome::Authenticated(Box::new(auth)));
                 }
                 AuthReply::Rejected(response) => {
                     write_client(reader, &pop3_error(&response), server.timeout).await?;
@@ -559,7 +568,7 @@ async fn authenticate_pop3(
                         auth.password = password;
                         auth.password_available = true;
                     }
-                    return Ok(AuthOutcome::Authenticated(auth));
+                    return Ok(AuthOutcome::Authenticated(Box::new(auth)));
                 }
                 AuthReply::Rejected(response) => {
                     write_client(reader, &pop3_error(&response), server.timeout).await?;
@@ -586,7 +595,9 @@ async fn authenticate_pop3(
                 pop3_auth_method(reader, server, context, method, argument, &salt).await?
             {
                 match auth_http(server, context, &mut auth).await? {
-                    AuthReply::Accepted(_) => return Ok(AuthOutcome::Authenticated(auth)),
+                    AuthReply::Accepted(_) => {
+                        return Ok(AuthOutcome::Authenticated(Box::new(auth)));
+                    }
                     AuthReply::Rejected(response) => {
                         write_client(reader, &pop3_error(&response), server.timeout).await?;
                     }
@@ -804,7 +815,7 @@ async fn authenticate_imap(
                         auth.password = password;
                         auth.password_available = true;
                     }
-                    return Ok(AuthOutcome::Authenticated(auth));
+                    return Ok(AuthOutcome::Authenticated(Box::new(auth)));
                 }
                 AuthReply::Rejected(response) => {
                     write_client(reader, &imap_error(tag, &response), server.timeout).await?;
@@ -836,7 +847,7 @@ async fn authenticate_imap(
                     if let Some(password) = response.password {
                         auth.password = password;
                     }
-                    return Ok(AuthOutcome::Authenticated(auth));
+                    return Ok(AuthOutcome::Authenticated(Box::new(auth)));
                 }
                 AuthReply::Rejected(response) => {
                     write_client(reader, &imap_error(tag, &response), server.timeout).await?;

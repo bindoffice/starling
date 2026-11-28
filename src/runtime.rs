@@ -574,10 +574,12 @@ mod tests {
         )
         .unwrap();
 
-        let mut cli = Cli::default();
-        cli.prefix = prefix.clone();
-        cli.config = PathBuf::from("conf/nginx.conf");
-        cli.quiet = true;
+        let cli = Cli {
+            prefix: prefix.clone(),
+            config: PathBuf::from("conf/nginx.conf"),
+            quiet: true,
+            ..Cli::default()
+        };
         let error = execute(cli).unwrap_err();
         assert!(error.contains("bind()"), "{error}");
 
