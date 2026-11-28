@@ -20,7 +20,7 @@ fn applies_rewrite_changes_after_sighup_without_changing_the_listener() {
     );
 
     server.write_config(&version_config(port, "v2"));
-    server.reload();
+    server.reload_via_cli();
 
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {

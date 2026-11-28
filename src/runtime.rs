@@ -116,11 +116,7 @@ pub fn parse_cli(arguments: impl IntoIterator<Item = String>) -> Result<Cli, Str
 
 pub fn load(cli: &Cli) -> Result<RuntimeConfig, String> {
     let prefix = absolute_path(&cli.prefix);
-    let config_path = if cli.config.is_absolute() {
-        cli.config.clone()
-    } else {
-        prefix.join(&cli.config)
-    };
+    let config_path = resolve_config_path(&cli.config, &prefix);
     let loader = ConfigLoader::new(prefix.clone());
     let document = loader
         .load_with_inline(&config_path, &cli.globals)
@@ -199,6 +195,20 @@ pub fn execute(cli: Cli) -> Result<(), String> {
         return send_signal(signal, &config.core.pid);
     }
 
+    let logger = Arc::new(
+        Logger::new(&config.core.error_logs, &config.prefix)
+            .map_err(|err| format!("open() error log failed: {err}"))?,
+    );
+    let pid_path = config.core.pid.clone();
+    let result = start_server(config, logger.clone());
+    if let Err(error) = &result {
+        logger.log(LogLevel::Emerg, format!("startup failed: {error}"));
+    }
+    remove_pid(&pid_path);
+    result
+}
+
+fn start_server(config: RuntimeConfig, logger: Arc<Logger>) -> Result<(), String> {
     if config.core.daemon {
         daemonize()?;
     }
@@ -211,24 +221,15 @@ pub fn execute(cli: Cli) -> Result<(), String> {
     write_pid(&config.core.pid)
         .map_err(|err| format!("open() \"{}\" failed: {err}", config.core.pid.display()))?;
 
-    let logger = Arc::new(
-        Logger::new(&config.core.error_logs, &config.prefix)
-            .map_err(|err| format!("open() error log failed: {err}"))?,
-    );
     logger.log(
-        crate::config::LogLevel::Notice,
+        LogLevel::Notice,
         format!(
             "using the \"epoll\" event method; starling {}",
             STARLING_VERSION
         ),
     );
 
-    let pid_path = config.core.pid.clone();
-    let result = run_async(config, logger);
-    if result.is_ok() {
-        remove_pid(&pid_path);
-    }
-    result
+    run_async(config, logger)
 }
 
 fn print_config_warnings(config: &RuntimeConfig) {
@@ -421,6 +422,34 @@ fn absolute_path(path: &Path) -> PathBuf {
     }
 }
 
+fn resolve_config_path(config: &Path, prefix: &Path) -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    resolve_config_path_from(config, prefix, &cwd)
+}
+
+fn resolve_config_path_from(config: &Path, prefix: &Path, cwd: &Path) -> PathBuf {
+    if config.is_absolute() {
+        return config.to_path_buf();
+    }
+    // Keep nginx's prefix-relative default, but let an explicit or fallback
+    // working-directory path work without requiring -p to match the config.
+    if matches!(
+        config.components().next(),
+        Some(std::path::Component::CurDir | std::path::Component::ParentDir)
+    ) {
+        return cwd.join(config);
+    }
+    let prefixed = prefix.join(config);
+    if prefixed.exists() {
+        return prefixed;
+    }
+    let cwd_relative = cwd.join(config);
+    if cwd_relative.exists() {
+        return cwd_relative;
+    }
+    prefixed
+}
+
 fn resolve(prefix: &Path, path: &str) -> PathBuf {
     let path = Path::new(path);
     if path.is_absolute() {
@@ -433,6 +462,9 @@ fn resolve(prefix: &Path, path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn parses_nginx_style_arguments() {
@@ -445,6 +477,39 @@ mod tests {
         assert!(cli.test);
         assert_eq!(cli.prefix, PathBuf::from("/tmp/nginx"));
         assert_eq!(cli.config, PathBuf::from("custom.conf"));
+    }
+
+    #[test]
+    fn resolves_relative_config_paths_from_prefix_or_cwd() {
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "starling-runtime-config-path-{}-{id}",
+            std::process::id()
+        ));
+        let prefix = root.join("prefix");
+        let cwd = root.join("cwd");
+        fs::create_dir_all(&prefix).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+
+        let cwd_config = cwd.join("nginx.conf");
+        fs::write(&cwd_config, "events {}\n").unwrap();
+        assert_eq!(
+            resolve_config_path_from(Path::new("nginx.conf"), &prefix, &cwd),
+            cwd_config
+        );
+
+        let prefix_config = prefix.join("nginx.conf");
+        fs::write(&prefix_config, "events {}\n").unwrap();
+        assert_eq!(
+            resolve_config_path_from(Path::new("nginx.conf"), &prefix, &cwd),
+            prefix_config
+        );
+        assert_eq!(
+            resolve_config_path_from(Path::new("./nginx.conf"), &prefix, &cwd),
+            cwd.join("./nginx.conf")
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -473,5 +538,43 @@ mod tests {
         assert!(summary.starts_with("starling version:"), "{summary}");
         assert!(summary.contains(STARLING_VERSION), "{summary}");
         assert!(summary.contains(SERVER_SOFTWARE), "{summary}");
+    }
+
+    #[test]
+    fn records_startup_failures_in_the_error_log() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let prefix = std::env::temp_dir().join(format!(
+            "starling-runtime-startup-failure-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir_all(prefix.join("conf")).unwrap();
+        fs::write(
+            prefix.join("conf/nginx.conf"),
+            format!(
+                "daemon off;\n\
+                 auto_https off;\n\
+                 error_log logs/error.log notice;\n\
+                 events {{}}\n\
+                 http {{ server {{ listen 127.0.0.1:{port}; }} }}\n"
+            ),
+        )
+        .unwrap();
+
+        let mut cli = Cli::default();
+        cli.prefix = prefix.clone();
+        cli.config = PathBuf::from("conf/nginx.conf");
+        cli.quiet = true;
+        let error = execute(cli).unwrap_err();
+        assert!(error.contains("bind()"), "{error}");
+
+        let log = fs::read_to_string(prefix.join("logs/error.log")).unwrap();
+        assert!(log.contains("[emerg]"), "{log}");
+        assert!(log.contains("startup failed"), "{log}");
+        assert!(log.contains("bind()"), "{log}");
+        assert!(!prefix.join("logs/nginx.pid").exists());
+
+        let _ = fs::remove_dir_all(prefix);
     }
 }
